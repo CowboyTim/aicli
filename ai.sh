@@ -9,35 +9,42 @@ if [ -z "$CEREBRAS_API_KEY" ]; then
     exit 1
 fi
 hs=~/.ai_history
-hp=~/.ai_prompt
+hp=~/.ai_chat
 if [ ! -s $hs ]; then
     echo '{"role":"system","content":""}' > $hs
 fi
 
 function crbrs_chat_completion(){
     s=$*
-    s=$(echo -n "$s"|jq -RsaMj .)
+    s=$(echo -n "$s" | jq -RsaMj .)
     echo '{"role":"user","content":'$s'}' >>$hs
     jstr=$(<$hs)
     jstr=${jstr//$'\n'/,}
-    [ "$DEBUG" == 1 ] && echo "[$jstr]"|jq -r >/dev/stderr
-    fn=/tmp/ai.$USER.$$
-    curl -qsSkL 'https://api.cerebras.ai/v1/chat/completions' \
-    -H 'Content-Type: application/json' \
-    -H "Authorization: Bearer ${CEREBRAS_API_KEY}" \
-    --data '{
-      "model": "llama-3.3-70b",
-      "max_tokens": 8192,
-      "stream": false,
-      "messages": ['"${jstr}"'],
-      "temperature": 0,
-      "top_p": 1
-    }' > $fn
-    [ "$DEBUG" == 1 ] && jq -r >/dev/stderr <$fn
-    jq -r '.choices[0].message.content' <$fn
-    resp=$(jq -ra '.choices[0].message.content' <$fn)
-    rm -f $fn
-    echo '{"role":"assistant","content":'$resp'}' >>$hs
+    [ "$DEBUG" == 1 ] && echo "[$jstr]" | jq -r >/dev/stderr
+    response=$(curl -qsSkL 'https://api.cerebras.ai/v1/chat/completions' \
+        -H 'Content-Type: application/json' \
+        -H "Authorization: Bearer ${CEREBRAS_API_KEY}" \
+        --data '{
+          "model": "llama-3.3-70b",
+          "max_tokens": 8192,
+          "stream": false,
+          "messages": ['"${jstr}"'],
+          "temperature": 0,
+          "top_p": 1
+        }')
+    if [ $? -ne 0 ]; then
+        echo "Error: Failed to get response from API" >&2
+        return 1
+    fi
+    [ "$DEBUG" == 1 ] && { echo "$response" | jq -r >/dev/stderr; }
+    resp=$(echo "$response" | jq -r '.choices[0].message.content')
+    if [ $? -ne 0 ]; then
+        echo "Error: Failed to parse response" >&2
+        return 1
+    fi
+    echo "$resp"
+    s=$(echo -n "$resp" | jq -RsaMj .)
+    echo '{"role":"assistant","content":'$s'}' >>$hs
 }
 
 function crbrs_chat(){
