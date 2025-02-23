@@ -63,7 +63,6 @@ function crbrs_chat(){
                 do_exit=1
                 break
             fi
-            echo "INPUT: $line" >/dev/stderr
             if [ -z "$line" ]; then
                 break
             fi
@@ -72,6 +71,8 @@ function crbrs_chat(){
                 ai_prompt="|system"
                 what+=($line)
                 continue
+            else
+                ai_prompt=""
             fi
             if [ "$line" == "/exit" -o "$line" == "/quit" ]; then
                 history -s "$line"
