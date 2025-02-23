@@ -44,7 +44,7 @@ function crbrs_chat(){
     history -r $hp
     set -o vi
     while true; do
-        read -r -e -p "|vi|> " what
+        IFS=$'\n' read -r -e -p "|vi|> " what
         if [ "$what" == "" ]; then
             continue
         fi
