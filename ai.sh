@@ -8,8 +8,8 @@ if [ -z "$CEREBRAS_API_KEY" ]; then
     echo "Please set CEREBRAS_API_KEY environment variable"
     exit 1
 fi
-hs=~/.ai_history
-hp=~/.ai_chat
+hs=~/.ai_chat_status
+hp=~/.ai_history
 if [ ! -s $hs ]; then
     echo '{"role":"system","content":""}' > $hs
 fi
@@ -51,41 +51,82 @@ function crbrs_chat(){
     history -r $hp
     set -o vi
     while true; do
-        IFS=$'\n' read -r -e -p "|vi|> " what
-        if [ $? -eq 1 ]; then
+        ai_prompt='|chat'
+        what=()
+        do_exit=
+        do_continue=
+        system_prompt='|> '
+        while true; do
+            line=
+            IFS=$'\n' read -r -e -p "$ai_prompt$system_prompt" line
+            if [ $? -ne 0 ]; then
+                do_exit=1
+                break
+            fi
+            echo "INPUT: $line" >/dev/stderr
+            if [ -z "$line" ]; then
+                break
+            fi
+            if [[ "$line" =~ ^/system  ]]; then
+                history -s "$line"
+                ai_prompt="|system"
+                what+=($line)
+                continue
+            fi
+            if [ "$line" == "/exit" -o "$line" == "/quit" ]; then
+                history -s "$line"
+                do_exit=1
+                break
+            fi
+            if [ "$line" == "/clear" ]; then
+                history -s "$line"
+                echo '{"role":"system","content":""}' > $hs
+                do_continue=1
+                break
+            fi
+            if [ "$line" == "/history" ]; then
+                history -s "$line"
+                cat $hs
+                do_continue=1
+                break
+            fi
+            if [ "$line" == "/debug" ]; then
+                history -s "$line"
+                DEBUG=1
+                do_continue=1
+                break
+            fi
+            if [ "$line" == "/nodebug" ]; then
+                history -s "$line"
+                DEBUG=0
+                do_continue=1
+                break
+            fi
+            if [ "$line" == "/help" ]; then
+                history -s "$line"
+                echo "/exit, /quit, /clear, /history, /help, /debug, /nodebug, /system"
+                do_continue=1
+                break
+            fi
+            what+=($line)
+        done
+        if [ -n "$do_exit" ]; then
             break
         fi
+        if [ -n "$do_continue" ]; then
+            continue
+        fi
+        what=$(echo "${what[@]}")
+        [ "$DEBUG" == 1 ] && echo "WHAT: $what" >/dev/stderr
         if [ "$what" == "" ]; then
             continue
         fi
-        if [[ "$what" =~ ^/system[[:blank:]]+(.*)$ ]]; then
-            echo '{"role":"system","content":"'${BASH_REMATCH[1]}'"}' > $hs
-            continue
-        fi
-        if [ "$what" == "/exit" -o "$what" == "/quit" ]; then
-            break
-        fi
-        if [ "$what" == "/clear" ]; then
-            echo '{"role":"system","content":""}' > $hs
-            continue
-        fi
-        if [ "$what" == "/history" ]; then
-            cat $hs
-            continue
-        fi
-        if [ "$what" == "/debug" ]; then
-            DEBUG=1
-            continue
-        fi
-        if [ "$what" == "/nodebug" ]; then
-            DEBUG=0
-            continue
-        fi
-        if [ "$what" == "/help" ]; then
-            echo "/exit, /quit, /clear, /history, /help, /debug, /nodebug, /system"
-            continue
-        fi
         history -s "$what"
+        if [[ "$what" =~ ^/system[^$]*$ ]]; then
+            what="${what#/system}"
+            echo '{"role":"system","content":'$(echo -n "${what}" | jq -RsaMj .)'}' > $hs
+            continue
+        fi
         crbrs_chat_completion "$what"
     done
     history -w $hp
