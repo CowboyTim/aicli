@@ -52,6 +52,9 @@ function crbrs_chat(){
     set -o vi
     while true; do
         IFS=$'\n' read -r -e -p "|vi|> " what
+        if [ $? -eq 1 ]; then
+            break
+        fi
         if [ "$what" == "" ]; then
             continue
         fi
