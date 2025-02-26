@@ -25,7 +25,7 @@ sub do_setup {
     $status_file  = "$base_dir/.ai_chat_status_${ai_prompt}";
 
     if(!-f $config_file){
-        print "Please set AI_CONFIG environment variable or set $base_dir/.airc\n";
+        print "Please set AI_DIR/AI_CONFIG environment variable or set $base_dir/.airc\n";
         exit 1;
     } else {
         open(my $fh, ". $config_file; set|");
