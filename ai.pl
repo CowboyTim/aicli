@@ -109,9 +109,8 @@ sub crbrs_chat {
     print {$hfh} $history;
     while (1) {
         my $line = $term->readline('|chat|> ');
-        if (!$line) {
-            last;
-        }
+        last unless defined $line;
+        next if $line =~ m/^\s*$/;
         if ($line =~ m|^/system|) {
             $line =~ s|^/system||;
             open(my $fh, '>', $status_file);
