@@ -1,23 +1,38 @@
 #!/usr/bin/perl
-
+#
 use strict;
 use warnings;
 
+use FindBin;
+
+# don't leak ENV to other forks, clear $0 asap: clears envp
+my $orig_dollar0;
+my %ORIG_ENV;
+BEGIN {
+    %ORIG_ENV = %ENV;
+    %ENV = ();
+    $orig_dollar0 = $0;
+    $0 = "aicli";
+}
+
 use JSON;
 use LWP::UserAgent;
-use Term::ReadLine;
 use HTTP::Request::Common qw(POST);
-use Fatal qw(open close rename);
+use Fatal qw(open close rename mkdir);
 use Getopt::Long;
 
 # Constants
-my $BASE_DIR = $ENV{AI_DIR} // (glob('~/'))[0];
-my $CONFIG_FILE = $ENV{AI_CONFIG} // "$BASE_DIR/.airc";
-my $DEBUG = $ENV{DEBUG} // 0;
-my $AI_PROMPT = $ENV{AI_PROMPT} || 'default';
-my $HISTORY_FILE = "$BASE_DIR/.ai_history_${AI_PROMPT}";
-my $PROMPT_FILE = "$BASE_DIR/.ai_prompt_${AI_PROMPT}";
-my $STATUS_FILE = "$BASE_DIR/.ai_chat_status_${AI_PROMPT}";
+my $DEBUG = $ORIG_ENV{DEBUG} // 0;
+my $BASE_DIR = $ORIG_ENV{AI_DIR} // (glob('~/.aicli'))[0];
+mkdir $BASE_DIR
+    unless -d $BASE_DIR;
+my $CONFIG_FILE = $ORIG_ENV{AI_CONFIG} // "$BASE_DIR/config";
+my $AI_PROMPT = $ORIG_ENV{AI_PROMPT} // $ORIG_ENV{AI_PROMPT_DEFAULT} // 'default';
+mkdir "$BASE_DIR/$AI_PROMPT"
+    unless -d "$BASE_DIR/$AI_PROMPT";
+my $HISTORY_FILE = "$BASE_DIR/$AI_PROMPT/history";
+my $PROMPT_FILE = "$BASE_DIR/$AI_PROMPT/prompt";
+my $STATUS_FILE = "$BASE_DIR/$AI_PROMPT/chat";
 
 # Variables
 my ($json, $cerebras_api_key);
@@ -27,37 +42,65 @@ my $help;
 GetOptions(
     'help|?' => \$help,
     'debug'  => \$DEBUG,
-) or pod2usage(2);
+) or show_usage();
 
-pod2usage(1) if $help;
+show_usage() if $help;
 
 # Main execution
 ai_setup();
 ai_chat();
 exit 0;
 
+sub show_usage {
+    local $ENV{PAGER} = $ENV{PAGER} // 'less';
+    local $0 = $orig_dollar0;
+    load_cpan("FindBin")->again();
+    load_cpan("Pod::Usage")->pod2usage(2);
+    exit 0;
+}
+
+sub load_cpan {
+    my ($module) = @_;
+    eval "require $module";
+    die $@ if $@;
+    return $module;
+}
+
 sub ai_setup {
     $json //= JSON->new->utf8->allow_blessed->allow_unknown->allow_nonref->convert_blessed;
-    if(!defined $ENV{AI_CEREBRAS_API_KEY}) {
+    if(!defined $ORIG_ENV{AI_CEREBRAS_API_KEY}) {
         if (!-f $CONFIG_FILE) {
-            print "Please set AI_DIR/AI_CONFIG/AI_CEREBRAS_API_KEY environment variable or set $BASE_DIR/.airc\n";
+            print "Please set AI_DIR/AI_CONFIG/AI_CEREBRAS_API_KEY environment variable or set $BASE_DIR/config\n";
             exit 1;
         } else {
             open(my $fh, ". $CONFIG_FILE; set|");
             my %envs = map { chomp; split m/=/, $_, 2 } grep m/^AI_/, <$fh>;
             while (my ($key, $value) = each %envs) {
-                $ENV{$key} = $value =~ s/^['"]//r =~ s/['"]$//r;
+                $ORIG_ENV{$key} = $value =~ s/^['"]//r =~ s/['"]$//r;
             }
             close $fh;
         }
     }
-    $cerebras_api_key = $ENV{AI_CEREBRAS_API_KEY};
+    $cerebras_api_key = $ORIG_ENV{AI_CEREBRAS_API_KEY};
     if (!$cerebras_api_key) {
-        print "Please set AI_CEREBRAS_API_KEY environment variable or set $BASE_DIR/.airc\n";
+        print "Please set AI_CEREBRAS_API_KEY environment variable or set $BASE_DIR/config\n";
         exit 1;
     }
-    if (!-s $STATUS_FILE or ($ENV{AI_CLEAR} // 0)) {
-        my $prompt = -f $PROMPT_FILE ? do { open(my $fh, '<', $PROMPT_FILE); local $/; <$fh> } : '';
+    if (!-s $STATUS_FILE or ($ORIG_ENV{AI_CLEAR} // 0)) {
+        my $prompt;
+        if(open(my $fh, '<', "$FindBin::Bin/ai/$AI_PROMPT")){
+            local $/;
+            $prompt = <$fh>;
+            close($fh);
+            open(my $pfh, '>', $PROMPT_FILE);
+            print {$pfh} $prompt;
+            close $pfh;
+        }
+        if(not defined $prompt and open(my $fh, '<', $PROMPT_FILE)){
+            local $/;
+            $prompt = <$fh>;
+            close($fh);
+        }
         open(my $fh, '>', $STATUS_FILE);
         print {$fh} $json->encode({ role => 'system', content => $prompt }) . "\n";
         close $fh;
@@ -72,11 +115,11 @@ sub ai_chat_completion {
     close $sfh;
     my @jstr = do { open(my $fh, '<', $STATUS_FILE); map { chomp; JSON::decode_json($_) } <$fh> };
     my $req = {
-        model       => $ENV{AI_MODEL}  // 'llama-3.3-70b',
-        max_tokens  => $ENV{AI_TOKENS} // 8192,
+        model       => $ORIG_ENV{AI_MODEL}  // 'llama-3.3-70b',
+        max_tokens  => $ORIG_ENV{AI_TOKENS} // 8192,
         stream      => JSON::false(),
         messages    => \@jstr,
-        temperature => $ENV{AI_TEMPERATURE} // 0,
+        temperature => $ORIG_ENV{AI_TEMPERATURE} // 0,
         top_p       => 1
     };
     print $json->encode($req) . "\n" if $DEBUG;
@@ -124,8 +167,14 @@ sub ai_chat_word_completions_cli {
     return '', @rcs;
 }
 
-sub ai_chat {
-    my $term = Term::ReadLine->new('AI');
+sub ai_setup_readline {
+    local $ENV{PERL_RL} = 'Gnu';
+    local $ENV{TERM}    = $ORIG_ENV{TERM} // 'vt220';
+    eval {require Term::ReadLine};
+    die $@ if $@;
+    my $term = Term::ReadLine->new("aicli");
+    $term->ReadLine('Term::ReadLine::Gnu') eq 'Term::ReadLine::Gnu'
+        or die "Term::ReadLine::Gnu is required\n";
     $term->enableUTF8();
     $term->using_history();
     $term->ReadHistory($HISTORY_FILE);
@@ -133,6 +182,11 @@ sub ai_chat {
     my $attribs = $term->Attribs();
     $attribs->{attempted_completion_function} = \&ai_chat_word_completions_cli;
     $attribs->{ignore_completion_duplicates}  = 1;
+    return ($term, $attribs);
+}
+
+sub ai_chat {
+    my ($term, $attribs) = ai_setup_readline();
     while (1) {
         my $line = $term->readline("|$AI_PROMPT|> ");
         last unless defined $line;
