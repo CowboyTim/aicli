@@ -4,8 +4,8 @@
 if [ -f ~/.airc ]; then
     source ~/.airc
 fi
-if [ -z "$CEREBRAS_API_KEY" ]; then
-    echo "Please set CEREBRAS_API_KEY environment variable"
+if [ -z "$AI_CEREBRAS_API_KEY" ]; then
+    echo "Please set AI_CEREBRAS_API_KEY environment variable"
     exit 1
 fi
 hs=~/.ai_chat_status_${AI_PROMPT:-default}
@@ -27,9 +27,9 @@ function crbrs_chat_completion(){
     jstr=$(<$hs)
     jstr=${jstr//$'\n'/,}
     [ "$DEBUG" == 1 ] && echo "[$jstr]" | jq -r >/dev/stderr
-    response=$(curl -qsSkL 'https://api.cerebras.ai/v1/chat/completions' \
+    response=$(curl -qsSkLvv 'https://api.cerebras.ai/v1/chat/completions' \
         -H 'Content-Type: application/json' \
-        -H "Authorization: Bearer ${CEREBRAS_API_KEY}" \
+        -H "Authorization: Bearer ${AI_CEREBRAS_API_KEY}" \
         --data '{
           "model": "llama-3.3-70b",
           "max_tokens": 8192,
