@@ -8,10 +8,16 @@ if [ -z "$CEREBRAS_API_KEY" ]; then
     echo "Please set CEREBRAS_API_KEY environment variable"
     exit 1
 fi
-hs=~/.ai_chat_status
-hp=~/.ai_history
-if [ ! -s $hs ]; then
-    echo '{"role":"system","content":""}' > $hs
+hs=~/.ai_chat_status_${AI_PROMPT:-default}
+hp=~/.ai_history_${AI_PROMPT:-default}
+pr=~/.ai_prompt_${AI_PROMPT:-default}
+if [ ! -s $hs -o "${AI_CLEAR:-0}" = 1 ]; then
+    if [ -f $pr ]; then
+        prompt=$(<$pr)
+        echo '{"role":"system","content":'$(echo -n "${prompt}" | jq -RsaMj .)'}' > $hs
+    else
+        echo '{"role":"system","content":""}' > $hs
+    fi
 fi
 
 function crbrs_chat_completion(){
