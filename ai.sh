@@ -62,9 +62,14 @@ function crbrs_chat(){
         do_exit=
         do_continue=
         system_prompt='|> '
+        chat_prompt=""
         while true; do
             line=
-            IFS=$'\n' read -r -e -p "$ai_prompt$system_prompt" line
+            chat_prompt="$ai_prompt$system_prompt"
+            if [ ${AI_SILENT:-0} -eq 1 ]; then
+                chat_prompt=""
+            fi
+            IFS=$'\n' read -r -e -p "$chat_prompt" line
             if [ $? -ne 0 ]; then
                 do_exit=1
                 break
