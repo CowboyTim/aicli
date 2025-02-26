@@ -65,14 +65,27 @@ function crbrs_chat(){
         chat_prompt=""
         while true; do
             line=
-            chat_prompt="$ai_prompt$system_prompt"
-            if [ ${AI_SILENT:-0} -eq 1 ]; then
-                chat_prompt=""
-            fi
-            IFS=$'\n' read -r -e -p "$chat_prompt" line
-            if [ $? -ne 0 ]; then
-                do_exit=1
-                break
+            if [ -t 0 ]; then
+                chat_prompt="$ai_prompt$system_prompt"
+                IFS=$'\n' read -r -e -p "$chat_prompt" line
+                if [ $? -ne 0 ]; then
+                    do_exit=1
+                    break
+                fi
+            else
+                if [ ${AI_SILENT:-1} -eq 1 ]; then
+                    chat_prompt=""
+                else
+                    chat_prompt="$ai_prompt$system_prompt"
+                fi
+                line=$(< /dev/stdin)
+                if [ -z "$line" ]; then
+                    do_exit=1
+                    break
+                else
+                    what+=($line)
+                    break
+                fi
             fi
             if [ -z "$line" ]; then
                 break
