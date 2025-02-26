@@ -38,20 +38,22 @@ exit 0;
 
 sub ai_setup {
     $json //= JSON->new->utf8->allow_blessed->allow_unknown->allow_nonref->convert_blessed;
-    if (!-f $CONFIG_FILE) {
-        print "Please set AI_DIR/AI_CONFIG environment variable or set $BASE_DIR/.airc\n";
-        exit 1;
-    } else {
-        open(my $fh, ". $CONFIG_FILE; set|");
-        my %envs = map { chomp; split m/=/, $_, 2 } grep m/^AI_/, <$fh>;
-        while (my ($key, $value) = each %envs) {
-            $ENV{$key} = $value =~ s/^['"]//r =~ s/['"]$//r;
+    if(!defined $ENV{AI_CEREBRAS_API_KEY}) {
+        if (!-f $CONFIG_FILE) {
+            print "Please set AI_DIR/AI_CONFIG/AI_CEREBRAS_API_KEY environment variable or set $BASE_DIR/.airc\n";
+            exit 1;
+        } else {
+            open(my $fh, ". $CONFIG_FILE; set|");
+            my %envs = map { chomp; split m/=/, $_, 2 } grep m/^AI_/, <$fh>;
+            while (my ($key, $value) = each %envs) {
+                $ENV{$key} = $value =~ s/^['"]//r =~ s/['"]$//r;
+            }
+            close $fh;
         }
-        close $fh;
     }
     $cerebras_api_key = $ENV{AI_CEREBRAS_API_KEY};
     if (!$cerebras_api_key) {
-        print "Please set AI_CEREBRAS_API_KEY environment variable\n";
+        print "Please set AI_CEREBRAS_API_KEY environment variable or set $BASE_DIR/.airc\n";
         exit 1;
     }
     if (!-s $STATUS_FILE or ($ENV{AI_CLEAR} // 0)) {

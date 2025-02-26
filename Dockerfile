@@ -1,5 +1,5 @@
 FROM alpine
-RUN apk add --no-cache perl perl-json perl-lwp-protocol-https
+RUN apk add --no-cache perl perl-json perl-lwp-protocol-https perl-term-readline-gnu 
 COPY ai.pl /
 RUN perl -cw /ai.pl
 ENV HOME=/ai
