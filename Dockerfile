@@ -1,8 +1,8 @@
 FROM alpine
-RUN apk add --no-cache curl bash jq
-COPY ai.sh /ai.sh
+RUN apk add --no-cache perl
+COPY ai.pl /
 ENV HOME=/ai
 USER nobody
 WORKDIR /ai
 VOLUME /ai
-ENTRYPOINT ["bash", "/ai.sh"]
+ENTRYPOINT ["/usr/bin/perl", "/ai.pl"]
