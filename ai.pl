@@ -200,8 +200,10 @@ sub ai_setup_readline {
 
 sub ai_chat {
     my ($term, $attribs) = ai_setup_readline();
+    my $prompt_term = $ORIG_ENV{AI_PS1} // '\033[0m$AI_PROMPT ► ';
+    $prompt_term = eval "return \"$prompt_term\"" || '► ';
     while (1) {
-        my $line = $term->readline("|$AI_PROMPT|> ");
+        my $line = $term->readline($prompt_term);
         last unless defined $line;
         next if $line =~ m/^\s*$/;
         ai_log("Command: $line");
