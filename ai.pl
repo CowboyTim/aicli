@@ -18,18 +18,19 @@ BEGIN {
 use JSON;
 use LWP::UserAgent;
 use HTTP::Request::Common qw(POST);
-use Fatal qw(open close rename mkdir);
 use Getopt::Long;
 
 # Constants
 my $DEBUG = $ORIG_ENV{DEBUG} // 0;
 my $BASE_DIR = $ORIG_ENV{AI_DIR} // (glob('~/.aicli'))[0];
-mkdir $BASE_DIR
-    unless -d $BASE_DIR;
+-d "$BASE_DIR"
+    or mkdir $BASE_DIR
+    or die "Failed to create $BASE_DIR: $!\n";
 my $CONFIG_FILE = $ORIG_ENV{AI_CONFIG} // "$BASE_DIR/config";
 my $AI_PROMPT = $ORIG_ENV{AI_PROMPT} // $ORIG_ENV{AI_PROMPT_DEFAULT} // 'default';
-mkdir "$BASE_DIR/$AI_PROMPT"
-    unless -d "$BASE_DIR/$AI_PROMPT";
+-d "$BASE_DIR/$AI_PROMPT"
+    or mkdir "$BASE_DIR/$AI_PROMPT"
+    or die "Failed to create $BASE_DIR/$AI_PROMPT: $!\n";
 my $HISTORY_FILE = "$BASE_DIR/$AI_PROMPT/history";
 my $PROMPT_FILE = "$BASE_DIR/$AI_PROMPT/prompt";
 my $STATUS_FILE = "$BASE_DIR/$AI_PROMPT/chat";
@@ -73,7 +74,7 @@ sub ai_setup {
             print "Please set AI_DIR/AI_CONFIG/AI_CEREBRAS_API_KEY environment variable or set $BASE_DIR/config\n";
             exit 1;
         } else {
-            open(my $fh, ". $CONFIG_FILE; set|");
+            open(my $fh, ". $CONFIG_FILE; set|") or die "Failed to read $CONFIG_FILE: $!\n";
             my %envs = map { chomp; split m/=/, $_, 2 } grep m/^AI_/, <$fh>;
             while (my ($key, $value) = each %envs) {
                 $ORIG_ENV{$key} = $value =~ s/^['"]//r =~ s/['"]$//r;
@@ -91,9 +92,9 @@ sub ai_setup {
         local $/;
         $prompt = <$fh>;
         close($fh);
-        open(my $pfh, '>', $PROMPT_FILE);
+        open(my $pfh, '>', $PROMPT_FILE) or die "Failed to write to $PROMPT_FILE: $!\n";
         print {$pfh} $prompt;
-        close $pfh;
+        close $pfh or die "Failed to close $PROMPT_FILE: $!\n";
     }
     if(!-s $STATUS_FILE or ($ORIG_ENV{AI_CLEAR}//0)){
         if(not defined $prompt and open(my $fh, '<', $PROMPT_FILE)){
@@ -101,9 +102,9 @@ sub ai_setup {
             $prompt = <$fh>;
             close($fh);
         }
-        open(my $fh, '>', $STATUS_FILE);
+        open(my $fh, '>', $STATUS_FILE) or die "Failed to write to $STATUS_FILE: $!\n";
         print {$fh} $json->encode({ role => 'system', content => $prompt }) . "\n";
-        close $fh;
+        close $fh or die "Failed to close $STATUS_FILE: $!\n";
     }
     return;
 }
@@ -112,19 +113,23 @@ sub ai_log {
     my ($message) = @_;
     return unless $DEBUG;
     my $LOG_FILE = $ORIG_ENV{AI_LOG} // "&STDOUT";
-    open(my $lfh, ">>$LOG_FILE");
+    my $lfh;
+    open($lfh, ">>$LOG_FILE") or open($lfh, ">&STDERR") or return;
     print {$lfh} "INFO: [$$]: ".scalar(localtime()) . ": $message\n";
-    close $lfh;
+    close $lfh or die "Failed to close $LOG_FILE: $!\n";
     return;
 }
 
 sub ai_chat_completion {
     my ($input) = @_;
     ai_log("User input: $input");
-    open(my $sfh, '>>', $STATUS_FILE);
+    open(my $sfh, '>>', $STATUS_FILE) or die "Failed to write to $STATUS_FILE: $!\n";
     print {$sfh} $json->encode({ role => 'user', content => $input }) . "\n";
-    close $sfh;
-    my @jstr = do { open(my $fh, '<', $STATUS_FILE); map { chomp; JSON::decode_json($_) } <$fh> };
+    close $sfh or die "Failed to close $STATUS_FILE: $!\n";
+    my @jstr = do {
+        open(my $fh, '<', $STATUS_FILE) or die "Failed to read $STATUS_FILE: $!\n";
+        map {chomp; JSON::decode_json($_)} <$fh>
+    };
     my $req = {
         model       => $ORIG_ENV{AI_MODEL}  // 'llama-3.3-70b',
         max_tokens  => $ORIG_ENV{AI_TOKENS} // 8192,
@@ -158,9 +163,9 @@ sub ai_chat_completion {
     }
     print "$resp\n";
     ai_log("AI response: $resp");
-    open($sfh, '>>', $STATUS_FILE);
+    open($sfh, '>>', $STATUS_FILE) or die "Failed to write to $STATUS_FILE: $!\n";
     print {$sfh} $json->encode({ role => 'assistant', content => $resp }) . "\n";
-    close $sfh;
+    close $sfh or die "Failed to close $STATUS_FILE: $!\n";
     return;
 }
 
@@ -198,10 +203,31 @@ sub ai_setup_readline {
     return ($term, $attribs);
 }
 
+sub get_ai_prompt {
+    # https://jafrog.com/2013/11/23/colors-in-terminal.html
+    # https://ss64.com/bash/syntax-colors.html
+    my $red_color     = '\033[0;31m';
+    my $green_color   = '\033[0;32m';
+    my $yellow_color1 = '\033[0;33m';
+    my $blue_color1   = '\033[0;34m';
+    my $blue_color2   = '\033[38;5;25;1m';
+    my $blue_color3   = '\033[38;5;33;1m';
+    my $magenta_color = '\033[0;35m';
+    my $cyan_color    = '\033[0;36m';
+    my $white_color   = '\033[0;37m';
+    my $reset_color   = '\033[0m';
+    my $prompt_term =
+           $ORIG_ENV{AI_PS1}
+        //   $reset_color
+            .$blue_color3
+            .'❲$AI_PROMPT❳ ► '
+            .$reset_color;
+    return eval "return \"$prompt_term\"" || '► ';
+}
+
 sub ai_chat {
     my ($term, $attribs) = ai_setup_readline();
-    my $prompt_term = $ORIG_ENV{AI_PS1} // '\033[0m$AI_PROMPT ► ';
-    $prompt_term = eval "return \"$prompt_term\"" || '► ';
+    my $prompt_term = get_ai_prompt();
     while (1) {
         my $line = $term->readline($prompt_term);
         last unless defined $line;
@@ -209,27 +235,33 @@ sub ai_chat {
         ai_log("Command: $line");
         if ($line =~ m|^/system|) {
             $line =~ s|^/system||;
-            rename($PROMPT_FILE, $PROMPT_FILE . '.bak.' . time()) if -f $PROMPT_FILE;
-            open(my $pfh, '>', $PROMPT_FILE);
+            if(-f $PROMPT_FILE){
+                rename($PROMPT_FILE, $PROMPT_FILE . '.bak.' . time())
+                    or die "Failed to backup $PROMPT_FILE: $!\n"
+            }
+            open(my $pfh, '>', $PROMPT_FILE) or die "Failed to write to $PROMPT_FILE: $!\n";
             print {$pfh} $line;
-            close $pfh;
-            open(my $sfh, '>', $STATUS_FILE);
+            close $pfh or die "Failed to close $PROMPT_FILE: $!\n";
+            open(my $sfh, '>', $STATUS_FILE) or die "Failed to write to $STATUS_FILE: $!\n";
             print {$sfh} $json->encode({ role => 'system', content => $line }) . "\n";
-            close $sfh;
+            close $sfh or die "Failed to close $STATUS_FILE: $!\n";
             next;
         }
         if ($line =~ m|^/exit| or $line =~ m|^/quit|) {
             last;
         }
         if ($line =~ m|^/clear|) {
-            my $prompt = -f $PROMPT_FILE ? do { open(my $fh, '<', $PROMPT_FILE); local $/; <$fh> } : '';
-            open(my $fh, '>', $STATUS_FILE);
+            my $prompt = -f $PROMPT_FILE ? do {
+                open(my $fh, '<', $PROMPT_FILE) or die "Failed to read $PROMPT_FILE: $!\n";
+                local $/; <$fh>
+            }:'';
+            open(my $fh, '>', $STATUS_FILE) or die "Failed to write to $STATUS_FILE: $!\n";
             print {$fh} $json->encode({ role => 'system', content => $prompt }) . "\n";
-            close $fh;
+            close $fh or die "Failed to close $STATUS_FILE: $!\n";
             next;
         }
         if ($line =~ m|^/history|) {
-            print do { open(my $_hfh, '<', $HISTORY_FILE); local $/; <$_hfh> };
+            print do {open(my $_hfh, '<', $HISTORY_FILE) or die "Failed to read $HISTORY_FILE: $!\n"; local $/; <$_hfh>};
             next;
         }
         if ($line =~ m|^/debug|) {
