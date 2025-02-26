@@ -86,16 +86,16 @@ sub ai_setup {
         print "Please set AI_CEREBRAS_API_KEY environment variable or set $BASE_DIR/config\n";
         exit 1;
     }
-    if (!-s $STATUS_FILE or ($ORIG_ENV{AI_CLEAR} // 0)) {
-        my $prompt;
-        if(open(my $fh, '<', "$FindBin::Bin/ai/$AI_PROMPT")){
-            local $/;
-            $prompt = <$fh>;
-            close($fh);
-            open(my $pfh, '>', $PROMPT_FILE);
-            print {$pfh} $prompt;
-            close $pfh;
-        }
+    my $prompt;
+    if(!-s $PROMPT_FILE and open(my $fh, '<', "$FindBin::Bin/ai/$AI_PROMPT")){
+        local $/;
+        $prompt = <$fh>;
+        close($fh);
+        open(my $pfh, '>', $PROMPT_FILE);
+        print {$pfh} $prompt;
+        close $pfh;
+    }
+    if(!-s $STATUS_FILE or ($ORIG_ENV{AI_CLEAR}//0)){
         if(not defined $prompt and open(my $fh, '<', $PROMPT_FILE)){
             local $/;
             $prompt = <$fh>;
