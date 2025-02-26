@@ -237,12 +237,23 @@ sub input_terminal {
     my ($term, $attribs) = ai_setup_readline();
     my ($t_ps1, $t_ps2) = get_ai_prompt();
     return sub {
+        my $t_prt = $t_ps1;
+        my $buf = '';
         READ_AGAIN:
-        my $line = $term->readline($t_ps1);
+        my $line = $term->readline($t_prt);
         return unless defined $line;
-        goto READ_AGAIN if $line =~ m/^\s*$/ms;
+        if($line !~ m/^$/ms){
+            $buf .= "$line\n";
+            $t_prt = $t_ps2;
+            goto READ_AGAIN;
+        } else {
+            goto READ_AGAIN unless length($buf);
+        }
+        ai_log("BUF: >>$buf<<");
+        $term->addhistory($buf);
         $term->WriteHistory($HISTORY_FILE);
-        return $line;
+        chomp $buf;
+        return $buf;
     };
 }
 
@@ -259,6 +270,7 @@ sub ai_chat {
     while (1) {
         my $line = &{$input_cli_sub}();
         last unless defined $line;
+        next if $line =~ m/^\s*$/ms;
         ai_log("Command: $line");
         if ($line =~ m|^/system|) {
             $line =~ s|^/system||;
