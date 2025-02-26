@@ -8,6 +8,7 @@ use LWP::UserAgent;
 use Term::ReadLine;
 use HTTP::Request::Common qw(POST);
 use Fatal qw(open close rename);
+use Getopt::Long;
 
 # Constants
 my $BASE_DIR = $ENV{AI_DIR} // (glob('~/'))[0];
@@ -20,6 +21,15 @@ my $STATUS_FILE = "$BASE_DIR/.ai_chat_status_${AI_PROMPT}";
 
 # Variables
 my ($json, $cerebras_api_key);
+
+# Command-line options
+my $help;
+GetOptions(
+    'help|?' => \$help,
+    'debug'  => \$DEBUG,
+) or pod2usage(2);
+
+pod2usage(1) if $help;
 
 # Main execution
 ai_setup();
@@ -167,3 +177,79 @@ sub ai_chat {
     $term->WriteHistory($HISTORY_FILE);
     return;
 }
+
+__END__
+
+=head1 NAME
+
+ai.pl - AI Chat CLI
+
+=head1 SYNOPSIS
+
+ai.pl [options]
+
+ Options:
+   -help            brief help message
+   -debug           enable debug mode
+
+=head1 OPTIONS
+
+=over 8
+
+=item B<-help>
+
+Print a brief help message and exits.
+
+=item B<-debug>
+
+Enable debug mode.
+
+=back
+
+=head1 DESCRIPTION
+
+B<ai.pl> is a command-line interface for interacting with an AI chat model.
+
+=head1 ENVIRONMENT VARIABLES
+
+=over 8
+
+=item B<AI_DIR>
+
+Base directory for AI configuration and data files.
+
+=item B<AI_CONFIG>
+
+Path to the AI configuration file.
+
+=item B<DEBUG>
+
+Enable or disable debug mode.
+
+=item B<AI_PROMPT>
+
+Prompt string for the AI chat.
+
+=item B<AI_CEREBRAS_API_KEY>
+
+API key for accessing the Cerebras AI API.
+
+=item B<AI_MODEL>
+
+Model name for the AI chat.
+
+=item B<AI_TOKENS>
+
+Maximum number of tokens for the AI chat completion.
+
+=item B<AI_TEMPERATURE>
+
+Temperature setting for the AI chat completion.
+
+=item B<AI_CLEAR>
+
+Clear the chat status file if set.
+
+=back
+
+=cut
