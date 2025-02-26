@@ -108,8 +108,19 @@ sub ai_setup {
     return;
 }
 
+sub ai_log {
+    my ($message) = @_;
+    return unless $DEBUG;
+    my $LOG_FILE = $ORIG_ENV{AI_LOG} // "&STDOUT";
+    open(my $lfh, ">>$LOG_FILE");
+    print {$lfh} "INFO: [$$]: ".scalar(localtime()) . ": $message\n";
+    close $lfh;
+    return;
+}
+
 sub ai_chat_completion {
     my ($input) = @_;
+    ai_log("User input: $input");
     open(my $sfh, '>>', $STATUS_FILE);
     print {$sfh} $json->encode({ role => 'user', content => $input }) . "\n";
     close $sfh;
@@ -135,6 +146,7 @@ sub ai_chat_completion {
     print $http_req->as_string() if $DEBUG;
     my $response = $ua->request($http_req);
     if (!$response->is_success()) {
+        ai_log("Error: " . $response->status_line());
         print $response->status_line() . "\n";
         return;
     }
@@ -145,6 +157,7 @@ sub ai_chat_completion {
         return;
     }
     print "$resp\n";
+    ai_log("AI response: $resp");
     open($sfh, '>>', $STATUS_FILE);
     print {$sfh} $json->encode({ role => 'assistant', content => $resp }) . "\n";
     close $sfh;
@@ -191,6 +204,7 @@ sub ai_chat {
         my $line = $term->readline("|$AI_PROMPT|> ");
         last unless defined $line;
         next if $line =~ m/^\s*$/;
+        ai_log("Command: $line");
         if ($line =~ m|^/system|) {
             $line =~ s|^/system||;
             rename($PROMPT_FILE, $PROMPT_FILE . '.bak.' . time()) if -f $PROMPT_FILE;
