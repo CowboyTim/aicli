@@ -239,7 +239,7 @@ sub ai_chat {
     while (1) {
         my $line = $term->readline($t_ps1);
         last unless defined $line;
-        next if $line =~ m/^\s*$/;
+        next if $line =~ m/^\s*$/ms;
         ai_log("Command: $line");
         if ($line =~ m|^/system|) {
             $line =~ s|^/system||;
