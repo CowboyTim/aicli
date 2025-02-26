@@ -103,7 +103,7 @@ sub ai_setup {
             close($fh);
         }
         open(my $fh, '>', $STATUS_FILE) or die "Failed to write to $STATUS_FILE: $!\n";
-        print {$fh} $json->encode({ role => 'system', content => $prompt }) . "\n";
+        print {$fh} $json->encode({ role => 'system', content => ($prompt // "") }) . "\n";
         close $fh or die "Failed to close $STATUS_FILE: $!\n";
     }
     return;
@@ -233,13 +233,32 @@ sub get_ai_prompt {
     return ($ps1, $ps2);
 }
 
-sub ai_chat {
+sub input_terminal {
     my ($term, $attribs) = ai_setup_readline();
     my ($t_ps1, $t_ps2) = get_ai_prompt();
-    while (1) {
+    return sub {
+        READ_AGAIN:
         my $line = $term->readline($t_ps1);
+        return unless defined $line;
+        goto READ_AGAIN if $line =~ m/^\s*$/ms;
+        $term->WriteHistory($HISTORY_FILE);
+        return $line;
+    };
+}
+
+sub input_stdin {
+    return sub {
+        # always slurp stdin
+        local $/;
+        return scalar <STDIN>;
+    };
+}
+
+sub ai_chat {
+    my $input_cli_sub = -t STDIN ? input_terminal() : input_stdin();
+    while (1) {
+        my $line = &{$input_cli_sub}();
         last unless defined $line;
-        next if $line =~ m/^\s*$/ms;
         ai_log("Command: $line");
         if ($line =~ m|^/system|) {
             $line =~ s|^/system||;
@@ -264,7 +283,7 @@ sub ai_chat {
                 local $/; <$fh>
             }:'';
             open(my $fh, '>', $STATUS_FILE) or die "Failed to write to $STATUS_FILE: $!\n";
-            print {$fh} $json->encode({ role => 'system', content => $prompt }) . "\n";
+            print {$fh} $json->encode({ role => 'system', content => ($prompt // "") }) . "\n";
             close $fh or die "Failed to close $STATUS_FILE: $!\n";
             next;
         }
@@ -286,7 +305,6 @@ sub ai_chat {
         }
         ai_chat_completion($line);
     }
-    $term->WriteHistory($HISTORY_FILE);
     return;
 }
 
