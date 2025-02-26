@@ -102,10 +102,31 @@ sub ai_chat_completion {
     return;
 }
 
+sub ai_chat_word_completions_cli {
+    my ($text, $line, $start, $end) = @_;
+    $line =~ s/ +$//g;
+    my @rcs = ();
+    my @wrd = split m/\s+/, $line, -1;
+    print STDERR "W: >".join(", ", @wrd)."<\n" if $debug;
+    foreach my $w (@wrd){
+        next unless $w =~ m|^/|;
+        foreach my $k (qw(/exit /quit /clear /history /help /debug /nodebug /system)){
+            push @rcs, $k if !index($k, $w) or $k eq $w;
+        }
+    }
+    print STDERR "R: >".join(", ", @rcs)."<\n" if $debug;
+    return '', @rcs;
+}
+
 sub ai_chat {
     my $term = Term::ReadLine->new('AI');
     $term->enableUTF8();
+    $term->using_history();
     $term->ReadHistory($history_file);
+    $term->clear_signals();
+    my $attribs = $term->Attribs();
+    $attribs->{attempted_completion_function} = \&ai_chat_word_completions_cli;
+    $attribs->{ignore_completion_duplicates}  = 1;
     while(1){
         my $line = $term->readline("|$ai_prompt|> ");
         last unless defined $line;
