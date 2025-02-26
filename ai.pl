@@ -211,25 +211,33 @@ sub get_ai_prompt {
     my $yellow_color1 = '\033[0;33m';
     my $blue_color1   = '\033[0;34m';
     my $blue_color2   = '\033[38;5;25;1m';
-    my $blue_color3   = '\033[38;5;33;1m';
+    my $blue_color3   = '\033[38;5;13;1m';
     my $magenta_color = '\033[0;35m';
     my $cyan_color    = '\033[0;36m';
     my $white_color   = '\033[0;37m';
     my $reset_color   = '\033[0m';
-    my $prompt_term =
+    my $prompt_term1  =
            $ORIG_ENV{AI_PS1}
         //   $reset_color
             .$blue_color3
             .'❲$AI_PROMPT❳ ► '
             .$reset_color;
-    return eval "return \"$prompt_term\"" || '► ';
+    my $prompt_term2  =
+           $ORIG_ENV{AI_PS2}
+        //   $reset_color
+            .$blue_color3
+            .'│ '
+            .$reset_color;
+    my $ps1 = eval "return \"$prompt_term1\"" || '► ';
+    my $ps2 = eval "return \"$prompt_term2\"" || '│ ';
+    return ($ps1, $ps2);
 }
 
 sub ai_chat {
     my ($term, $attribs) = ai_setup_readline();
-    my $prompt_term = get_ai_prompt();
+    my ($t_ps1, $t_ps2) = get_ai_prompt();
     while (1) {
-        my $line = $term->readline($prompt_term);
+        my $line = $term->readline($t_ps1);
         last unless defined $line;
         next if $line =~ m/^\s*$/;
         ai_log("Command: $line");
