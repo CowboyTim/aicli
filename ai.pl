@@ -19,6 +19,7 @@ use JSON;
 use LWP::UserAgent;
 use HTTP::Request::Common qw(POST);
 use Getopt::Long;
+use Cwd qw();
 
 # Constants
 my $DEBUG = $ORIG_ENV{DEBUG} // 0;
@@ -46,6 +47,8 @@ GetOptions(
 ) or show_usage();
 
 show_usage() if $help;
+
+our @cmds = qw(/exit /quit /clear /history /help /debug /nodebug /system /files /chdir /ls /pwd);
 
 # Main execution
 chat_setup();
@@ -177,7 +180,7 @@ sub chat_word_completions_cli {
     print STDERR "W: >".join(", ", @wrd)."<\n" if $DEBUG;
     foreach my $w (@wrd) {
         next unless $w =~ m|^/|;
-        foreach my $k (qw(/exit /quit /clear /history /help /debug /nodebug /system)) {
+        foreach my $k (@cmds) {
             push @rcs, $k if !index($k, $w) or $k eq $w;
         }
     }
@@ -207,28 +210,18 @@ sub setup_readline {
 sub get_chat_prompt {
     # https://jafrog.com/2013/11/23/colors-in-terminal.html
     # https://ss64.com/bash/syntax-colors.html
-    my $red_color     = '\033[0;31m';
-    my $green_color   = '\033[0;32m';
-    my $yellow_color1 = '\033[0;33m';
-    my $blue_color1   = '\033[0;34m';
-    my $blue_color2   = '\033[38;5;25;1m';
-    my $blue_color3   = '\033[38;5;13;1m';
-    my $magenta_color = '\033[0;35m';
-    my $cyan_color    = '\033[0;36m';
-    my $white_color   = '\033[0;37m';
-    my $reset_color   = '\033[0m';
     my $prompt_term1  =
            $ORIG_ENV{AI_PS1}
-        //   $reset_color
-            .$blue_color3
+        //   $colors::reset_color
+            .$colors::blue_color3
             .'❲$AI_PROMPT❳ ► '
-            .$reset_color;
+            .$colors::reset_color;
     my $prompt_term2  =
            $ORIG_ENV{AI_PS2}
-        //   $reset_color
-            .$blue_color3
+        //   $colors::reset_color
+            .$colors::blue_color3
             .'│ '
-            .$reset_color;
+            .$colors::reset_color;
     my $ps1 = eval "return \"$prompt_term1\"" || '► ';
     my $ps2 = eval "return \"$prompt_term2\"" || '│ ';
     return ($ps1, $ps2);
@@ -331,32 +324,61 @@ sub handle_command {
         return 0;
     }
     if ($line =~ m|^/help|) {
-        print "/exit, /quit, /clear, /history, /help, /debug, /nodebug, /system\n";
+        print join(", ", @cmds)."\n";
+        return 0;
+    }
+    if ($line =~ m|^/chdir|) {
+        $line =~ s|^/chdir||;
+        $line =~ s| +$||;
+        if(chdir($line)){
+            return 0;
+        } else {
+            print "Failed to change directory to $line: $!\n";
+            return 0;
+        }
+    }
+    if ($line =~ m|^/ls|) {
+        my $dir = Cwd::cwd();
+        if(opendir(my $dh, $dir)){
+            while (my $file = readdir($dh)) {
+                next if $file =~ m/^\./;
+                print "$file\n";
+            }
+            closedir $dh;
+        }
+        return 0;
+    }
+    if ($line =~ m|^/pwd|) {
+        print Cwd::cwd()."\n";
         return 0;
     }
     if ($line =~ m|^/files|) {
         # slurp the directory and add the contents of the files to the chat
-        my $dir = $line;
-        $dir =~ s|^/files||;
-        opendir(my $dh, $dir)
-            or die "Failed to open $dir: $!\n";
-        while (my $file = readdir($dh)) {
-            next if $file =~ m/^\./;
-            open(my $fh, '<', "$dir/$file")
-                or die "Failed to read $dir/$file: $!\n";
-            local $/;
-            my $data = <$fh>;
-            close $fh
-                or die "Failed to close $dir/$file: $!\n";
-            $data = '```'."\n".$data."\n".'```'."\n";
-            open(my $sfh, '>', $STATUS_FILE)
-                or die "Failed to write to $STATUS_FILE: $!\n";
-            print {$sfh} $json->encode({role => 'user', content => $data})."\n";
-            close $sfh
-                or die "Failed to close $STATUS_FILE: $!\n";
+        my $dir_rx = $line;
+        $dir_rx =~ s|^/files||;
+        $dir_rx =~ s| +$||;
+        $dir_rx =~ s|^\s+||;
+        $dir_rx = qr/$dir_rx/;
+        my $dir = Cwd::cwd();
+        if(opendir(my $dh, $dir)){
+            while (my $file = readdir($dh)) {
+                next if $file =~ m/^\./;
+                next unless -f $file;
+                next if $file !~ m/$dir_rx/;
+                open(my $fh, '<', $file)
+                    or next;
+                local $/;
+                my $data = <$fh>;
+                close $fh;
+                $data = '```'."\n".$data."\n".'```'."\n";
+                open(my $sfh, '>', $STATUS_FILE)
+                    or next;
+                print {$sfh} $json->encode({role => 'user', content => $data})."\n";
+                close $sfh;
+                print "${colors::green_color}✓${colors::reset_color} added $file to chat\n";
+            }
+            closedir $dh;
         }
-        closedir $dh
-            or die "Failed to close $dir: $!\n";
         return 0;
     }
     if ($line =~ m|^/|) {
@@ -364,6 +386,21 @@ sub handle_command {
         return 0;
     }
     return;
+}
+
+BEGIN {
+package colors;
+
+our $red_color     = "\033[0;31m";
+our $green_color   = "\033[0;32m";
+our $yellow_color1 = "\033[0;33m";
+our $blue_color1   = "\033[0;34m";
+our $blue_color2   = "\033[38;5;25;1m";
+our $blue_color3   = "\033[38;5;13;1m";
+our $magenta_color = "\033[0;35m";
+our $cyan_color    = "\033[0;36m";
+our $white_color   = "\033[0;37m";
+our $reset_color   = "\033[0m";
 }
 
 __END__
