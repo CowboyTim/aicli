@@ -48,8 +48,8 @@ GetOptions(
 show_usage() if $help;
 
 # Main execution
-ai_setup();
-ai_chat();
+chat_setup();
+chat_loop();
 exit 0;
 
 sub show_usage {
@@ -67,7 +67,7 @@ sub load_cpan {
     return $module;
 }
 
-sub ai_setup {
+sub chat_setup {
     $json //= JSON->new->utf8->allow_blessed->allow_unknown->allow_nonref->convert_blessed;
     if(!defined $ORIG_ENV{AI_CEREBRAS_API_KEY}) {
         if (!-f $CONFIG_FILE) {
@@ -103,28 +103,28 @@ sub ai_setup {
             close($fh);
         }
         open(my $fh, '>', $STATUS_FILE) or die "Failed to write to $STATUS_FILE: $!\n";
-        print {$fh} $json->encode({ role => 'system', content => ($prompt // "") }) . "\n";
+        print {$fh} $json->encode({ role => 'system', content => ($prompt // "") })."\n";
         close $fh or die "Failed to close $STATUS_FILE: $!\n";
     }
     return;
 }
 
-sub ai_log {
+sub log_info {
     my ($message) = @_;
     return unless $DEBUG;
     my $LOG_FILE = $ORIG_ENV{AI_LOG} // "&STDOUT";
     my $lfh;
     open($lfh, ">>$LOG_FILE") or open($lfh, ">&STDERR") or return;
-    print {$lfh} "INFO: [$$]: ".scalar(localtime()) . ": $message\n";
+    print {$lfh} "INFO: [$$]: ".scalar(localtime()).": $message\n";
     close $lfh or die "Failed to close $LOG_FILE: $!\n";
     return;
 }
 
-sub ai_chat_completion {
+sub chat_completion {
     my ($input) = @_;
-    ai_log("User input: $input");
+    log_info("User input: $input");
     open(my $sfh, '>>', $STATUS_FILE) or die "Failed to write to $STATUS_FILE: $!\n";
-    print {$sfh} $json->encode({ role => 'user', content => $input }) . "\n";
+    print {$sfh} $json->encode({role => 'user', content => $input})."\n";
     close $sfh or die "Failed to close $STATUS_FILE: $!\n";
     my @jstr = do {
         open(my $fh, '<', $STATUS_FILE) or die "Failed to read $STATUS_FILE: $!\n";
@@ -138,7 +138,7 @@ sub ai_chat_completion {
         temperature => $ORIG_ENV{AI_TEMPERATURE} // 0,
         top_p       => 1
     };
-    print $json->encode($req) . "\n" if $DEBUG;
+    print $json->encode($req)."\n" if $DEBUG;
     my $ua = LWP::UserAgent->new();
     print "Requesting completion from Cerebras AI API... $cerebras_api_key\n" if $DEBUG;
     my $http_req = POST('https://api.cerebras.ai/v1/chat/completions',
@@ -151,8 +151,8 @@ sub ai_chat_completion {
     print $http_req->as_string() if $DEBUG;
     my $response = $ua->request($http_req);
     if (!$response->is_success()) {
-        ai_log("Error: " . $response->status_line());
-        print $response->status_line() . "\n";
+        log_info("Error: ".$response->status_line());
+        print $response->status_line()."\n";
         return;
     }
     print $response->decoded_content() if $DEBUG;
@@ -162,30 +162,30 @@ sub ai_chat_completion {
         return;
     }
     print "$resp\n";
-    ai_log("AI response: $resp");
+    log_info("AI response: $resp");
     open($sfh, '>>', $STATUS_FILE) or die "Failed to write to $STATUS_FILE: $!\n";
-    print {$sfh} $json->encode({ role => 'assistant', content => $resp }) . "\n";
+    print {$sfh} $json->encode({ role => 'assistant', content => $resp })."\n";
     close $sfh or die "Failed to close $STATUS_FILE: $!\n";
     return;
 }
 
-sub ai_chat_word_completions_cli {
+sub chat_word_completions_cli {
     my ($text, $line, $start, $end) = @_;
     $line =~ s/ +$//g;
     my @rcs = ();
     my @wrd = split m/\s+/, $line, -1;
-    print STDERR "W: >" . join(", ", @wrd) . "<\n" if $DEBUG;
+    print STDERR "W: >".join(", ", @wrd)."<\n" if $DEBUG;
     foreach my $w (@wrd) {
         next unless $w =~ m|^/|;
         foreach my $k (qw(/exit /quit /clear /history /help /debug /nodebug /system)) {
             push @rcs, $k if !index($k, $w) or $k eq $w;
         }
     }
-    print STDERR "R: >" . join(", ", @rcs) . "<\n" if $DEBUG;
+    print STDERR "R: >".join(", ", @rcs)."<\n" if $DEBUG;
     return '', @rcs;
 }
 
-sub ai_setup_readline {
+sub setup_readline {
     local $ENV{PERL_RL} = 'Gnu';
     local $ENV{TERM}    = $ORIG_ENV{TERM} // 'vt220';
     eval {require Term::ReadLine};
@@ -199,12 +199,12 @@ sub ai_setup_readline {
     $term->ReadHistory($HISTORY_FILE);
     $term->clear_signals();
     my $attribs = $term->Attribs();
-    $attribs->{attempted_completion_function} = \&ai_chat_word_completions_cli;
+    $attribs->{attempted_completion_function} = \&chat_word_completions_cli;
     $attribs->{ignore_completion_duplicates}  = 1;
     return ($term, $attribs);
 }
 
-sub get_ai_prompt {
+sub get_chat_prompt {
     # https://jafrog.com/2013/11/23/colors-in-terminal.html
     # https://ss64.com/bash/syntax-colors.html
     my $red_color     = '\033[0;31m';
@@ -235,8 +235,8 @@ sub get_ai_prompt {
 }
 
 sub input_terminal {
-    my ($term, $attribs) = ai_setup_readline();
-    my ($t_ps1, $t_ps2) = get_ai_prompt();
+    my ($term, $attribs) = setup_readline();
+    my ($t_ps1, $t_ps2) = get_chat_prompt();
     return sub {
         my $t_prt = $t_ps1;
         my $buf = '';
@@ -244,13 +244,24 @@ sub input_terminal {
         my $line = $term->readline($t_prt);
         return unless defined $line;
         if($line !~ m/^$/ms){
+            if(!length($buf)){
+                my $r_val = handle_command($line);
+                if(defined $r_val){
+                    if($r_val == 1){
+                        $term->WriteHistory($HISTORY_FILE);
+                        return;
+                    } else {
+                        goto READ_AGAIN;
+                    }
+                }
+            }
             $buf .= "$line\n";
             $t_prt = $t_ps2;
             goto READ_AGAIN;
         } else {
             goto READ_AGAIN unless length($buf);
         }
-        ai_log("BUF: >>$buf<<");
+        log_info("BUF: >>$buf<<");
         $term->addhistory($buf);
         $term->WriteHistory($HISTORY_FILE);
         chomp $buf;
@@ -266,57 +277,91 @@ sub input_stdin {
     };
 }
 
-sub ai_chat {
+sub chat_loop {
     my $input_cli_sub = -t STDIN ? input_terminal() : input_stdin();
-    while (1) {
-        my $line = &{$input_cli_sub}();
-        last unless defined $line;
-        next if $line =~ m/^\s*$/;
-        ai_log("Command: $line");
-        if ($line =~ m|^/system|) {
-            $line =~ s|^/system||;
-            if(-f $PROMPT_FILE){
-                rename($PROMPT_FILE, $PROMPT_FILE . '.bak.' . time())
-                    or die "Failed to backup $PROMPT_FILE: $!\n"
-            }
-            open(my $pfh, '>', $PROMPT_FILE) or die "Failed to write to $PROMPT_FILE: $!\n";
-            print {$pfh} $line;
-            close $pfh or die "Failed to close $PROMPT_FILE: $!\n";
-            open(my $sfh, '>', $STATUS_FILE) or die "Failed to write to $STATUS_FILE: $!\n";
-            print {$sfh} $json->encode({ role => 'system', content => $line }) . "\n";
-            close $sfh or die "Failed to close $STATUS_FILE: $!\n";
-            next;
+    while(1){
+        my $chat_request = &{$input_cli_sub}();
+        last unless defined $chat_request;
+        next if $chat_request =~ m/^\s*$/;
+        chat_completion($chat_request);
+    }
+    return;
+}
+
+sub handle_command {
+    my ($line) = @_;
+    log_info("Command: $line");
+    if ($line =~ m|^/system|) {
+        $line =~ s|^/system||;
+        if(-f $PROMPT_FILE){
+            rename($PROMPT_FILE, $PROMPT_FILE.'.bak.'.time())
+                or die "Failed to backup $PROMPT_FILE: $!\n"
         }
-        if ($line =~ m|^/exit| or $line =~ m|^/quit|) {
-            last;
+        open(my $pfh, '>', $PROMPT_FILE) or die "Failed to write to $PROMPT_FILE: $!\n";
+        print {$pfh} $line;
+        close $pfh or die "Failed to close $PROMPT_FILE: $!\n";
+        open(my $sfh, '>', $STATUS_FILE) or die "Failed to write to $STATUS_FILE: $!\n";
+        print {$sfh} $json->encode({ role => 'system', content => $line })."\n";
+        close $sfh or die "Failed to close $STATUS_FILE: $!\n";
+        return 0;
+    }
+    if ($line =~ m|^/exit| or $line =~ m|^/quit|) {
+        return 1;
+    }
+    if ($line =~ m|^/clear|) {
+        my $prompt = -f $PROMPT_FILE ? do {
+            open(my $fh, '<', $PROMPT_FILE) or die "Failed to read $PROMPT_FILE: $!\n";
+            local $/; <$fh>
+        }:'';
+        open(my $fh, '>', $STATUS_FILE) or die "Failed to write to $STATUS_FILE: $!\n";
+        print {$fh} $json->encode({ role => 'system', content => ($prompt // "") })."\n";
+        close $fh or die "Failed to close $STATUS_FILE: $!\n";
+        return 0;
+    }
+    if ($line =~ m|^/history|) {
+        print do {open(my $_hfh, '<', $HISTORY_FILE) or die "Failed to read $HISTORY_FILE: $!\n"; local $/; <$_hfh>};
+        return 0;
+    }
+    if ($line =~ m|^/debug|) {
+        $DEBUG = 1;
+        return 0;
+    }
+    if ($line =~ m|^/nodebug|) {
+        $DEBUG = 0;
+        return 0;
+    }
+    if ($line =~ m|^/help|) {
+        print "/exit, /quit, /clear, /history, /help, /debug, /nodebug, /system\n";
+        return 0;
+    }
+    if ($line =~ m|^/files|) {
+        # slurp the directory and add the contents of the files to the chat
+        my $dir = $line;
+        $dir =~ s|^/files||;
+        opendir(my $dh, $dir)
+            or die "Failed to open $dir: $!\n";
+        while (my $file = readdir($dh)) {
+            next if $file =~ m/^\./;
+            open(my $fh, '<', "$dir/$file")
+                or die "Failed to read $dir/$file: $!\n";
+            local $/;
+            my $data = <$fh>;
+            close $fh
+                or die "Failed to close $dir/$file: $!\n";
+            $data = '```'."\n".$data."\n".'```'."\n";
+            open(my $sfh, '>', $STATUS_FILE)
+                or die "Failed to write to $STATUS_FILE: $!\n";
+            print {$sfh} $json->encode({role => 'user', content => $data})."\n";
+            close $sfh
+                or die "Failed to close $STATUS_FILE: $!\n";
         }
-        if ($line =~ m|^/clear|) {
-            my $prompt = -f $PROMPT_FILE ? do {
-                open(my $fh, '<', $PROMPT_FILE) or die "Failed to read $PROMPT_FILE: $!\n";
-                local $/; <$fh>
-            }:'';
-            open(my $fh, '>', $STATUS_FILE) or die "Failed to write to $STATUS_FILE: $!\n";
-            print {$fh} $json->encode({ role => 'system', content => ($prompt // "") }) . "\n";
-            close $fh or die "Failed to close $STATUS_FILE: $!\n";
-            next;
-        }
-        if ($line =~ m|^/history|) {
-            print do {open(my $_hfh, '<', $HISTORY_FILE) or die "Failed to read $HISTORY_FILE: $!\n"; local $/; <$_hfh>};
-            next;
-        }
-        if ($line =~ m|^/debug|) {
-            $DEBUG = 1;
-            next;
-        }
-        if ($line =~ m|^/nodebug|) {
-            $DEBUG = 0;
-            next;
-        }
-        if ($line =~ m|^/help|) {
-            print "/exit, /quit, /clear, /history, /help, /debug, /nodebug, /system\n";
-            next;
-        }
-        ai_chat_completion($line);
+        closedir $dh
+            or die "Failed to close $dir: $!\n";
+        return 0;
+    }
+    if ($line =~ m|^/|) {
+        print "Unknown command: $line\n";
+        return 0;
     }
     return;
 }
