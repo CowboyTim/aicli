@@ -191,6 +191,7 @@ sub ai_setup_readline {
     eval {require Term::ReadLine};
     die $@ if $@;
     my $term = Term::ReadLine->new("aicli");
+    $term->read_init_file("$BASE_DIR/inputrc");
     $term->ReadLine('Term::ReadLine::Gnu') eq 'Term::ReadLine::Gnu'
         or die "Term::ReadLine::Gnu is required\n";
     $term->enableUTF8();
@@ -270,7 +271,7 @@ sub ai_chat {
     while (1) {
         my $line = &{$input_cli_sub}();
         last unless defined $line;
-        next if $line =~ m/^\s*$/ms;
+        next if $line =~ m/^\s*$/;
         ai_log("Command: $line");
         if ($line =~ m|^/system|) {
             $line =~ s|^/system||;
