@@ -20,6 +20,7 @@ use LWP::UserAgent;
 use HTTP::Request::Common qw(POST);
 use Getopt::Long;
 use Cwd qw();
+use Encode qw(_utf8_on _utf8_off);
 
 # Constants
 my $DEBUG = $ORIG_ENV{DEBUG} // 0;
@@ -164,6 +165,7 @@ sub chat_completion {
         print "Error: Failed to parse response\n";
         return;
     }
+    _utf8_on($resp);
     print "$resp\n";
     log_info("AI response: $resp");
     open($sfh, '>>', $STATUS_FILE) or die "Failed to write to $STATUS_FILE: $!\n";
