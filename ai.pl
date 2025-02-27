@@ -165,7 +165,7 @@ sub chat_completion {
         print "Error: Failed to parse response\n";
         return;
     }
-    _utf8_on($resp);
+    _utf8_off($resp);
     print "$resp\n";
     log_info("AI response: $resp");
     open($sfh, '>>', $STATUS_FILE) or die "Failed to write to $STATUS_FILE: $!\n";
