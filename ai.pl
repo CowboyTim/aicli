@@ -161,6 +161,7 @@ sub chat_completion {
     if (!$response->is_success()) {
         log_info("Error: ".$response->status_line());
         print $response->status_line()."\n";
+        print $response->decoded_content()."\n";
         return;
     }
     print $response->decoded_content() if $DEBUG;
