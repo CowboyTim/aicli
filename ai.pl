@@ -288,16 +288,11 @@ sub handle_command {
     log_info("Command: $line");
     if ($line =~ m|^/system|) {
         $line =~ s|^/system||;
-        if(-f $PROMPT_FILE){
-            rename($PROMPT_FILE, $PROMPT_FILE.'.bak.'.time())
-                or die "Failed to backup $PROMPT_FILE: $!\n"
-        }
-        open(my $pfh, '>', $PROMPT_FILE) or die "Failed to write to $PROMPT_FILE: $!\n";
-        print {$pfh} $line;
-        close $pfh or die "Failed to close $PROMPT_FILE: $!\n";
-        open(my $sfh, '>', $STATUS_FILE) or die "Failed to write to $STATUS_FILE: $!\n";
+        open(my $sfh, '>>', $STATUS_FILE)
+            or die "Failed to write to $STATUS_FILE: $!\n";
         print {$sfh} $json->encode({ role => 'system', content => $line })."\n";
-        close $sfh or die "Failed to close $STATUS_FILE: $!\n";
+        close $sfh
+            or die "Failed to close $STATUS_FILE: $!\n";
         return 0;
     }
     if ($line =~ m|^/exit| or $line =~ m|^/quit|) {
@@ -305,12 +300,15 @@ sub handle_command {
     }
     if ($line =~ m|^/clear|) {
         my $prompt = -f $PROMPT_FILE ? do {
-            open(my $fh, '<', $PROMPT_FILE) or die "Failed to read $PROMPT_FILE: $!\n";
+            open(my $fh, '<', $PROMPT_FILE)
+                or die "Failed to read $PROMPT_FILE: $!\n";
             local $/; <$fh>
         }:'';
-        open(my $fh, '>', $STATUS_FILE) or die "Failed to write to $STATUS_FILE: $!\n";
+        open(my $fh, '>', $STATUS_FILE)
+            or die "Failed to write to $STATUS_FILE: $!\n";
         print {$fh} $json->encode({ role => 'system', content => ($prompt // "") })."\n";
-        close $fh or die "Failed to close $STATUS_FILE: $!\n";
+        close $fh
+            or die "Failed to close $STATUS_FILE: $!\n";
         return 0;
     }
     if ($line =~ m|^/history|) {
@@ -373,7 +371,7 @@ sub handle_command {
                 my $data = <$fh>;
                 close $fh;
                 $data = '```'."\n".$data."\n".'```'."\n";
-                open(my $sfh, '>', $STATUS_FILE)
+                open(my $sfh, '>>', $STATUS_FILE)
                     or next;
                 print {$sfh} $json->encode({role => 'user', content => $data})."\n";
                 close $sfh;
