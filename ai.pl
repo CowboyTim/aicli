@@ -78,7 +78,8 @@ sub chat_setup {
             print "Please set AI_DIR/AI_CONFIG/AI_CEREBRAS_API_KEY environment variable or set $BASE_DIR/config\n";
             exit 1;
         } else {
-            open(my $fh, ". $CONFIG_FILE; set|") or die "Failed to read $CONFIG_FILE: $!\n";
+            open(my $fh, ". $CONFIG_FILE; set|")
+                or die "Failed to read $CONFIG_FILE: $!\n";
             my %envs = map { chomp; split m/=/, $_, 2 } grep m/^AI_/, <$fh>;
             while (my ($key, $value) = each %envs) {
                 $ORIG_ENV{$key} = $value =~ s/^['"]//r =~ s/['"]$//r;
@@ -91,24 +92,27 @@ sub chat_setup {
         print "Please set AI_CEREBRAS_API_KEY environment variable or set $BASE_DIR/config\n";
         exit 1;
     }
-    my $prompt;
-    if(!-s $PROMPT_FILE and open(my $fh, '<', "$FindBin::Bin/ai/$AI_PROMPT")){
+    if((!-s $PROMPT_FILE or ($ORIG_ENV{AI_CLEAR}//0)) and open(my $fh, '<', "$FindBin::Bin/ai/$AI_PROMPT")){
         local $/;
-        $prompt = <$fh>;
+        my $prompt = <$fh>;
         close($fh);
-        open(my $pfh, '>', $PROMPT_FILE) or die "Failed to write to $PROMPT_FILE: $!\n";
+        open(my $pfh, '>', $PROMPT_FILE)
+            or die "Failed to write to $PROMPT_FILE: $!\n";
         print {$pfh} $prompt;
         close $pfh or die "Failed to close $PROMPT_FILE: $!\n";
     }
     if(!-s $STATUS_FILE or ($ORIG_ENV{AI_CLEAR}//0)){
-        if(not defined $prompt and open(my $fh, '<', $PROMPT_FILE)){
+        my $prompt;
+        if(open(my $fh, '<', $PROMPT_FILE)){
             local $/;
             $prompt = <$fh>;
             close($fh);
         }
-        open(my $fh, '>', $STATUS_FILE) or die "Failed to write to $STATUS_FILE: $!\n";
+        open(my $fh, '>', $STATUS_FILE)
+            or die "Failed to write to $STATUS_FILE: $!\n";
         print {$fh} $json->encode({ role => 'system', content => ($prompt // "") })."\n";
-        close $fh or die "Failed to close $STATUS_FILE: $!\n";
+        close $fh
+            or die "Failed to close $STATUS_FILE: $!\n";
     }
     return;
 }
