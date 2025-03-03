@@ -335,6 +335,7 @@ sub handle_command {
     if ($line =~ m|^/chdir|) {
         $line =~ s|^/chdir||;
         $line =~ s| +$||;
+        $line =~ s|^\s+||;
         if(chdir($line)){
             return 0;
         } else {
