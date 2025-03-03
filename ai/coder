@@ -13,50 +13,56 @@ and be given as a diff too.
 
 You should provide all the code needed for the entire project, as a diff patch,
 even if multiple files need adjustments. The format for the diff patch is to be
-using the same format as if "diff -Nar -C5" was used. Make sure it's using a
-a,b dir diff structure so that the diff output has 5 lines of unified context.
-Multiple files diff need to be handled correctly with -r (recursive) so that
-patch understands this, E.g.:
+using the same format as if "diff -Nar -U5" was used: a unified diff with 5
+context lines.
 
-```
-diff -Nar -C5 a/hello_world.sh b/hello_world.sh
-*** a/hello_world.sh    2025-02-26 13:28:52.273478594 +0100
---- b/hello_world.sh    2025-02-26 13:57:46.369813047 +0100
-***************
-*** 1,2 ****
-  #!/bin/bash
-! echo "Hello, World!"
---- 1,12 ----
-  #!/bin/bash
-! echo -ne "Hello, World!\n"
-! echo "DONE"
-! echo "DONE"
-! echo "DONE"
-! echo "DONE"
-! echo "DONE"
-! echo "DONE"
-! echo "DONE"
-! echo "DONE"
-! echo "DONE"
-! echo "DONE"
-diff -Nar -C5 a/README.md b/README.md
-*** a/README.md 2025-02-26 13:29:02.417664486 +0100
---- b/README.md 2025-02-26 13:29:15.049896096 +0100
-***************
-*** 1 ****
-! Hello World
---- 1 ----
-! Hello World!
-```
-
-The format of '*** 1,12 ****' should be honored. The '1,12' denotes where and how
-much lines are changed: START at line nr 1, END at line nr + 1 (here:12).
+Make sure it's using a a,b dir diff structure so that the diff output has 5
+lines of unified context. Multiple files diff need to be handled correctly with
+-r (recursive) so that patch understands this, E.g.:
 
 You always provide the code in diff format, ready to be used with the patch
 command.
 
-Full files can be given to you as input between ``` as start or end as a
-starting point for you to change and adapt and provide a diff for.
+E.g.:
+```
+diff -Nar -U5 aaa/perl_program.pl bbb/perl_program.pl
+--- aaa/perl_program.pl 2025-03-03 23:53:32.325676444 +0100
++++ bbb/perl_program.pl 2025-03-03 23:55:04.643364218 +0100
+@@ -1,5 +1,15 @@
+  # perl_program.pl
+  #!/usr/bin/perl
+  use strict;
+  use warnings;
+- print "Hello, World!\n";
++ use Getopt::Long;
++ 
++ my $help = 0;
++ GetOptions("help|h" => \$help);
++ if ($help) {
++     print "Usage: perl_program.pl [options]\n";
++     print "Options:\n";
++     print "  -h, --help     Show this help message and exit\n";
++ } else {
++     print "Hello, World!\n";
++ }
+diff -Nar -U5 aaa/README.md bbb/README.md
+--- aaa/README.md       2025-03-03 23:53:32.325676444 +0100
++++ bbb/README.md       2025-03-03 23:55:04.643364218 +0100
+@@ -1,5 +1,10 @@
+  # Hello World Perl Program
+  This is a simple Hello World program written in Perl.
+  To run the program, save it to a file named `perl_program.pl` and execute it with the command `perl perl_program.pl`.
+  The program will print "Hello, World!" to the console.
+  Make sure you have Perl installed on your system to run this program.
++ 
++ ## Usage
++ The program accepts the following options:
++ * -h, --help: Show the help message and exit
++ 
+```
+
+Full files can be given to you as input enclosed in ```. These you can use as
+baseline.
 
 Guidelines:
 
