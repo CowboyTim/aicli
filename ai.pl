@@ -366,15 +366,22 @@ sub handle_command {
         $dir_rx = qr/$dir_rx/;
         my $dir = Cwd::cwd();
         if(opendir(my $dh, $dir)){
+            my $ignore_list = do {
+                local $/;
+                open(my $_ifh, '<', '.aiignore') or return '';
+                <$_ifh>;
+            };
             while (my $file = readdir($dh)) {
                 next if $file =~ m/^\./;
                 next unless -f $file;
                 next if $file !~ m/$dir_rx/;
-                open(my $fh, '<', $file)
-                    or next;
-                local $/;
-                my $data = <$fh>;
-                close $fh;
+                next if grep {$file eq $_} map {glob($_)} split m/\n/, $ignore_list;
+                my $data = do {
+                    my $_ffh;
+                    local $/;
+                    open($_ffh, '<', $file) and <$_ffh>;
+                };
+                next unless length($data//"");
                 $data = '```'."\n".$data."\n".'```'."\n";
                 open(my $sfh, '>>', $STATUS_FILE)
                     or next;
