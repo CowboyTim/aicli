@@ -448,6 +448,56 @@ Enable debug mode.
 
 B<ai.pl> is a command-line interface for interacting with an AI chat model.
 
+=head1 COMMANDS
+
+=over 8
+
+=item B</exit> or B</quit>
+
+Exit the chat.
+
+=item B</clear>
+
+Clear the chat status file.
+
+=item B</history>
+
+Show the chat history.
+
+=item B</help>
+
+Show the list of available commands.
+
+=item B</debug>
+
+Enable debug mode.
+
+=item B</nodebug>
+
+Disable debug mode.
+
+=item B</system>
+
+Send a system message to the chat.
+
+=item B</chdir>
+
+Change the current working directory.
+
+=item B</ls>
+
+List files in the current directory.
+
+=item B</pwd>
+
+Print the current working directory.
+
+=item B</files>
+
+Add the contents of files matching a pattern to the chat.
+
+=back
+
 =head1 ENVIRONMENT VARIABLES
 
 =over 8
