@@ -16,8 +16,6 @@ BEGIN {
 }
 
 use JSON;
-use LWP::UserAgent;
-use HTTP::Request::Common qw(POST);
 use Getopt::Long;
 use Cwd qw();
 use Encode qw(_utf8_on _utf8_off);
@@ -147,25 +145,10 @@ sub chat_completion {
         top_p       => 1
     };
     print $json->encode($req)."\n" if $DEBUG;
-    my $ua = LWP::UserAgent->new();
-    print "Requesting completion from Cerebras AI API... $cerebras_api_key\n" if $DEBUG;
-    my $http_req = POST('https://api.cerebras.ai/v1/chat/completions',
-        'User-Agent'    => 'Cerebras AI Chat/0.1',
-        'Accept'        => 'application/json',
-        'Content-Type'  => 'application/json',
-        'Authorization' => "Bearer $cerebras_api_key",
-        'Content'       => $json->encode($req),
-    );
-    print $http_req->as_string() if $DEBUG;
-    my $response = $ua->request($http_req);
-    if (!$response->is_success()) {
-        log_info("Error: ".$response->status_line());
-        print $response->status_line()."\n";
-        print $response->decoded_content()."\n";
-        return;
-    }
-    print $response->decoded_content() if $DEBUG;
-    my $resp = JSON::decode_json($response->decoded_content())->{choices}[0]{message}{content};
+    print "Requesting completion from Cerebras AI API... $cerebras_api_key\n"
+        if $DEBUG;
+    my $response = httppost('https://api.cerebras.ai/v1/chat/completions', $json->encode($req));
+    my $resp = JSON::decode_json($response)->{choices}[0]{message}{content};
     if (!$resp) {
         print "Error: Failed to parse response\n";
         return;
@@ -399,6 +382,30 @@ sub handle_command {
         return 0;
     }
     return;
+}
+
+sub httppost {
+    my ($url, $data) = @_;
+    require LWP::UserAgent;
+    require HTTP::Request::Common;
+    my $ua = LWP::UserAgent->new();
+    my $http_req = HTTP::Request::Common::POST($url,
+        'User-Agent'    => 'Cerebras AI Chat/0.1',
+        'Accept'        => 'application/json',
+        'Content-Type'  => 'application/json',
+        'Authorization' => "Bearer $cerebras_api_key",
+        'Content'       => $data,
+    );
+    print $http_req->as_string() if $DEBUG;
+    my $response = $ua->request($http_req);
+    if (!$response->is_success()) {
+        log_info("Error: ".$response->status_line());
+        print $response->status_line()."\n";
+        print $response->decoded_content()."\n";
+        return;
+    }
+    print $response->decoded_content() if $DEBUG;
+    return $response->decoded_content();
 }
 
 BEGIN {
