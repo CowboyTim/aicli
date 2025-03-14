@@ -395,7 +395,7 @@ sub httppost {
     };
     if($@){
         print "Please install LWP::UserAgent and HTTP::Request::Common\n";
-        return;
+        exit 1;
     }
     my $ua = LWP::UserAgent->new();
     my $http_req = HTTP::Request::Common::POST($url,
