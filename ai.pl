@@ -401,6 +401,7 @@ sub httppost {
     $curl_handle //= do {
         my $ch = WWW::Curl::Easy->new();
         $ch->setopt(WWW::Curl::Easy::CURLOPT_URL(), $url);
+        $ch->setopt(WWW::Curl::Easy::CURLOPT_IPRESOLVE(), WWW::Curl::Easy::CURL_IPRESOLVE_V6());
         $ch->setopt(WWW::Curl::Easy::CURLOPT_WRITEFUNCTION(), sub {
             my ($chunk, $u_ref) = @_;
             $$u_ref .= $chunk;
@@ -412,6 +413,8 @@ sub httppost {
             "Accept: application/json",
             "Content-Type: application/json",
             "User-Agent: Cerebras AI Chat/0.1",
+            "Connection: Keep-Alive",
+            "Keep-Alive: max=100",
             "Authorization: Bearer $cerebras_api_key",
         ]);
         $ch;
