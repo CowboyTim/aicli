@@ -17,6 +17,7 @@ BEGIN {
 
 use JSON;
 use Getopt::Long;
+use Socket;
 use Cwd qw();
 use Encode qw(_utf8_on _utf8_off);
 
@@ -36,7 +37,7 @@ my $PROMPT_FILE = "$BASE_DIR/$AI_PROMPT/prompt";
 my $STATUS_FILE = "$BASE_DIR/$AI_PROMPT/chat";
 
 # Variables
-my ($json, $cerebras_api_key);
+my ($json, $cerebras_api_key, $curl_handle);
 
 # Command-line options
 my $help;
@@ -390,31 +391,44 @@ sub handle_command {
 sub httppost {
     my ($url, $data) = @_;
     eval {
-        require LWP::UserAgent;
-        require HTTP::Request::Common;
+        require WWW::Curl::Easy;
     };
     if($@){
-        print "Please install LWP::UserAgent and HTTP::Request::Common\n\nE.g.:\n  apt install liblwp-protocol-https-perl\n";
+        print "Please install WWW::Curl::Easy\n\nE.g.:\n  apt install libwww-curl-perl\n";
         exit 1;
     }
-    my $ua = LWP::UserAgent->new();
-    my $http_req = HTTP::Request::Common::POST($url,
-        'User-Agent'    => 'Cerebras AI Chat/0.1',
-        'Accept'        => 'application/json',
-        'Content-Type'  => 'application/json',
-        'Authorization' => "Bearer $cerebras_api_key",
-        'Content'       => $data,
-    );
-    print $http_req->as_string() if $DEBUG;
-    my $response = $ua->request($http_req);
-    if (!$response->is_success()) {
-        log_info("Error: ".$response->status_line());
-        print $response->status_line()."\n";
-        print $response->decoded_content()."\n";
-        return;
+    print "URL: $url\n" if $DEBUG;
+    $curl_handle //= do {
+        my $ch = WWW::Curl::Easy->new();
+        $ch->setopt(WWW::Curl::Easy::CURLOPT_URL(), $url);
+        $ch->setopt(WWW::Curl::Easy::CURLOPT_WRITEFUNCTION(), sub {
+            my ($chunk, $u_ref) = @_;
+            $$u_ref .= $chunk;
+            return length($chunk);
+        });
+        $ch->setopt(WWW::Curl::Easy::CURLOPT_POST(), 1);
+        $ch->setopt(WWW::Curl::Easy::CURLOPT_VERBOSE(), $DEBUG?1:0);
+        $ch->setopt(WWW::Curl::Easy::CURLOPT_HTTPHEADER(), [
+            "Accept: application/json",
+            "Content-Type: application/json",
+            "User-Agent: Cerebras AI Chat/0.1",
+            "Authorization: Bearer $cerebras_api_key",
+        ]);
+        $ch;
+    };
+    my $resp = "";
+    $data //= "";
+    $curl_handle->setopt(WWW::Curl::Easy::CURLOPT_WRITEDATA(), \$resp);
+    $curl_handle->setopt(WWW::Curl::Easy::CURLOPT_POSTFIELDS(), $data);
+    $curl_handle->setopt(WWW::Curl::Easy::CURLOPT_POSTFIELDSIZE_LARGE(), length($data));
+    $curl_handle->perform();
+    my $r_code = $curl_handle->getinfo(WWW::Curl::Easy::CURLINFO_HTTP_CODE());
+    if($r_code != 200){
+        die "ERROR: $r_code\n";
     }
-    print $response->decoded_content() if $DEBUG;
-    return $response->decoded_content();
+    print "OK: $r_code\n"      if $DEBUG;
+    print "RESPONSE:\n$resp\n" if $DEBUG;
+    return $resp;
 }
 
 BEGIN {
