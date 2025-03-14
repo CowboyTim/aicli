@@ -181,8 +181,11 @@ sub chat_word_completions_cli {
 sub setup_readline {
     local $ENV{PERL_RL} = 'Gnu';
     local $ENV{TERM}    = $ORIG_ENV{TERM} // 'vt220';
-    eval {require Term::ReadLine};
-    die $@ if $@;
+    eval {require Term::ReadLine; require Term::ReadLine::Gnu};
+    if($@){
+        print "Please install Term::ReadLine and Term::ReadLine::Gnu\n";
+        exit 1;
+    }
     my $term = Term::ReadLine->new("aicli");
     $term->read_init_file("$BASE_DIR/inputrc");
     $term->ReadLine('Term::ReadLine::Gnu') eq 'Term::ReadLine::Gnu'
