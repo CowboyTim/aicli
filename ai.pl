@@ -183,7 +183,7 @@ sub setup_readline {
     local $ENV{TERM}    = $ORIG_ENV{TERM} // 'vt220';
     eval {require Term::ReadLine; require Term::ReadLine::Gnu};
     if($@){
-        print "Please install Term::ReadLine and Term::ReadLine::Gnu\n";
+        print "Please install Term::ReadLine and Term::ReadLine::Gnu\n\nE.g.:\n  apt install libterm-readline-gnu-perl\n";
         exit 1;
     }
     my $term = Term::ReadLine->new("aicli");
@@ -394,7 +394,7 @@ sub httppost {
         require HTTP::Request::Common;
     };
     if($@){
-        print "Please install LWP::UserAgent and HTTP::Request::Common\n";
+        print "Please install LWP::UserAgent and HTTP::Request::Common\n\nE.g.:\n  apt install liblwp-protocol-https-perl\n";
         exit 1;
     }
     my $ua = LWP::UserAgent->new();
