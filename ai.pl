@@ -386,8 +386,14 @@ sub handle_command {
 
 sub httppost {
     my ($url, $data) = @_;
-    require LWP::UserAgent;
-    require HTTP::Request::Common;
+    eval {
+        require LWP::UserAgent;
+        require HTTP::Request::Common;
+    };
+    if($@){
+        print "Please install LWP::UserAgent and HTTP::Request::Common\n";
+        return;
+    }
     my $ua = LWP::UserAgent->new();
     my $http_req = HTTP::Request::Common::POST($url,
         'User-Agent'    => 'Cerebras AI Chat/0.1',
