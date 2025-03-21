@@ -4,6 +4,13 @@
 
 `ai.pl` is a command-line interface for interacting with an AI chat model.
 
+
+## Development prerequisites
+
+```
+apt install libjson-xs-perl libterm-readline-gnu-perl libjson-perl
+```
+
 ## Build
 
 ```
