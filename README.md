@@ -8,7 +8,7 @@
 ## Development prerequisites
 
 ```
-apt install libjson-xs-perl libterm-readline-gnu-perl libjson-perl libwww-curl-perl
+sudo apt install libjson-xs-perl libterm-readline-gnu-perl libjson-perl libwww-curl-perl
 ```
 
 ## Build
