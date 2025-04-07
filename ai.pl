@@ -227,10 +227,10 @@ sub input_terminal {
     return sub {
         my $t_prt = $t_ps1;
         my $buf = '';
-        READ_AGAIN:
+      READ_AGAIN:
         my $line = $term->readline($t_prt);
         return unless defined $line;
-        if($line !~ m/^$/ms){
+        if($line =~ m/^$/ms){
             if(!length($buf)){
                 my $r_val = handle_command($line);
                 if(defined $r_val){
@@ -246,13 +246,17 @@ sub input_terminal {
             $t_prt = $t_ps2;
             goto READ_AGAIN;
         } else {
-            goto READ_AGAIN unless length($buf);
+            if(length($buf)){
+                log_info("BUF: >>$buf<<");
+                $term->addhistory($buf);
+                $term->WriteHistory($HISTORY_FILE);
+                chomp $buf;
+                return $buf;
+            } else {
+                goto READ_AGAIN;
+            }
         }
-        log_info("BUF: >>$buf<<");
-        $term->addhistory($buf);
-        $term->WriteHistory($HISTORY_FILE);
-        chomp $buf;
-        return $buf;
+        return;
     };
 }
 
@@ -268,7 +272,10 @@ sub chat_loop {
     my $input_cli_sub = -t STDIN ? input_terminal() : input_stdin();
     while(1){
         my $chat_request = &{$input_cli_sub}();
-        last unless defined $chat_request;
+        unless(defined $chat_request){
+            print "\n";
+            last;
+        }
         next if $chat_request =~ m/^\s*$/;
         chat_completion($chat_request);
     }
