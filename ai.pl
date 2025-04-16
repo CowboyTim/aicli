@@ -138,7 +138,7 @@ sub chat_completion {
         map {chomp; JSON::decode_json($_)} <$fh>
     };
     my $req = {
-        model       => $ORIG_ENV{AI_MODEL}  // 'llama-3.3-70b',
+        model       => $ORIG_ENV{AI_MODEL}  // 'llama-4-scout-17b-16e-instruct',
         max_tokens  => $ORIG_ENV{AI_TOKENS} // 8192,
         stream      => JSON::false(),
         messages    => \@jstr,
@@ -230,7 +230,7 @@ sub input_terminal {
       READ_AGAIN:
         my $line = $term->readline($t_prt);
         return unless defined $line;
-        if($line =~ m/^$/ms){
+        if($line !~ m/^$/ms){
             if(!length($buf)){
                 my $r_val = handle_command($line);
                 if(defined $r_val){
