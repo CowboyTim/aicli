@@ -36,7 +36,7 @@ my $PROMPT_FILE = "$BASE_DIR/$AI_PROMPT/prompt";
 my $STATUS_FILE = "$BASE_DIR/$AI_PROMPT/chat";
 
 # Variables
-my ($json, $cerebras_api_key, $curl_handle);
+my ($json, $api_key, $curl_handle, $ai_endpoint_url);
 
 # Command-line options
 my $help;
@@ -72,9 +72,9 @@ sub load_cpan {
 sub chat_setup {
     $json //= eval {require JSON::XS; JSON::XS->new->utf8->allow_blessed->allow_unknown->allow_nonref->convert_blessed};
     $json // die "Please install the JSON cpan module:\n\nE.g.:\n  sudo apt install libjson-xs-perl\n\n";
-    if(!defined $ORIG_ENV{AI_CEREBRAS_API_KEY}) {
+    if(!defined $ORIG_ENV{AI_API_KEY}) {
         if (!-f $CONFIG_FILE) {
-            print "Please set AI_DIR/AI_CONFIG/AI_CEREBRAS_API_KEY environment variable or set $BASE_DIR/config\n";
+            print STDERR "Please set AI_DIR/AI_CONFIG/AI_API_KEY environment variable or set $BASE_DIR/config\n";
             exit 1;
         } else {
             open(my $fh, ". $CONFIG_FILE; set|")
@@ -86,10 +86,16 @@ sub chat_setup {
             close $fh;
         }
     }
-    $cerebras_api_key = $ORIG_ENV{AI_CEREBRAS_API_KEY};
-    if (!$cerebras_api_key) {
-        print "Please set AI_CEREBRAS_API_KEY environment variable or set $BASE_DIR/config\n";
+    $api_key = $ORIG_ENV{AI_API_KEY};
+    if (!$api_key) {
+        print STDERR "Please set AI_API_KEY environment variable or set $BASE_DIR/config\n";
         exit 1;
+    }
+    if($api_key =~ m/^csk-/){
+	$ai_endpoint_url = "https://api.cerebras.ai";
+    }
+    if($api_key =~ m/^sk-or/){
+	$ai_endpoint_url = "https://openrouter.ai/api";
     }
     if((!-s $PROMPT_FILE or ($ORIG_ENV{AI_CLEAR}//0)) and open(my $fh, '<', "$FindBin::Bin/ai/$AI_PROMPT")){
         local $/;
@@ -145,10 +151,12 @@ sub chat_completion {
         temperature => $ORIG_ENV{AI_TEMPERATURE} // 0,
         top_p       => 1
     };
-    print $json->encode($req)."\n" if $DEBUG;
-    print "Requesting completion from Cerebras AI API... $cerebras_api_key\n"
-        if $DEBUG;
-    my $response = httppost('https://api.cerebras.ai/v1/chat/completions', $json->encode($req));
+    if($ai_endpoint_url eq "https://openrouter.ai/api"){
+	$req->{provider} = {"only" => ["Cerebras"]};
+    }
+    print STDERR $json->encode($req)."\n" if $DEBUG;
+    print STDERR "Requesting completion from AI API $ai_endpoint_url with $api_key\n" if $DEBUG;
+    my $response = http("post", "v1/chat/completions", $json->encode($req));
     my $resp = JSON::XS::decode_json($response)->{choices}[0]{message}{content};
     if (!$resp) {
         print "Error: Failed to parse response\n";
@@ -160,6 +168,16 @@ sub chat_completion {
     open($sfh, '>>', $STATUS_FILE) or die "Failed to write to $STATUS_FILE: $!\n";
     print {$sfh} $json->encode({ role => 'assistant', content => $resp })."\n";
     close $sfh or die "Failed to close $STATUS_FILE: $!\n";
+    return;
+}
+
+sub list_models {
+    my $response = http("get", "v1/chat/models");
+    my $resp = JSON::XS::decode_json($response)->{choices}[0]{message}{content};
+    if (!$resp) {
+        print "Error: Failed to parse response\n";
+        return;
+    }
     return;
 }
 
@@ -184,7 +202,7 @@ sub setup_readline {
     local $ENV{TERM}    = $ORIG_ENV{TERM} // 'vt220';
     eval {require Term::ReadLine; require Term::ReadLine::Gnu};
     if($@){
-        print "Please install Term::ReadLine and Term::ReadLine::Gnu\n\nE.g.:\n  sudo apt install libterm-readline-gnu-perl\n";
+        print STDERR "Please install Term::ReadLine and Term::ReadLine::Gnu\n\nE.g.:\n  sudo apt install libterm-readline-gnu-perl\n";
         exit 1;
     }
     my $term = Term::ReadLine->new("aicli");
@@ -395,16 +413,19 @@ sub handle_command {
     return;
 }
 
-sub httppost {
-    my ($url, $data) = @_;
+sub http {
+    my ($m, $url, $data) = @_;
+    $url = "$ai_endpoint_url/$url";
     eval {
         require WWW::Curl::Easy;
     };
     if($@){
-        print "Please install WWW::Curl::Easy\n\nE.g.:\n  sudo apt install libwww-curl-perl\n";
+        print STDERR "Please install WWW::Curl::Easy\n\nE.g.:\n  sudo apt install libwww-curl-perl\n";
         exit 1;
     }
-    print "URL: $url\n" if $DEBUG;
+    $data //= "";
+    print STDERR "URL: $url\n"   if $DEBUG;
+    print STDERR "DATA: $data\n" if $DEBUG;
     $curl_handle //= do {
         my $ch = WWW::Curl::Easy->new();
         $ch->setopt(WWW::Curl::Easy::CURLOPT_URL(), $url);
@@ -419,25 +440,30 @@ sub httppost {
         $ch->setopt(WWW::Curl::Easy::CURLOPT_HTTPHEADER(), [
             "Accept: application/json",
             "Content-Type: application/json",
-            "User-Agent: Cerebras AI Chat/0.1",
+            "User-Agent: AI Chat/0.1",
             "Connection: Keep-Alive",
             "Keep-Alive: max=100",
-            "Authorization: Bearer $cerebras_api_key",
+            "Authorization: Bearer $api_key",
         ]);
         $ch;
     };
     my $resp = "";
-    $data //= "";
     $curl_handle->setopt(WWW::Curl::Easy::CURLOPT_WRITEDATA(), \$resp);
-    $curl_handle->setopt(WWW::Curl::Easy::CURLOPT_POSTFIELDS(), $data);
-    $curl_handle->setopt(WWW::Curl::Easy::CURLOPT_POSTFIELDSIZE_LARGE(), length($data));
+    if(lc($m) eq "post"){
+	if(length($data)){
+            $curl_handle->setopt(WWW::Curl::Easy::CURLOPT_POSTFIELDS(), $data);
+	    $curl_handle->setopt(WWW::Curl::Easy::CURLOPT_POSTFIELDSIZE_LARGE(), length($data));
+	}
+    }
+    if(lc($m) eq "get"){
+    }
     $curl_handle->perform();
     my $r_code = $curl_handle->getinfo(WWW::Curl::Easy::CURLINFO_HTTP_CODE());
     if($r_code != 200){
         die "ERROR: $r_code\n";
     }
-    print "OK: $r_code\n"      if $DEBUG;
-    print "RESPONSE:\n$resp\n" if $DEBUG;
+    print STDERR "OK: $r_code\n"      if $DEBUG;
+    print STDERR "RESPONSE:\n$resp\n" if $DEBUG;
     return $resp;
 }
 
@@ -558,9 +584,9 @@ Enable or disable debug mode.
 
 Prompt string for the AI chat.
 
-=item B<AI_CEREBRAS_API_KEY>
+=item B<AI_API_KEY>
 
-API key for accessing the Cerebras AI API.
+API key for accessing the AI API.
 
 =item B<AI_MODEL>
 
