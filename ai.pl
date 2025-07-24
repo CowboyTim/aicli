@@ -15,7 +15,6 @@ BEGIN {
     $0 = "aicli";
 }
 
-use JSON;
 use Getopt::Long;
 use Socket;
 use Cwd qw();
@@ -71,7 +70,8 @@ sub load_cpan {
 }
 
 sub chat_setup {
-    $json //= JSON->new->utf8->allow_blessed->allow_unknown->allow_nonref->convert_blessed;
+    $json //= eval {require JSON::XS; JSON::XS->new->utf8->allow_blessed->allow_unknown->allow_nonref->convert_blessed};
+    $json // die "Please install the JSON cpan module:\n\nE.g.:\n  sudo apt install libjson-xs-perl\n\n";
     if(!defined $ORIG_ENV{AI_CEREBRAS_API_KEY}) {
         if (!-f $CONFIG_FILE) {
             print "Please set AI_DIR/AI_CONFIG/AI_CEREBRAS_API_KEY environment variable or set $BASE_DIR/config\n";
@@ -135,12 +135,12 @@ sub chat_completion {
     close $sfh or die "Failed to close $STATUS_FILE: $!\n";
     my @jstr = do {
         open(my $fh, '<', $STATUS_FILE) or die "Failed to read $STATUS_FILE: $!\n";
-        map {chomp; JSON::decode_json($_)} <$fh>
+        map {chomp; JSON::XS::decode_json($_)} <$fh>
     };
     my $req = {
         model       => $ORIG_ENV{AI_MODEL}  // 'llama-4-scout-17b-16e-instruct',
         max_tokens  => $ORIG_ENV{AI_TOKENS} // 8192,
-        stream      => JSON::false(),
+        stream      => JSON::XS::false(),
         messages    => \@jstr,
         temperature => $ORIG_ENV{AI_TEMPERATURE} // 0,
         top_p       => 1
@@ -149,7 +149,7 @@ sub chat_completion {
     print "Requesting completion from Cerebras AI API... $cerebras_api_key\n"
         if $DEBUG;
     my $response = httppost('https://api.cerebras.ai/v1/chat/completions', $json->encode($req));
-    my $resp = JSON::decode_json($response)->{choices}[0]{message}{content};
+    my $resp = JSON::XS::decode_json($response)->{choices}[0]{message}{content};
     if (!$resp) {
         print "Error: Failed to parse response\n";
         return;
@@ -184,7 +184,7 @@ sub setup_readline {
     local $ENV{TERM}    = $ORIG_ENV{TERM} // 'vt220';
     eval {require Term::ReadLine; require Term::ReadLine::Gnu};
     if($@){
-        print "Please install Term::ReadLine and Term::ReadLine::Gnu\n\nE.g.:\n  apt install libterm-readline-gnu-perl\n";
+        print "Please install Term::ReadLine and Term::ReadLine::Gnu\n\nE.g.:\n  sudo apt install libterm-readline-gnu-perl\n";
         exit 1;
     }
     my $term = Term::ReadLine->new("aicli");
@@ -401,7 +401,7 @@ sub httppost {
         require WWW::Curl::Easy;
     };
     if($@){
-        print "Please install WWW::Curl::Easy\n\nE.g.:\n  apt install libwww-curl-perl\n";
+        print "Please install WWW::Curl::Easy\n\nE.g.:\n  sudo apt install libwww-curl-perl\n";
         exit 1;
     }
     print "URL: $url\n" if $DEBUG;
