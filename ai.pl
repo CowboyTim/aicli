@@ -92,10 +92,10 @@ sub chat_setup {
         exit 1;
     }
     if($api_key =~ m/^csk-/){
-	$ai_endpoint_url = "https://api.cerebras.ai";
+        $ai_endpoint_url = "https://api.cerebras.ai";
     }
     if($api_key =~ m/^sk-or/){
-	$ai_endpoint_url = "https://openrouter.ai/api";
+        $ai_endpoint_url = "https://openrouter.ai/api";
     }
     if((!-s $PROMPT_FILE or ($ORIG_ENV{AI_CLEAR}//0)) and open(my $fh, '<', "$FindBin::Bin/ai/$AI_PROMPT")){
         local $/;
@@ -152,7 +152,7 @@ sub chat_completion {
         top_p       => 1
     };
     if($ai_endpoint_url eq "https://openrouter.ai/api"){
-	$req->{provider} = {"only" => ["Cerebras"]};
+        $req->{provider} = {"only" => ["Cerebras"]};
     }
     print STDERR $json->encode($req)."\n" if $DEBUG;
     print STDERR "Requesting completion from AI API $ai_endpoint_url with $api_key\n" if $DEBUG;
@@ -450,10 +450,10 @@ sub http {
     my $resp = "";
     $curl_handle->setopt(WWW::Curl::Easy::CURLOPT_WRITEDATA(), \$resp);
     if(lc($m) eq "post"){
-	if(length($data)){
+        if(length($data)){
             $curl_handle->setopt(WWW::Curl::Easy::CURLOPT_POSTFIELDS(), $data);
-	    $curl_handle->setopt(WWW::Curl::Easy::CURLOPT_POSTFIELDSIZE_LARGE(), length($data));
-	}
+            $curl_handle->setopt(WWW::Curl::Easy::CURLOPT_POSTFIELDSIZE_LARGE(), length($data));
+        }
     }
     if(lc($m) eq "get"){
     }
