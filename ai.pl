@@ -438,7 +438,7 @@ sub handle_command {
             } else {
                 print "Failed to write to $tmp_model_file: $!\n";
             }
-        } else {
+        } elsif ($line =~ m|^/models$|){
             # Show available models from the API
             my $endpoint = $ORIG_ENV{AI_LOCAL_SERVER} ? "v1/models" : "v1/chat/models";
             my $response = http("get", $endpoint);
