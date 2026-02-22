@@ -30,7 +30,7 @@ my $CONFIG_FILE = $ORIG_ENV{AI_CONFIG} // "$BASE_DIR/config";
 my $AI_PROMPT = $ORIG_ENV{AI_SESSION} // $ORIG_ENV{AI_PROMPT} // $ORIG_ENV{AI_PROMPT_DEFAULT};
 if (!$AI_PROMPT) {
     # Generate a UUID for default session
-    eval 'use Data::UUID';
+    eval {load_cpan("Data::UUID")};
     if ($@) {
         print STDERR "Please install Data::UUID module to generate UUIDs\n";
         exit 1;
@@ -46,7 +46,7 @@ my $PROMPT_FILE = "$BASE_DIR/$AI_PROMPT/prompt";
 my $STATUS_FILE = "$BASE_DIR/$AI_PROMPT/chat";
 
 # Variables
-my ($json, $api_key, $curl_handle, $ai_endpoint_url);
+my ($json, $api_key, $curl_handle, $ai_endpoint_url, $SESSION_MODEL);
 
 # Command-line options
 my $help;
@@ -57,7 +57,7 @@ GetOptions(
 
 show_usage() if $help;
 
-our @cmds = qw(/exit /quit /clear /history /help /debug /nodebug /system /files /chdir /ls /pwd /session);
+our @cmds = qw(/exit /quit /clear /history /help /debug /nodebug /system /files /chdir /ls /pwd /session /models);
 
 # Main execution
 chat_setup();
@@ -94,6 +94,15 @@ sub chat_setup {
         }
         close $fh;
     }
+
+    # Get model for this session
+    my $model_file = "$BASE_DIR/$AI_PROMPT/model";
+    if(open(my $mfh, '<', $model_file)){
+        $SESSION_MODEL = <$mfh>;
+        chomp $SESSION_MODEL;
+        close $mfh;
+    }
+
     # Check for local llama.cpp server
     if ($ORIG_ENV{AI_LOCAL_SERVER}) {
         $ai_endpoint_url = $ORIG_ENV{AI_LOCAL_SERVER};
@@ -156,8 +165,9 @@ sub chat_completion {
         open(my $fh, '<', $STATUS_FILE) or die "Failed to read $STATUS_FILE: $!\n";
         map {chomp; JSON::XS::decode_json($_)} <$fh>
     };
+
     my $req = {
-        model       => $ORIG_ENV{AI_MODEL}  // 'llama-4-scout-17b-16e-instruct',
+        model       => $SESSION_MODEL || $ORIG_ENV{AI_MODEL}  // 'llama-4-scout-17b-16e-instruct',
         max_tokens  => $ORIG_ENV{AI_TOKENS} // 8192,
         stream      => JSON::XS::false(),
         messages    => \@jstr,
@@ -236,19 +246,19 @@ sub get_chat_prompt {
     # https://jafrog.com/2013/11/23/colors-in-terminal.html
     # https://ss64.com/bash/syntax-colors.html
     my $prompt_term1  =
-           $ORIG_ENV{AI_PS1}
+            $ORIG_ENV{AI_PS1}
         //   $colors::reset_color
             .$colors::blue_color3
-            .'❲$AI_PROMPT❳ ► '
+            .'❲$AI_PROMPT'.($SESSION_MODEL?'\[$SESSION_MODEL\]':'').'❳ ► '
             .$colors::reset_color;
     my $prompt_term2  =
-           $ORIG_ENV{AI_PS2}
+            $ORIG_ENV{AI_PS2}
         //   $colors::reset_color
             .$colors::blue_color3
             .'│ '
             .$colors::reset_color;
-    my $ps1 = eval "return \"$prompt_term1\"" || '► ';
-    my $ps2 = eval "return \"$prompt_term2\"" || '│ ';
+    my $ps1 = eval 'return "'.$prompt_term1.'"' || '► ';
+    my $ps2 = eval 'return "'.$prompt_term2.'"' || '│ ';
     return ($ps1, $ps2);
 }
 
@@ -405,6 +415,58 @@ sub handle_command {
         }
         return 0;
     }
+    if ($line =~ m|^/models|) {
+        my $model_file = "$BASE_DIR/$AI_PROMPT/model";
+        my $current_model;
+        if(open(my $fh, '<', $model_file)){
+            $current_model = <$fh>;
+            chomp $current_model;
+            close $fh;
+        }
+        if($line =~ m|^/models\s+(.*)$|){
+            # Set the model for this session
+            my $new_model = $1;
+            my $model_file = "$BASE_DIR/$AI_PROMPT/model";
+            my $tmp_model_file = "$model_file.tmp";
+            if(open(my $fh, '>', $tmp_model_file)){
+                print {$fh} $new_model;
+                close($fh) and do {
+                    rename($tmp_model_file, $model_file);
+                    $SESSION_MODEL = $new_model;
+                    print "Model set to: $new_model\n";
+                };
+            } else {
+                print "Failed to write to $tmp_model_file: $!\n";
+            }
+        } else {
+            # Show available models from the API
+            my $endpoint = $ORIG_ENV{AI_LOCAL_SERVER} ? "v1/models" : "v1/chat/models";
+            my $response = http("get", $endpoint);
+            print STDERR "Response: $response\n" if $DEBUG;
+            my $resp = JSON::XS::decode_json($response);
+            if ($resp && ref($resp) eq 'HASH' && exists $resp->{data}) {
+                foreach my $model (@{$resp->{data}}) {
+                    print "$model->{id}\n";
+                }
+            } elsif ($resp && ref($resp) eq 'ARRAY') {
+                # Handle array response format
+                foreach my $model (@$resp) {
+                    if (ref($model) eq 'HASH' && exists $model->{id}) {
+                        if ($model->{id} eq $current_model) {
+                            print "${colors::green_color}* $model->{id}${colors::reset_color}\n";
+                        } else {
+                            print "$model->{id}\n";
+                        }
+                    } else {
+                        print "$model\n";
+                    }
+                }
+            } else {
+                print "Error: Failed to parse models response\n";
+            }
+        }
+        return 0;
+    }
     if ($line =~ m|^/files|) {
         # slurp the directory and add the contents of the files to the chat
         my $dir_rx = $line;
@@ -470,7 +532,6 @@ sub http {
             $$u_ref .= $chunk;
             return length($chunk);
         });
-        $ch->setopt(WWW::Curl::Easy::CURLOPT_POST(), 1);
         $ch->setopt(WWW::Curl::Easy::CURLOPT_VERBOSE(), $DEBUG?1:0);
         $ch->setopt(WWW::Curl::Easy::CURLOPT_HTTPHEADER(), [
             "Accept: application/json",
@@ -487,12 +548,14 @@ sub http {
     my $resp = "";
     $curl_handle->setopt(WWW::Curl::Easy::CURLOPT_WRITEDATA(), \$resp);
     if(lc($m) eq "post"){
+        $curl_handle->setopt(WWW::Curl::Easy::CURLOPT_POST(), 1);
         if(length($data)){
             $curl_handle->setopt(WWW::Curl::Easy::CURLOPT_POSTFIELDS(), $data);
             $curl_handle->setopt(WWW::Curl::Easy::CURLOPT_POSTFIELDSIZE_LARGE(), length($data));
         }
     }
     if(lc($m) eq "get"){
+        $curl_handle->setopt(WWW::Curl::Easy::CURLOPT_HTTPGET(), 1);
     }
     $curl_handle->perform();
     my $r_code = $curl_handle->getinfo(WWW::Curl::Easy::CURLINFO_HTTP_CODE());
@@ -598,6 +661,13 @@ Print the current working directory.
 =item B</files>
 
 Add the contents of files matching a pattern to the chat.
+
+=item B</models>
+
+Manage AI models for the current session:
+  /models              - Show current model
+  /models list         - List available models
+  /models <model_name> - Set model for this session
 
 =back
 
