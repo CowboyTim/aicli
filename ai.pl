@@ -27,7 +27,17 @@ my $BASE_DIR = $ORIG_ENV{AI_DIR} // (glob('~/.aicli'))[0];
     or mkdir $BASE_DIR
     or die "Failed to create $BASE_DIR: $!\n";
 my $CONFIG_FILE = $ORIG_ENV{AI_CONFIG} // "$BASE_DIR/config";
-my $AI_PROMPT = $ORIG_ENV{AI_PROMPT} // $ORIG_ENV{AI_PROMPT_DEFAULT} // 'default';
+my $AI_PROMPT = $ORIG_ENV{AI_SESSION} // $ORIG_ENV{AI_PROMPT} // $ORIG_ENV{AI_PROMPT_DEFAULT};
+if (!$AI_PROMPT) {
+    # Generate a UUID for default session
+    eval 'use Data::UUID';
+    if ($@) {
+        print STDERR "Please install Data::UUID module to generate UUIDs\n";
+        exit 1;
+    }
+    my $ug = new Data::UUID;
+    $AI_PROMPT = "session-" . $ug->create_str();
+}
 -d "$BASE_DIR/$AI_PROMPT"
     or mkdir "$BASE_DIR/$AI_PROMPT"
     or die "Failed to create $BASE_DIR/$AI_PROMPT: $!\n";
@@ -47,7 +57,7 @@ GetOptions(
 
 show_usage() if $help;
 
-our @cmds = qw(/exit /quit /clear /history /help /debug /nodebug /system /files /chdir /ls /pwd);
+our @cmds = qw(/exit /quit /clear /history /help /debug /nodebug /system /files /chdir /ls /pwd /session);
 
 # Main execution
 chat_setup();
@@ -368,6 +378,28 @@ sub handle_command {
     }
     if ($line =~ m|^/pwd|) {
         print Cwd::cwd()."\n";
+        return 0;
+    }
+    if ($line =~ m|^/session|) {
+        if($line =~ m|^/session\s+list$|){
+            my @sessions = glob("$BASE_DIR/*");
+            @sessions = map { $_ =~ s/.*\///; $_ } grep { -d $_ } @sessions;
+            print join("\n", sort @sessions)."\n";
+        } elsif($line =~ m|^/session\s+(\w+)$|){
+            my $new_prompt = $1;
+            if(-d "$BASE_DIR/$new_prompt"){
+                $ENV{AI_PROMPT} = $new_prompt;
+                $AI_PROMPT = $new_prompt;
+                $HISTORY_FILE = "$BASE_DIR/$AI_PROMPT/history";
+                $PROMPT_FILE = "$BASE_DIR/$AI_PROMPT/prompt";
+                $STATUS_FILE = "$BASE_DIR/$AI_PROMPT/chat";
+                print "Switched to session: $new_prompt\n";
+            } else {
+                print "Session '$new_prompt' does not exist.\n";
+            }
+        } else {
+            print "Usage:\n  /session list    - List all sessions\n  /session <name>  - Switch to a session\n";
+        }
         return 0;
     }
     if ($line =~ m|^/files|) {
