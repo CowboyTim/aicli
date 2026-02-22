@@ -82,30 +82,33 @@ sub load_cpan {
 sub chat_setup {
     $json //= eval {require JSON::XS; JSON::XS->new->utf8->allow_blessed->allow_unknown->allow_nonref->convert_blessed};
     $json // die "Please install the JSON cpan module:\n\nE.g.:\n  sudo apt install libjson-xs-perl\n\n";
-    if(!defined $ORIG_ENV{AI_API_KEY}) {
-        if (!-f $CONFIG_FILE) {
-            print STDERR "Please set AI_DIR/AI_CONFIG/AI_API_KEY environment variable or set $BASE_DIR/config\n";
-            exit 1;
-        } else {
-            open(my $fh, ". $CONFIG_FILE; set|")
-                or die "Failed to read $CONFIG_FILE: $!\n";
-            my %envs = map { chomp; split m/=/, $_, 2 } grep m/^AI_/, <$fh>;
-            while (my ($key, $value) = each %envs) {
-                $ORIG_ENV{$key} = $value =~ s/^['"]//r =~ s/['"]$//r;
-            }
-            close $fh;
-        }
-    }
-    $api_key = $ORIG_ENV{AI_API_KEY};
-    if (!$api_key) {
-        print STDERR "Please set AI_API_KEY environment variable or set $BASE_DIR/config\n";
+    if (!-f $CONFIG_FILE) {
+        print STDERR "Please set AI_DIR/AI_CONFIG/AI_API_KEY environment variable or set $BASE_DIR/config\n";
         exit 1;
+    } else {
+        open(my $fh, ". $CONFIG_FILE; set|")
+            or die "Failed to read $CONFIG_FILE: $!\n";
+        my %envs = map { chomp; split m/=/, $_, 2 } grep m/^AI_/, <$fh>;
+        while (my ($key, $value) = each %envs) {
+            $ORIG_ENV{$key} //= $value =~ s/^['"]//r =~ s/['"]$//r;
+        }
+        close $fh;
     }
-    if($api_key =~ m/^csk-/){
-        $ai_endpoint_url = "https://api.cerebras.ai";
-    }
-    if($api_key =~ m/^sk-or/){
-        $ai_endpoint_url = "https://openrouter.ai/api";
+    # Check for local llama.cpp server
+    if ($ORIG_ENV{AI_LOCAL_SERVER}) {
+        $ai_endpoint_url = $ORIG_ENV{AI_LOCAL_SERVER};
+    } else {
+        $api_key = $ORIG_ENV{AI_API_KEY};
+        if (!$api_key) {
+            print STDERR "Please set AI_API_KEY environment variable or set $BASE_DIR/config\n";
+            exit 1;
+        }
+        if($api_key =~ m/^csk-/){
+            $ai_endpoint_url = "https://api.cerebras.ai";
+        }
+        if($api_key =~ m/^sk-or/){
+            $ai_endpoint_url = "https://openrouter.ai/api";
+        }
     }
     if((!-s $PROMPT_FILE or ($ORIG_ENV{AI_CLEAR}//0)) and open(my $fh, '<', "$FindBin::Bin/ai/$AI_PROMPT")){
         local $/;
@@ -165,7 +168,7 @@ sub chat_completion {
         $req->{provider} = {"only" => ["Cerebras"]};
     }
     print STDERR $json->encode($req)."\n" if $DEBUG;
-    print STDERR "Requesting completion from AI API $ai_endpoint_url with $api_key\n" if $DEBUG;
+    print STDERR "Requesting completion from AI API $ai_endpoint_url with ".($api_key//'<no api key>')."\n" if $DEBUG;
     my $response = http("post", "v1/chat/completions", $json->encode($req));
     my $resp = JSON::XS::decode_json($response)->{choices}[0]{message}{content};
     if (!$resp) {
@@ -475,7 +478,9 @@ sub http {
             "User-Agent: AI Chat/0.1",
             "Connection: Keep-Alive",
             "Keep-Alive: max=100",
-            "Authorization: Bearer $api_key",
+            ($api_key ?(
+                "Authorization: Bearer $api_key",
+            ):()),
         ]);
         $ch;
     };
