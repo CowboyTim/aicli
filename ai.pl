@@ -635,9 +635,9 @@ sub handle_command {
             chomp $current_model;
             close $fh;
         }
-        if($line =~ m|^/model\s+(.*)$|){
+        if($line =~ m|^/model\s+(.*)$| and length($1//"")){
             switch_model($1);
-        } elsif ($line =~ m|^/model$|){
+        } elsif ($line =~ m|^/model\s*$|){
             # Show available models from the API
             my $response = http("get", $ORIG_ENV{AI_LOCAL_SERVER}?"v1/models":"v1/chat/models");
             print STDERR "Response: $response\n" if $DEBUG;
