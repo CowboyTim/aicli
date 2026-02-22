@@ -26,9 +26,18 @@ my $BASE_DIR = $ORIG_ENV{AI_DIR} // (glob('~/.aicli'))[0];
 -d "$BASE_DIR"
     or mkdir $BASE_DIR
     or die "Failed to create $BASE_DIR: $!\n";
-my $CONFIG_FILE = $ORIG_ENV{AI_CONFIG} // "$BASE_DIR/config";
-my $AI_PROMPT = $ORIG_ENV{AI_SESSION} // $ORIG_ENV{AI_PROMPT} // $ORIG_ENV{AI_PROMPT_DEFAULT};
-if (!$AI_PROMPT) {
+-d "$BASE_DIR/sessions"
+    or mkdir "$BASE_DIR/sessions"
+    or die "Failed to create $BASE_DIR/sessions: $!\n";
+my $CONFIG_FILE = $ORIG_ENV{AI_CONFIG}
+    // "$BASE_DIR/config";
+my $AI_PROMPT_TEMPLATE = $ORIG_ENV{AI_PROMPT_TEMPLATE}
+    // 'default';
+my $AI_PROMPT_TEMPLATE_FILE = $ORIG_ENV{AI_PROMPT_TEMPLATE_FILE}
+    // "$FindBin::Bin/ai/$AI_PROMPT_TEMPLATE";
+my $AI_SESSION = $ORIG_ENV{AI_SESSION}
+    // $ORIG_ENV{AI_PROMPT_DEFAULT};
+if (!$AI_SESSION) {
     # Generate a UUID for default session
     eval {load_cpan("Data::UUID")};
     if ($@) {
@@ -36,14 +45,14 @@ if (!$AI_PROMPT) {
         exit 1;
     }
     my $ug = new Data::UUID;
-    $AI_PROMPT = "session-" . $ug->create_str();
+    $AI_SESSION = "session-" . $ug->create_str();
 }
--d "$BASE_DIR/$AI_PROMPT"
-    or mkdir "$BASE_DIR/$AI_PROMPT"
-    or die "Failed to create $BASE_DIR/$AI_PROMPT: $!\n";
-my $HISTORY_FILE = "$BASE_DIR/$AI_PROMPT/history";
-my $PROMPT_FILE = "$BASE_DIR/$AI_PROMPT/prompt";
-my $STATUS_FILE = "$BASE_DIR/$AI_PROMPT/chat";
+-d "$BASE_DIR/sessions/$AI_SESSION"
+    or mkdir "$BASE_DIR/sessions/$AI_SESSION"
+    or die "Failed to create $BASE_DIR/$AI_SESSION: $!\n";
+my $HISTORY_FILE = "$BASE_DIR/sessions/$AI_SESSION/history";
+my $PROMPT_FILE  = "$BASE_DIR/sessions/$AI_SESSION/prompt";
+my $STATUS_FILE  = "$BASE_DIR/sessions/$AI_SESSION/chat";
 
 # Command-line options
 my $help;
@@ -54,15 +63,15 @@ GetOptions(
 
 show_usage() if $help;
 
-our @cmds = qw(/exit /quit /clear /history /help /debug /nodebug /system /files /chdir /ls /pwd /session /model);
-
 # Variables/Handles
 my ($api_key, $curl_handle, $ai_endpoint_url, $SESSION_MODEL);
 load_cpan("JSON::XS");
 my $json //= JSON::XS->new->utf8->allow_blessed->allow_unknown->allow_nonref->convert_blessed;
 
 # Main execution
+our $cmds;
 chat_setup();
+setup_commands();
 chat_loop();
 exit 0;
 
@@ -96,9 +105,15 @@ sub chat_setup {
     }
 
     # Get model for this session
-    my $model_file = "$BASE_DIR/$AI_PROMPT/model";
+    my $model_file = "$BASE_DIR/sessions/$AI_SESSION/model";
     if(open(my $mfh, '<', $model_file)){
         $SESSION_MODEL = <$mfh>;
+        $SESSION_MODEL ||= $ORIG_ENV{AI_MODEL};
+        $SESSION_MODEL =~ s/^['"]//;
+        $SESSION_MODEL =~ s/['"]$//;
+        $SESSION_MODEL =~ s/\s+$//;
+        $SESSION_MODEL =~ s/^\s+//;
+        $SESSION_MODEL ||= $ORIG_ENV{AI_MODEL};
         chomp $SESSION_MODEL;
         close $mfh;
     }
@@ -119,7 +134,7 @@ sub chat_setup {
             $ai_endpoint_url = "https://openrouter.ai/api";
         }
     }
-    if((!-s $PROMPT_FILE or ($ORIG_ENV{AI_CLEAR}//0)) and open(my $fh, '<', "$FindBin::Bin/ai/$AI_PROMPT")){
+    if((!-s $PROMPT_FILE or ($ORIG_ENV{AI_CLEAR}//0)) and open(my $fh, '<', $AI_PROMPT_TEMPLATE_FILE)){
         local $/;
         my $prompt = <$fh>;
         close($fh);
@@ -204,20 +219,208 @@ sub list_models {
     return;
 }
 
+sub setup_commands {
+    $cmds //= {
+    '/exit'  => \&exitshell,
+    '/quit'  => \&exitshell,
+    '/clear' => sub {
+        open(my $fh, '>', $STATUS_FILE)
+            or die "Failed to write to $STATUS_FILE: $!\n";
+        print {$fh} $json->encode({ role => 'system', content => '' })."\n";
+        close $fh
+            or die "Failed to close $STATUS_FILE: $!\n";
+        return 0;
+    },
+    '/history' => sub {
+        print do {open(my $_hfh, '<', $HISTORY_FILE) or die "Failed to read $HISTORY_FILE: $!\n"; local $/; <$_hfh>};
+        return 0;
+    },
+    '/help' => sub {
+        print join(", ", qw(exit quit clear history help debug nodebug system chdir ls pwd files model session))."\n";
+        return 0;
+    },
+    '/debug' => sub {
+        $DEBUG = 1;
+        return 0;
+    },
+    '/nodebug' => sub {
+        $DEBUG = 0;
+        return 0;
+    },
+    '/system' => sub {
+        my ($line) = @_;
+        $line =~ s|^/system||;
+        open(my $sfh, '>>', $STATUS_FILE)
+            or die "Failed to write to $STATUS_FILE: $!\n";
+        print {$sfh} $json->encode({ role => 'system', content => $line })."\n";
+        close $sfh
+            or die "Failed to close $STATUS_FILE: $!\n";
+        return 0;
+    },
+    '/files' => sub {
+        my ($line) = @_;
+        my $dir_rx = $line;
+        $dir_rx =~ s|^/files||;
+        $dir_rx =~ s| +$||;
+        $dir_rx =~ s|^\s+||;
+        $dir_rx = qr/$dir_rx/;
+        my $dir = Cwd::cwd();
+        if(opendir(my $dh, $dir)){
+            my $ignore_list = do {
+                local $/;
+                open(my $_ifh, '<', '.aiignore') or return '';
+                <$_ifh>;
+            };
+            while (my $file = readdir($dh)) {
+                next if $file =~ m/^\./;
+                next unless -f $file;
+                next if $file !~ m/$dir_rx/;
+                next if grep {$file eq $_} map {glob($_)} split m/\n/, $ignore_list;
+                my $data = do {
+                    my $_ffh;
+                    local $/;
+                    open($_ffh, '<', $file) and <$_ffh>;
+                };
+                next unless length($data//"");
+                $data = '```'."\n".$data."\n".'```'."\n";
+                open(my $sfh, '>>', $STATUS_FILE)
+                    or next;
+                print {$sfh} $json->encode({role => 'user', content => $data})."\n";
+                close $sfh;
+                print "${colors::green_color}✓${colors::reset_color} added $file to chat\n";
+            }
+            closedir $dh;
+        }
+        return 0;
+    },
+    '/chdir' => sub {
+        my ($line) = @_;
+        $line =~ s|^/chdir||;
+        $line =~ s| +$||;
+        $line =~ s|^\s+||;
+        if(chdir($line)){
+            return 0;
+        } else {
+            print "Failed to change directory to $line: $!\n";
+            return 0;
+        }
+    },
+    '/ls' => sub {
+        my $dir = Cwd::cwd();
+        if(opendir(my $dh, $dir)){
+            while (my $file = readdir($dh)) {
+                next if $file =~ m/^\./;
+                print "$file\n";
+            }
+            closedir $dh;
+        }
+        return 0;
+    },
+    '/pwd' => sub {
+        print Cwd::cwd()."\n";
+        return 0;
+    },
+    '/session' => {},
+    '/model'   => {},
+    };
+    # add models
+    my $response = http("get", $ORIG_ENV{AI_LOCAL_SERVER}?"v1/models":"v1/chat/models");
+    my $resp = JSON::XS::decode_json($response);
+    my @models;
+    if ($resp && ref($resp) eq 'HASH' && exists $resp->{data}) {
+        @models = @{$resp->{data}};
+    } elsif ($resp && ref($resp) eq 'ARRAY') {
+        push @models, $_ for @$resp;
+    }
+    $cmds->{'/model'} = {map {$_->{id}, sub {switch_model($_->{id})}} @models};
+
+    # add sessions
+    my @sessions = glob("$BASE_DIR/*");
+    @sessions = map {$_ =~ s/.*\///; $_} grep {-d $_} @sessions;
+    $cmds->{'/session'} = {map {$_, sub {switch_session($_)}} @sessions};
+};
+
+sub switch_session {
+    my ($new_prompt) = @_;
+    if(-d "$BASE_DIR/$new_prompt"){
+        $ENV{AI_SESSION} = $new_prompt;
+        $AI_SESSION = $new_prompt;
+        $HISTORY_FILE = "$BASE_DIR/sessions/$AI_SESSION/history";
+        $PROMPT_FILE  = "$BASE_DIR/sessions/$AI_SESSION/prompt";
+        $STATUS_FILE  = "$BASE_DIR/sessions/$AI_SESSION/chat";
+        print "Switched to session: $new_prompt\n";
+    } else {
+        print "Session '$new_prompt' does not exist.\n";
+    }
+}
+
+sub switch_model {
+    my ($new_model) = @_;
+    $new_model ||= $ORIG_ENV{AI_MODEL};
+    $new_model =~ s/^['"]//;
+    $new_model =~ s/['"]$//;
+    $new_model =~ s/\s+$//;
+    $new_model =~ s/^\s+//;
+    my $model_file = "$BASE_DIR/sessions/$AI_SESSION/model";
+    my $tmp_model_file = "$model_file.tmp";
+    if(open(my $fh, '>', $tmp_model_file)){
+        print {$fh} $new_model;
+        close($fh) and do {
+            rename($tmp_model_file, $model_file);
+            $SESSION_MODEL = $new_model;
+            print "switch: $new_model\n";
+        };
+    } else {
+        print "Failed to write to $tmp_model_file: $!\n";
+    }
+}
+
 sub chat_word_completions_cli {
     my ($text, $line, $start, $end) = @_;
     $line =~ s/ +$//g;
-    my @rcs = ();
+    my $cfg = $cmds;
     my @wrd = split m/\s+/, $line, -1;
-    print STDERR "W: >".join(", ", @wrd)."<\n" if $DEBUG;
+    print STDERR "W: >".join("rcs, ", @wrd)."<\n" if $DEBUG;
     foreach my $w (@wrd) {
-        next unless $w =~ m|^/|;
-        foreach my $k (@cmds) {
+        my @rcs = ();
+        return '' if defined $cfg and ref($cfg) ne 'HASH';
+        foreach my $k (sort %$cfg) {
             push @rcs, $k if !index($k, $w) or $k eq $w;
         }
+        if(@rcs == 1 and exists $cfg->{$rcs[0]}){
+            $cfg = $cfg->{$rcs[0]};
+            if($rcs[0] ne $w){
+                if ($wrd[-1] eq '' or ($w eq $wrd[-1] and $text)){
+                    return $rcs[0];
+                }
+            } else {
+                return $rcs[0] if $w eq $wrd[-1] and $text;
+            }
+        } else {
+            my $common = lccs(@rcs);
+            return '' unless length($common);
+            return $common, @rcs if $common ne $w;
+            return '', @rcs if $w eq $wrd[-1];
+            $cfg = $cfg->{$w};
+        }
     }
-    print STDERR "R: >".join(", ", @rcs)."<\n" if $DEBUG;
-    return '', @rcs;
+    if(ref($cfg) eq 'HASH'){
+        return '', sort keys %$cfg;
+    }
+    return '';
+}
+
+sub lccs {
+    my ($prefix, @strings) = @_;
+    foreach my $string (@strings) {
+        $prefix = substr $prefix, 0, length $string;
+        chop $prefix until 0 == index $string, $prefix;
+    }
+    return $prefix;
+}
+
+sub exitshell {
+    exit 0;
 }
 
 sub setup_readline {
@@ -252,7 +455,7 @@ sub get_chat_prompt {
             $ORIG_ENV{AI_PS1}
         //   $colors::reset_color
             .$colors::blue_color3
-            .'❲$AI_PROMPT'.($SESSION_MODEL?'\[$SESSION_MODEL\]':'').'❳ ► '
+            .'❲$AI_SESSION'.($SESSION_MODEL?'\[$SESSION_MODEL\]':'').'❳ ► '
             .$colors::reset_color;
     my $prompt_term2  =
             $ORIG_ENV{AI_PS2}
@@ -267,12 +470,12 @@ sub get_chat_prompt {
 
 sub input_terminal {
     my ($term, $attribs) = setup_readline();
-    my ($t_ps1, $t_ps2) = get_chat_prompt();
     return sub {
-        my $t_prt = $t_ps1;
         my $buf = '';
+        my $p1or2 = 0;
       READ_AGAIN:
-        my $line = $term->readline($t_prt);
+        my ($t_ps1, $t_ps2) = get_chat_prompt();
+        my $line = $term->readline($p1or2 == 0?$t_ps1:$t_ps2);
         return unless defined $line;
         if($line !~ m/^$/ms){
             if(!length($buf)){
@@ -287,7 +490,7 @@ sub input_terminal {
                 }
             }
             $buf .= "$line\n";
-            $t_prt = $t_ps2;
+            $p1or2 = 1;
             goto READ_AGAIN;
         } else {
             if(length($buf)){
@@ -315,6 +518,7 @@ sub input_stdin {
 sub chat_loop {
     my $input_cli_sub = -t STDIN ? input_terminal() : input_stdin();
     while(1){
+        print STDERR "Waiting for user input...\n" if $DEBUG;
         my $chat_request = &{$input_cli_sub}();
         unless(defined $chat_request){
             print "\n";
@@ -367,7 +571,7 @@ sub handle_command {
         return 0;
     }
     if ($line =~ m|^/help|) {
-        print join(", ", @cmds)."\n";
+        print join(", ", sort keys %$cmds)."\n";
         return 0;
     }
     if ($line =~ m|^/chdir|) {
@@ -404,11 +608,11 @@ sub handle_command {
         } elsif($line =~ m|^/session\s+(\w+)$|){
             my $new_prompt = $1;
             if(-d "$BASE_DIR/$new_prompt"){
-                $ENV{AI_PROMPT} = $new_prompt;
-                $AI_PROMPT = $new_prompt;
-                $HISTORY_FILE = "$BASE_DIR/$AI_PROMPT/history";
-                $PROMPT_FILE = "$BASE_DIR/$AI_PROMPT/prompt";
-                $STATUS_FILE = "$BASE_DIR/$AI_PROMPT/chat";
+                $ENV{AI_SESSION} = $new_prompt;
+                $AI_SESSION = $new_prompt;
+                $HISTORY_FILE = "$BASE_DIR/sessions/$AI_SESSION/history";
+                $PROMPT_FILE  = "$BASE_DIR/sessions/$AI_SESSION/prompt";
+                $STATUS_FILE  = "$BASE_DIR/sessions/$AI_SESSION/chat";
                 print "Switched to session: $new_prompt\n";
             } else {
                 print "Session '$new_prompt' does not exist.\n";
@@ -419,28 +623,20 @@ sub handle_command {
         return 0;
     }
     if ($line =~ m|^/model|) {
-        my $model_file = "$BASE_DIR/$AI_PROMPT/model";
+        my $model_file = "$BASE_DIR/sessions/$AI_SESSION/model";
         my $current_model;
         if(open(my $fh, '<', $model_file)){
             $current_model = <$fh>;
+            $current_model ||= $ORIG_ENV{AI_MODEL};
+            $current_model =~ s/^['"]//;
+            $current_model =~ s/['"]$//;
+            $current_model =~ s/\s+$//;
+            $current_model =~ s/^\s+//;
             chomp $current_model;
             close $fh;
         }
         if($line =~ m|^/model\s+(.*)$|){
-            # Set the model for this session
-            my $new_model = $1;
-            my $model_file = "$BASE_DIR/$AI_PROMPT/model";
-            my $tmp_model_file = "$model_file.tmp";
-            if(open(my $fh, '>', $tmp_model_file)){
-                print {$fh} $new_model;
-                close($fh) and do {
-                    rename($tmp_model_file, $model_file);
-                    $SESSION_MODEL = $new_model;
-                    print "Model set to: $new_model\n";
-                };
-            } else {
-                print "Failed to write to $tmp_model_file: $!\n";
-            }
+            switch_model($1);
         } elsif ($line =~ m|^/model$|){
             # Show available models from the API
             my $response = http("get", $ORIG_ENV{AI_LOCAL_SERVER}?"v1/models":"v1/chat/models");
@@ -522,7 +718,6 @@ sub http {
     print STDERR "DATA: $data\n" if $DEBUG;
     $curl_handle //= do {
         my $ch = WWW::Curl::Easy->new();
-        $ch->setopt(WWW::Curl::Easy::CURLOPT_URL(), $url);
         $ch->setopt(WWW::Curl::Easy::CURLOPT_IPRESOLVE(), WWW::Curl::Easy::CURL_IPRESOLVE_V6());
         $ch->setopt(WWW::Curl::Easy::CURLOPT_WRITEFUNCTION(), sub {
             my ($chunk, $u_ref) = @_;
@@ -542,6 +737,7 @@ sub http {
         ]);
         $ch;
     };
+    $curl_handle->setopt(WWW::Curl::Easy::CURLOPT_URL(), $url);
     my $resp = "";
     $curl_handle->setopt(WWW::Curl::Easy::CURLOPT_WRITEDATA(), \$resp);
     if(lc($m) eq "post"){
@@ -683,7 +879,7 @@ Path to the AI configuration file.
 
 Enable or disable debug mode.
 
-=item B<AI_PROMPT>
+=item B<AI_SESSION>
 
 Prompt string for the AI chat.
 
