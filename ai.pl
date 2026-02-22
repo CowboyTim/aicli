@@ -45,9 +45,6 @@ my $HISTORY_FILE = "$BASE_DIR/$AI_PROMPT/history";
 my $PROMPT_FILE = "$BASE_DIR/$AI_PROMPT/prompt";
 my $STATUS_FILE = "$BASE_DIR/$AI_PROMPT/chat";
 
-# Variables
-my ($json, $api_key, $curl_handle, $ai_endpoint_url, $SESSION_MODEL);
-
 # Command-line options
 my $help;
 GetOptions(
@@ -58,6 +55,11 @@ GetOptions(
 show_usage() if $help;
 
 our @cmds = qw(/exit /quit /clear /history /help /debug /nodebug /system /files /chdir /ls /pwd /session /model);
+
+# Variables/Handles
+my ($api_key, $curl_handle, $ai_endpoint_url, $SESSION_MODEL);
+load_cpan("JSON::XS");
+my $json //= JSON::XS->new->utf8->allow_blessed->allow_unknown->allow_nonref->convert_blessed;
 
 # Main execution
 chat_setup();
@@ -80,8 +82,6 @@ sub load_cpan {
 }
 
 sub chat_setup {
-    $json //= eval {require JSON::XS; JSON::XS->new->utf8->allow_blessed->allow_unknown->allow_nonref->convert_blessed};
-    $json // die "Please install the JSON cpan module:\n\nE.g.:\n  sudo apt install libjson-xs-perl\n\n";
     if (!-f $CONFIG_FILE) {
         print STDERR "Please set AI_DIR/AI_CONFIG/AI_API_KEY environment variable or set $BASE_DIR/config\n";
         exit 1;
@@ -223,7 +223,10 @@ sub chat_word_completions_cli {
 sub setup_readline {
     local $ENV{PERL_RL} = 'Gnu';
     local $ENV{TERM}    = $ORIG_ENV{TERM} // 'vt220';
-    eval {require Term::ReadLine; require Term::ReadLine::Gnu};
+    eval {
+        load_cpan("Term::ReadLine");
+        load_cpan("Term::ReadLine::Gnu");
+    };
     if($@){
         print STDERR "Please install Term::ReadLine and Term::ReadLine::Gnu\n\nE.g.:\n  sudo apt install libterm-readline-gnu-perl\n";
         exit 1;
@@ -231,7 +234,7 @@ sub setup_readline {
     my $term = Term::ReadLine->new("aicli");
     $term->read_init_file("$BASE_DIR/inputrc");
     $term->ReadLine('Term::ReadLine::Gnu') eq 'Term::ReadLine::Gnu'
-        or die "Term::ReadLine::Gnu is required\n";
+        or die "Term::ReadLine::Gnu needs to be loaded\n";
     $term->enableUTF8();
     $term->using_history();
     $term->ReadHistory($HISTORY_FILE);
@@ -509,9 +512,7 @@ sub handle_command {
 sub http {
     my ($m, $url, $data) = @_;
     $url = "$ai_endpoint_url/$url";
-    eval {
-        require WWW::Curl::Easy;
-    };
+    eval {load_cpan("WWW::Curl::Easy")};
     if($@){
         print STDERR "Please install WWW::Curl::Easy\n\nE.g.:\n  sudo apt install libwww-curl-perl\n";
         exit 1;
