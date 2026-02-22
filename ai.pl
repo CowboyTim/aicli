@@ -57,7 +57,7 @@ GetOptions(
 
 show_usage() if $help;
 
-our @cmds = qw(/exit /quit /clear /history /help /debug /nodebug /system /files /chdir /ls /pwd /session /models);
+our @cmds = qw(/exit /quit /clear /history /help /debug /nodebug /system /files /chdir /ls /pwd /session /model);
 
 # Main execution
 chat_setup();
@@ -415,7 +415,7 @@ sub handle_command {
         }
         return 0;
     }
-    if ($line =~ m|^/models|) {
+    if ($line =~ m|^/model|) {
         my $model_file = "$BASE_DIR/$AI_PROMPT/model";
         my $current_model;
         if(open(my $fh, '<', $model_file)){
@@ -423,7 +423,7 @@ sub handle_command {
             chomp $current_model;
             close $fh;
         }
-        if($line =~ m|^/models\s+(.*)$|){
+        if($line =~ m|^/model\s+(.*)$|){
             # Set the model for this session
             my $new_model = $1;
             my $model_file = "$BASE_DIR/$AI_PROMPT/model";
@@ -438,31 +438,27 @@ sub handle_command {
             } else {
                 print "Failed to write to $tmp_model_file: $!\n";
             }
-        } elsif ($line =~ m|^/models$|){
+        } elsif ($line =~ m|^/model$|){
             # Show available models from the API
-            my $endpoint = $ORIG_ENV{AI_LOCAL_SERVER} ? "v1/models" : "v1/chat/models";
-            my $response = http("get", $endpoint);
+            my $response = http("get", $ORIG_ENV{AI_LOCAL_SERVER}?"v1/models":"v1/chat/models");
             print STDERR "Response: $response\n" if $DEBUG;
             my $resp = JSON::XS::decode_json($response);
+            my @models;
             if ($resp && ref($resp) eq 'HASH' && exists $resp->{data}) {
-                foreach my $model (@{$resp->{data}}) {
-                    print "$model->{id}\n";
-                }
+                @models = @{$resp->{data}};
             } elsif ($resp && ref($resp) eq 'ARRAY') {
-                # Handle array response format
                 foreach my $model (@$resp) {
-                    if (ref($model) eq 'HASH' && exists $model->{id}) {
-                        if ($model->{id} eq $current_model) {
-                            print "${colors::green_color}* $model->{id}${colors::reset_color}\n";
-                        } else {
-                            print "$model->{id}\n";
-                        }
-                    } else {
-                        print "$model\n";
-                    }
+                    push @models, $model;
                 }
             } else {
                 print "Error: Failed to parse models response\n";
+            }
+            foreach my $model (@models) {
+                if ($model->{id} eq $current_model) {
+                    print "${colors::green_color}* $model->{id}${colors::reset_color}\n";
+                } else {
+                    print "  $model->{id}\n";
+                }
             }
         }
         return 0;
@@ -662,12 +658,11 @@ Print the current working directory.
 
 Add the contents of files matching a pattern to the chat.
 
-=item B</models>
+=item B</model>
 
 Manage AI models for the current session:
-  /models              - Show current model
-  /models list         - List available models
-  /models <model_name> - Set model for this session
+  /model              - Show current model
+  /model <model_name> - Set model for this session
 
 =back
 
