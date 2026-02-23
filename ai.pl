@@ -857,9 +857,9 @@ Add the contents of files matching a pattern to the chat.
 
 =item B</model>
 
-Manage AI models for the current session:
+Manage AI models for the current model
   /model              - Show current model
-  /model <model_name> - Set model for this session
+  /model <model_name> - Set model for this model
 
 =back
 
