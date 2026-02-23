@@ -134,28 +134,7 @@ sub chat_setup {
             $ai_endpoint_url = "https://openrouter.ai/api";
         }
     }
-    if((!-s $PROMPT_FILE or ($ORIG_ENV{AI_CLEAR}//0)) and open(my $fh, '<', $AI_PROMPT_TEMPLATE_FILE)){
-        local $/;
-        my $prompt = <$fh>;
-        close($fh);
-        open(my $pfh, '>', $PROMPT_FILE)
-            or die "Failed to write to $PROMPT_FILE: $!\n";
-        print {$pfh} $prompt;
-        close $pfh or die "Failed to close $PROMPT_FILE: $!\n";
-    }
-    if(!-s $STATUS_FILE or ($ORIG_ENV{AI_CLEAR}//0)){
-        my $prompt;
-        if(open(my $fh, '<', $PROMPT_FILE)){
-            local $/;
-            $prompt = <$fh>;
-            close($fh);
-        }
-        open(my $fh, '>', $STATUS_FILE)
-            or die "Failed to write to $STATUS_FILE: $!\n";
-        print {$fh} $json->encode({ role => 'system', content => ($prompt // "") })."\n";
-        close $fh
-            or die "Failed to close $STATUS_FILE: $!\n";
-    }
+    init_session($AI_SESSION);
     return;
 }
 
@@ -236,7 +215,7 @@ sub setup_commands {
         return 0;
     },
     '/help' => sub {
-        print join(", ", qw(exit quit clear history help debug nodebug system chdir ls pwd files model session))."\n";
+        print join(", ", sort qw(exit quit clear history help debug nodebug system chdir ls pwd files model session))."\n";
         return 0;
     },
     '/debug' => sub {
@@ -320,12 +299,21 @@ sub setup_commands {
         print Cwd::cwd()."\n";
         return 0;
     },
-    '/session' => {},
+    '/session' => {
+        'list'   => sub { 0 },
+        'create' => sub { 0 },
+        'delete' => {},
+        'rename' => {},
+        'switch' => {},
+    },
     '/model'   => {},
     };
     # add models
-    my $response = http("get", $ORIG_ENV{AI_LOCAL_SERVER}?"v1/models":"v1/chat/models");
-    my $resp = JSON::XS::decode_json($response);
+    my $response = eval { http("get", $ORIG_ENV{AI_LOCAL_SERVER}?"v1/models":"v1/chat/models") };
+    my $resp;
+    if ($response) {
+        $resp = eval { JSON::XS::decode_json($response) };
+    }
     my @models;
     if ($resp && ref($resp) eq 'HASH' && exists $resp->{data}) {
         @models = @{$resp->{data}};
@@ -335,25 +323,135 @@ sub setup_commands {
     $cmds->{'/model'} = {map {$_->{id}, sub {switch_model($_->{id})}} @models};
 
     # add sessions
-    my @sessions = glob("$BASE_DIR/sessions/*");
-    @sessions = map {$_ =~ s/.*\///; $_} grep {-d $_} @sessions;
-    $cmds->{'/session'} = {map {$_, sub {switch_session($_)}} @sessions};
+    refresh_session_completions();
 };
 
+sub refresh_session_completions {
+    my @sessions = glob("$BASE_DIR/sessions/*");
+    @sessions = map {$_ =~ s/.*\///; $_} grep {-d $_} @sessions;
+    my $session_cmds = {
+        'list'   => sub { 0 },
+        'create' => sub { 0 },
+        'delete' => {map {($_, sub { 0 })} @sessions},
+        'rename' => {map {($_, sub { 0 })} @sessions},
+        'switch' => {map {($_, sub {switch_session($_)})} @sessions},
+        map {($_, sub {switch_session($_)})} @sessions,
+    };
+    $cmds->{'/session'} = $session_cmds;
+}
+
+sub init_session {
+    my ($session) = @_;
+    my $session_dir = "$BASE_DIR/sessions/$session";
+    -d $session_dir or mkdir $session_dir or die "Failed to create $session_dir: $!\n";
+
+    my $p_file = "$session_dir/prompt";
+    my $s_file = "$session_dir/chat";
+
+    if((!-s $p_file or ($ORIG_ENV{AI_CLEAR}//0)) and open(my $fh, '<', $AI_PROMPT_TEMPLATE_FILE)){
+        local $/;
+        my $prompt = <$fh>;
+        close($fh);
+        open(my $pfh, '>', $p_file)
+            or die "Failed to write to $p_file: $!\n";
+        print {$pfh} $prompt;
+        close $pfh or die "Failed to close $p_file: $!\n";
+    }
+    if(!-s $s_file or ($ORIG_ENV{AI_CLEAR}//0)){
+        my $prompt;
+        if(open(my $fh, '<', $p_file)){
+            local $/;
+            $prompt = <$fh>;
+            close($fh);
+        }
+        open(my $fh, '>', $s_file)
+            or die "Failed to write to $s_file: $!\n";
+        print {$fh} $json->encode({ role => 'system', content => ($prompt // "") })."\n";
+        close $fh
+            or die "Failed to close $s_file: $!\n";
+    }
+}
+
+sub list_sessions {
+    my @sessions = glob("$BASE_DIR/sessions/*");
+    @sessions = map { $_ =~ s/.*\///; $_ } grep { -d $_ } @sessions;
+    foreach my $s (sort @sessions) {
+        if ($s eq $AI_SESSION) {
+            print "${colors::green_color}* $s${colors::reset_color}\n";
+        } else {
+            print "  $s\n";
+        }
+    }
+}
+
 sub switch_session {
-    my ($new_prompt) = @_;
-    chomp $new_prompt;
-    $new_prompt =~ s/^\s*//g;
-    $new_prompt =~ s/\s*$//g;
-    if(-d "$BASE_DIR/sessions/$new_prompt"){
-        $ENV{AI_SESSION} = $new_prompt;
-        $AI_SESSION = $new_prompt;
+    my ($new_session) = @_;
+    chomp $new_session;
+    $new_session =~ s/^\s*//g;
+    $new_session =~ s/\s*$//g;
+    if(-d "$BASE_DIR/sessions/$new_session"){
+        $ENV{AI_SESSION} = $new_session;
+        $AI_SESSION = $new_session;
         $HISTORY_FILE = "$BASE_DIR/sessions/$AI_SESSION/history";
         $PROMPT_FILE  = "$BASE_DIR/sessions/$AI_SESSION/prompt";
         $STATUS_FILE  = "$BASE_DIR/sessions/$AI_SESSION/chat";
-        print "Switched to session: $new_prompt\n";
+        print "Switched to session: $new_session\n";
     } else {
-        print "Session '$new_prompt' does not exist.\n";
+        print "Session '$new_session' does not exist.\n";
+    }
+}
+
+sub create_session {
+    my ($name) = @_;
+    $name =~ s/^\s+//; $name =~ s/\s+$//;
+    if (-d "$BASE_DIR/sessions/$name") {
+        print "Session '$name' already exists.\n";
+        return;
+    }
+    init_session($name);
+    print "Created session '$name'.\n";
+    switch_session($name);
+}
+
+sub delete_session {
+    my ($name) = @_;
+    $name =~ s/^\s+//; $name =~ s/\s+$//;
+    if (!-d "$BASE_DIR/sessions/$name") {
+        print "Session '$name' does not exist.\n";
+        return;
+    }
+    if ($name eq $AI_SESSION) {
+        print "Cannot delete the current session.\n";
+        return;
+    }
+    load_cpan("File::Path");
+    File::Path::remove_tree("$BASE_DIR/sessions/$name");
+    print "Deleted session '$name'.\n";
+}
+
+sub rename_session {
+    my ($old, $new) = @_;
+    $old =~ s/^\s+//; $old =~ s/\s+$//;
+    $new =~ s/^\s+//; $new =~ s/\s+$//;
+    if (!-d "$BASE_DIR/sessions/$old") {
+        print "Session '$old' does not exist.\n";
+        return;
+    }
+    if (-d "$BASE_DIR/sessions/$new") {
+        print "Session '$new' already exists.\n";
+        return;
+    }
+    if (rename("$BASE_DIR/sessions/$old", "$BASE_DIR/sessions/$new")) {
+        if ($old eq $AI_SESSION) {
+            $AI_SESSION = $new;
+            $ENV{AI_SESSION} = $new;
+            $HISTORY_FILE = "$BASE_DIR/sessions/$AI_SESSION/history";
+            $PROMPT_FILE  = "$BASE_DIR/sessions/$AI_SESSION/prompt";
+            $STATUS_FILE  = "$BASE_DIR/sessions/$AI_SESSION/chat";
+        }
+        print "Renamed session '$old' to '$new'.\n";
+    } else {
+        print "Failed to rename session: $!\n";
     }
 }
 
@@ -512,9 +610,13 @@ sub input_terminal {
 
 sub input_stdin {
     return sub {
-        # always slurp stdin
-        local $/;
-        return scalar <STDIN>;
+        my $line = <STDIN>;
+        return unless defined $line;
+        if ($line =~ m|^/|) {
+            handle_command($line);
+            return "";
+        }
+        return $line;
     };
 }
 
@@ -604,12 +706,23 @@ sub handle_command {
         return 0;
     }
     if ($line =~ m|^/session|) {
-        if($line =~ m|^/session\s+(.*)$| and length($1//"")){
+        if ($line =~ m|^/session\s+create\s+(.*)$|) {
+            create_session($1);
+            refresh_session_completions();
+        } elsif ($line =~ m|^/session\s+delete\s+(.*)$|) {
+            delete_session($1);
+            refresh_session_completions();
+        } elsif ($line =~ m|^/session\s+rename\s+(\S+)\s+(\S+)$|) {
+            rename_session($1, $2);
+            refresh_session_completions();
+        } elsif ($line =~ m|^/session\s+list\s*$|) {
+            list_sessions();
+        } elsif ($line =~ m|^/session\s+switch\s+(.*)$|) {
             switch_session($1);
-        } elsif($line =~ m|^/session\s*$|){
-            my @sessions = glob("$BASE_DIR/sessions/*");
-            @sessions = map { $_ =~ s/.*\///; $_ } grep { -d $_ } @sessions;
-            print join("\n", sort @sessions)."\n";
+        } elsif ($line =~ m|^/session\s+(.*)$| and length($1//"")) {
+            switch_session($1);
+        } elsif ($line =~ m|^/session\s*$|) {
+            list_sessions();
         }
         return 0;
     }
@@ -744,7 +857,8 @@ sub http {
     $curl_handle->perform();
     my $r_code = $curl_handle->getinfo(WWW::Curl::Easy::CURLINFO_HTTP_CODE());
     if($r_code != 200){
-        die "ERROR: $r_code\n";
+        print STDERR "ERROR: $r_code\n" if $DEBUG;
+        return;
     }
     print STDERR "OK: $r_code\n"      if $DEBUG;
     print STDERR "RESPONSE:\n$resp\n" if $DEBUG;
@@ -842,9 +956,16 @@ List files in the current directory.
 
 Print the current working directory.
 
-=item B</files>
+=item B</session>
 
-Add the contents of files matching a pattern to the chat.
+Manage chat sessions.
+  /session                 - List all sessions
+  /session list            - List all sessions
+  /session create <name>   - Create a new session and switch to it
+  /session delete <name>   - Delete a session
+  /session rename <old> <new> - Rename a session
+  /session switch <name>   - Switch to a session
+  /session <name>          - Switch to a session (shortcut)
 
 =item B</model>
 
