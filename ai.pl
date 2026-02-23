@@ -410,6 +410,7 @@ sub create_session {
     }
     init_session($name);
     print "Created session '$name'.\n";
+    refresh_session_completions();
     switch_session($name);
 }
 
@@ -427,6 +428,7 @@ sub delete_session {
     load_cpan("File::Path");
     File::Path::remove_tree("$BASE_DIR/sessions/$name");
     print "Deleted session '$name'.\n";
+    refresh_session_completions();
 }
 
 sub rename_session {
@@ -450,6 +452,7 @@ sub rename_session {
             $STATUS_FILE  = "$BASE_DIR/sessions/$AI_SESSION/chat";
         }
         print "Renamed session '$old' to '$new'.\n";
+        refresh_session_completions();
     } else {
         print "Failed to rename session: $!\n";
     }
@@ -708,13 +711,10 @@ sub handle_command {
     if ($line =~ m|^/session|) {
         if ($line =~ m|^/session\s+create\s+(.*)$|) {
             create_session($1);
-            refresh_session_completions();
         } elsif ($line =~ m|^/session\s+delete\s+(.*)$|) {
             delete_session($1);
-            refresh_session_completions();
         } elsif ($line =~ m|^/session\s+rename\s+(\S+)\s+(\S+)$|) {
             rename_session($1, $2);
-            refresh_session_completions();
         } elsif ($line =~ m|^/session\s+list\s*$|) {
             list_sessions();
         } elsif ($line =~ m|^/session\s+switch\s+(.*)$|) {
