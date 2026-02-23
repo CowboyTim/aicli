@@ -839,6 +839,9 @@ sub http {
                 "Authorization: Bearer $api_key",
             ):()),
         ]);
+        if(my $proxy = $ORIG_ENV{AI_PROXY} // $ORIG_ENV{HTTPS_PROXY} // $ORIG_ENV{HTTP_PROXY}){
+            $ch->setopt(WWW::Curl::Easy::CURLOPT_PROXY(), $proxy);
+        }
         $ch;
     };
     $curl_handle->setopt(WWW::Curl::Easy::CURLOPT_URL(), $url);
@@ -1014,6 +1017,18 @@ Temperature setting for the AI chat completion.
 =item B<AI_CLEAR>
 
 Clear the chat status file if set.
+
+=item B<AI_PROXY>
+
+Proxy URL for HTTP/HTTPS requests (e.g., http://proxy:8080).
+
+=item B<HTTPS_PROXY>
+
+Fallback proxy URL if AI_PROXY not set.
+
+=item B<HTTP_PROXY>
+
+Fallback proxy URL if AI_PROXY and HTTPS_PROXY not set.
 
 =back
 
