@@ -335,14 +335,17 @@ sub setup_commands {
     $cmds->{'/model'} = {map {$_->{id}, sub {switch_model($_->{id})}} @models};
 
     # add sessions
-    my @sessions = glob("$BASE_DIR/*");
+    my @sessions = glob("$BASE_DIR/sessions/*");
     @sessions = map {$_ =~ s/.*\///; $_} grep {-d $_} @sessions;
     $cmds->{'/session'} = {map {$_, sub {switch_session($_)}} @sessions};
 };
 
 sub switch_session {
     my ($new_prompt) = @_;
-    if(-d "$BASE_DIR/$new_prompt"){
+    chomp $new_prompt;
+    $new_prompt =~ s/^\s*//g;
+    $new_prompt =~ s/\s*$//g;
+    if(-d "$BASE_DIR/sessions/$new_prompt"){
         $ENV{AI_SESSION} = $new_prompt;
         $AI_SESSION = $new_prompt;
         $HISTORY_FILE = "$BASE_DIR/sessions/$AI_SESSION/history";
@@ -601,24 +604,12 @@ sub handle_command {
         return 0;
     }
     if ($line =~ m|^/session|) {
-        if($line =~ m|^/session\s+list$|){
-            my @sessions = glob("$BASE_DIR/*");
+        if($line =~ m|^/session\s+(.*)$| and length($1//"")){
+            switch_session($1);
+        } elsif($line =~ m|^/session\s*$|){
+            my @sessions = glob("$BASE_DIR/sessions/*");
             @sessions = map { $_ =~ s/.*\///; $_ } grep { -d $_ } @sessions;
             print join("\n", sort @sessions)."\n";
-        } elsif($line =~ m|^/session\s+(\w+)$|){
-            my $new_prompt = $1;
-            if(-d "$BASE_DIR/$new_prompt"){
-                $ENV{AI_SESSION} = $new_prompt;
-                $AI_SESSION = $new_prompt;
-                $HISTORY_FILE = "$BASE_DIR/sessions/$AI_SESSION/history";
-                $PROMPT_FILE  = "$BASE_DIR/sessions/$AI_SESSION/prompt";
-                $STATUS_FILE  = "$BASE_DIR/sessions/$AI_SESSION/chat";
-                print "Switched to session: $new_prompt\n";
-            } else {
-                print "Session '$new_prompt' does not exist.\n";
-            }
-        } else {
-            print "Usage:\n  /session list    - List all sessions\n  /session <name>  - Switch to a session\n";
         }
         return 0;
     }
