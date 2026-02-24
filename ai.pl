@@ -64,7 +64,7 @@ GetOptions(
 show_usage() if $help;
 
 # Variables/Handles
-my ($api_key, $curl_handle, $ai_endpoint_url, $SESSION_MODEL);
+our ($api_key, $curl_handle, $ai_endpoint_url, $SESSION_MODEL, $provider_name, $v1_prefix);
 load_cpan("JSON::XS");
 my $json //= JSON::XS->new->utf8->allow_blessed->allow_unknown->allow_nonref->convert_blessed;
 
@@ -118,22 +118,77 @@ sub chat_setup {
         close $mfh;
     }
 
+    my %PROVIDERS = (
+        'cerebras' => {
+            url => 'https://api.cerebras.ai',
+            key_prefix => 'csk-',
+        },
+        'openrouter' => {
+            url => 'https://openrouter.ai/api',
+            key_prefix => 'sk-or-',
+        },
+        'openai' => {
+            url => 'https://api.openai.com/v1',
+            key_prefix => 'sk-',
+        },
+        'groq' => {
+            url => 'https://api.groq.com/openai/v1',
+            key_prefix => 'gsk_',
+        },
+        'anthropic' => {
+            url => 'https://api.anthropic.com/v1',
+            key_prefix => 'sk-ant-',
+        },
+        'bedrock' => {
+            url => 'https://bedrock-runtime.us-east-1.amazonaws.com',
+            key_prefix => 'AKIA',  # AWS access key
+        },
+        'lemonade' => {
+            url => 'http://localhost:8000/v1',
+            key_prefix => '',
+        },
+    );
+
+    $provider_name = lc($ORIG_ENV{AI_PROVIDER} // '');
+
     # Check for local llama.cpp server
     if ($ORIG_ENV{AI_LOCAL_SERVER}) {
         $ai_endpoint_url = $ORIG_ENV{AI_LOCAL_SERVER};
+        $provider_name = undef;  # Don't set provider_name for local servers to avoid lookups
     } else {
+        # Detect provider by key prefix or use configured provider
+        my $detected_provider;
+        for my $name (keys %PROVIDERS) {
+            if ($api_key =~ m/^$PROVIDERS{$name}{key_prefix}/) {
+                $detected_provider = $name;
+                last;
+            }
+        }
+
+        # Use detected provider or fall back to configured provider
+        if ($provider_name && exists $PROVIDERS{$provider_name}) {
+            $ai_endpoint_url = $PROVIDERS{$provider_name}{url};
+        } elsif ($detected_provider) {
+            $ai_endpoint_url = $PROVIDERS{$detected_provider}{url};
+        } else {
+            print STDERR "Unable to detect provider from API key. Set AI_PROVIDER environment variable.\n";
+            print STDERR "Supported providers: ".join(', ', keys %PROVIDERS)."\n";
+            exit 1;
+        }
         $api_key = $ORIG_ENV{AI_API_KEY};
         if (!$api_key) {
             print STDERR "Please set AI_API_KEY environment variable or set $BASE_DIR/config\n";
             exit 1;
         }
-        if($api_key =~ m/^csk-/){
-            $ai_endpoint_url = "https://api.cerebras.ai";
-        }
-        if($api_key =~ m/^sk-or/){
-            $ai_endpoint_url = "https://openrouter.ai/api";
+        if (defined $provider_name) {
+            $v1_prefix = $provider_name eq 'anthropic' ? '' : 'v1/';
+        } else {
+            $v1_prefix = 'v1/';
         }
     }
+
+    # Normalize URL - ensure it doesn't end with / for some endpoints
+    $ai_endpoint_url =~ s|/+$||;
     init_session($AI_SESSION);
     return;
 }
@@ -168,12 +223,19 @@ sub chat_completion {
         temperature => $ORIG_ENV{AI_TEMPERATURE} // 0,
         top_p       => 1
     };
-    if($ai_endpoint_url eq "https://openrouter.ai/api"){
+
+    # Provider-specific options
+    if (defined $provider_name && $provider_name eq 'openrouter') {
         $req->{provider} = {"only" => ["Cerebras"]};
     }
     print STDERR $json->encode($req)."\n" if $DEBUG;
     print STDERR "Requesting completion from AI API $ai_endpoint_url with ".($api_key//'<no api key>')."\n" if $DEBUG;
+
     my $response = http("post", "v1/chat/completions", $json->encode($req));
+    if(!$response){
+        print "Error: No response from API\n";
+        return;
+    }
     my $resp = JSON::XS::decode_json($response)->{choices}[0]{message}{content};
     if (!$resp) {
         print "Error: Failed to parse response\n";
@@ -189,11 +251,28 @@ sub chat_completion {
 }
 
 sub list_models {
-    my $response = http("get", "v1/chat/models");
-    my $resp = JSON::XS::decode_json($response)->{choices}[0]{message}{content};
-    if (!$resp) {
-        print "Error: Failed to parse response\n";
+    my $model_path = $provider_name eq 'anthropic' ? 'models' : 'v1/chat/models';
+    my $response = http("get", $model_path);
+    if (!$response) {
+        print "Error: Failed to fetch models\n";
         return;
+    }
+    my $resp = JSON::XS::decode_json($response);
+
+    # Handle different response formats
+    my @models;
+    if (ref($resp) eq 'HASH' && exists $resp->{data}) {
+        @models = @{$resp->{data}};
+    } elsif (ref($resp) eq 'ARRAY') {
+        @models = @$resp;
+    } else {
+        print "Error: Failed to parse models response\n";
+        return;
+    }
+
+    foreach my $model (@models) {
+        my $id = ref($model) eq 'HASH' ? $model->{id} : $model;
+        print "$id\n";
     }
     return;
 }
@@ -212,10 +291,6 @@ sub setup_commands {
     },
     '/history' => sub {
         print do {open(my $_hfh, '<', $HISTORY_FILE) or die "Failed to read $HISTORY_FILE: $!\n"; local $/; <$_hfh>};
-        return 0;
-    },
-    '/help' => sub {
-        print join(", ", sort qw(exit quit clear history help debug nodebug system chdir ls pwd files model session))."\n";
         return 0;
     },
     '/debug' => sub {
@@ -810,16 +885,16 @@ sub handle_command {
 }
 
 sub http {
-    my ($m, $url, $data) = @_;
-    $url = "$ai_endpoint_url/$url";
+    my ($m, $path, $data) = @_;
+    my $full_url = "$ai_endpoint_url/$path";
     eval {load_cpan("WWW::Curl::Easy")};
     if($@){
         print STDERR "Please install WWW::Curl::Easy\n\nE.g.:\n  sudo apt install libwww-curl-perl\n";
         exit 1;
     }
     $data //= "";
-    print STDERR "URL: $url\n"   if $DEBUG;
-    print STDERR "DATA: $data\n" if $DEBUG;
+    print STDERR "URL: $full_url\n" if $DEBUG;
+    print STDERR "DATA: $data\n"    if $DEBUG;
     $curl_handle //= do {
         my $ch = WWW::Curl::Easy->new();
         $ch->setopt(WWW::Curl::Easy::CURLOPT_IPRESOLVE(), WWW::Curl::Easy::CURL_IPRESOLVE_V6());
@@ -844,7 +919,7 @@ sub http {
         }
         $ch;
     };
-    $curl_handle->setopt(WWW::Curl::Easy::CURLOPT_URL(), $url);
+    $curl_handle->setopt(WWW::Curl::Easy::CURLOPT_URL(), $full_url);
     my $resp = "";
     $curl_handle->setopt(WWW::Curl::Easy::CURLOPT_WRITEDATA(), \$resp);
     if(lc($m) eq "post"){
@@ -978,6 +1053,45 @@ Manage AI models for the current model
 
 =back
 
+=head1 SUPPORTED PROVIDERS
+
+The following providers are supported:
+
+=over 8
+
+=item B<Cerebras>
+
+API key prefix: C<csk->
+
+=item B<OpenRouter>
+
+API key prefix: C<sk-or->
+
+=item B<OpenAI>
+
+API key prefix: C<sk-> (standard OpenAI keys)
+
+=item B<Groq>
+
+API key prefix: C<gsk_->
+
+=item B Anthropic>
+
+API key prefix: C<sk-ant->
+
+=item B<AWS Bedrock>
+
+Use AWS credentials for authentication.
+
+=item B<Lemonade (ROCm)>
+
+Local LLM server for AMD ROCm GPUs. Default URL: C<http://localhost:8000/v1>
+
+=back
+
+Providers can be auto-detected from API key prefixes, or explicitly set via the B<AI_PROVIDER>
+environment variable.
+
 =head1 ENVIRONMENT VARIABLES
 
 =over 8
@@ -1017,6 +1131,15 @@ Temperature setting for the AI chat completion.
 =item B<AI_CLEAR>
 
 Clear the chat status file if set.
+
+=item B<AI_PROVIDER>
+
+Specify the AI provider to use. Options: cerebras, openrouter, openai, groq, anthropic, bedrock, lemonade.
+If not specified, will be auto-detected from API key prefix.
+
+=item B<AI_LOCAL_SERVER>
+
+URL for a local llama.cpp server (overrides provider settings).
 
 =item B<AI_PROXY>
 
