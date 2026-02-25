@@ -54,7 +54,7 @@ if (!$AI_SESSION) {
         print STDERR "Please install Data::UUID module to generate UUIDs\n";
         exit 1;
     }
-    my $ug = Data::UUID->new()
+    my $ug = Data::UUID->new();
     $AI_SESSION = "session-" . $ug->create_str();
 }
 my $AI_SESSION_DIR = "$SESSIONS_DIR/$AI_SESSION";
@@ -230,8 +230,8 @@ sub chat_completion {
     if (($provider_name//'') eq 'openrouter') {
         $req->{provider} = {"only" => ["Cerebras"]};
     }
-    print STDERR $json->encode($req)."\n" if $DEBUG;
-    print STDERR "Requesting completion from AI API $ai_endpoint_url with ".($api_key//'<no api key>')."\n" if $DEBUG;
+    log_info($json->encode($req));
+    log_info("Requesting completion from AI API $ai_endpoint_url with ".($api_key//'<no api key>'));
 
     my $response = http("post", "v1/chat/completions", $json->encode($req));
     if(!$response){
@@ -570,7 +570,7 @@ sub chat_word_completions_cli {
     $line =~ s/ +$//g;
     my $cfg = $cmds;
     my @wrd = split m/\s+/, $line, -1;
-    print STDERR "W: >".join("rcs, ", @wrd)."<\n" if $DEBUG;
+    log_info("W: >".join("rcs, ", @wrd)."<");
     foreach my $w (@wrd) {
         my @rcs = ();
         return '' if defined $cfg and ref($cfg) ne 'HASH';
@@ -712,7 +712,7 @@ sub input_stdin {
 sub chat_loop {
     my $input_cli_sub = -t STDIN ? input_terminal() : input_stdin();
     while(1){
-        print STDERR "Waiting for user input...\n" if $DEBUG;
+        log_info("Waiting for user input...");
         my $chat_request = &{$input_cli_sub}();
         unless(defined $chat_request){
             print "\n";
@@ -830,7 +830,7 @@ sub handle_command {
         } elsif ($line =~ m|^/model\s*$|){
             # Show available models from the API
             my $response = http("get", $ORIG_ENV{AI_LOCAL_SERVER}?"v1/models":"v1/chat/models");
-            print STDERR "Response: $response\n" if $DEBUG;
+            log_info("Response: $response");
             my $resp = JSON::XS::decode_json($response);
             my @models;
             if (defined $resp and ref($resp) eq 'HASH' and exists $resp->{data}) {
@@ -904,8 +904,8 @@ sub http {
         exit 1;
     }
     $data //= "";
-    print STDERR "URL: $full_url\n" if $DEBUG;
-    print STDERR "DATA: $data\n"    if $DEBUG;
+    log_info("URL: $full_url");
+    log_info("DATA: $data");
     $curl_handle //= do {
         my $ch = WWW::Curl::Easy->new();
         $ch->setopt(WWW::Curl::Easy::CURLOPT_IPRESOLVE(), WWW::Curl::Easy::CURL_IPRESOLVE_V6());
@@ -946,11 +946,11 @@ sub http {
     $curl_handle->perform();
     my $r_code = $curl_handle->getinfo(WWW::Curl::Easy::CURLINFO_HTTP_CODE());
     if($r_code != 200){
-        print STDERR "ERROR: $r_code\n" if $DEBUG;
+        log_info("ERROR: $r_code");
         return;
     }
-    print STDERR "OK: $r_code\n"      if $DEBUG;
-    print STDERR "RESPONSE:\n$resp\n" if $DEBUG;
+    log_info("OK: $r_code");
+    log_info("RESPONSE:\n$resp");
     return $resp;
 }
 
