@@ -20,15 +20,25 @@ use Socket;
 use Cwd qw();
 use Encode qw(_utf8_on _utf8_off);
 
-# Constants
+# Command-line options
 my $DEBUG = $ORIG_ENV{DEBUG} // 0;
+my $help;
+GetOptions(
+    'help|?' => \$help,
+    'debug'  => \$DEBUG,
+) or show_usage();
+
+show_usage() if $help;
+
+# init/setup
 my $BASE_DIR = $ORIG_ENV{AI_DIR} // (glob('~/.aicli'))[0];
 -d "$BASE_DIR"
     or mkdir $BASE_DIR
     or die "Failed to create $BASE_DIR: $!\n";
--d "$BASE_DIR/sessions"
-    or mkdir "$BASE_DIR/sessions"
-    or die "Failed to create $BASE_DIR/sessions: $!\n";
+my $SESSIONS_DIR = "$BASE_DIR/sessions";
+-d $SESSIONS_DIR
+    or mkdir $SESSIONS_DIR
+    or die "Failed to create $SESSIONS_DIR: $!\n";
 my $CONFIG_FILE = $ORIG_ENV{AI_CONFIG}
     // "$BASE_DIR/config";
 my $AI_PROMPT_TEMPLATE = $ORIG_ENV{AI_PROMPT_TEMPLATE}
@@ -44,24 +54,16 @@ if (!$AI_SESSION) {
         print STDERR "Please install Data::UUID module to generate UUIDs\n";
         exit 1;
     }
-    my $ug = new Data::UUID;
+    my $ug = Data::UUID->new()
     $AI_SESSION = "session-" . $ug->create_str();
 }
--d "$BASE_DIR/sessions/$AI_SESSION"
-    or mkdir "$BASE_DIR/sessions/$AI_SESSION"
-    or die "Failed to create $BASE_DIR/$AI_SESSION: $!\n";
-my $HISTORY_FILE = "$BASE_DIR/sessions/$AI_SESSION/history";
-my $PROMPT_FILE  = "$BASE_DIR/sessions/$AI_SESSION/prompt";
-my $STATUS_FILE  = "$BASE_DIR/sessions/$AI_SESSION/chat";
-
-# Command-line options
-my $help;
-GetOptions(
-    'help|?' => \$help,
-    'debug'  => \$DEBUG,
-) or show_usage();
-
-show_usage() if $help;
+my $AI_SESSION_DIR = "$SESSIONS_DIR/$AI_SESSION";
+-d $AI_SESSION_DIR
+    or mkdir $AI_SESSION_DIR
+    or die "Failed to create $AI_SESSION_DIR: $!\n";
+my $HISTORY_FILE = "$AI_SESSION_DIR/history";
+my $PROMPT_FILE  = "$AI_SESSION_DIR/prompt";
+my $STATUS_FILE  = "$AI_SESSION_DIR/chat";
 
 # Variables/Handles
 our ($api_key, $curl_handle, $ai_endpoint_url, $SESSION_MODEL, $provider_name, $v1_prefix);
@@ -105,7 +107,7 @@ sub chat_setup {
     }
 
     # Get model for this session
-    my $model_file = "$BASE_DIR/sessions/$AI_SESSION/model";
+    my $model_file = "$AI_SESSION_DIR/model";
     if(open(my $mfh, '<', $model_file)){
         $SESSION_MODEL = <$mfh>;
         $SESSION_MODEL ||= $ORIG_ENV{AI_MODEL};
@@ -113,10 +115,10 @@ sub chat_setup {
         $SESSION_MODEL =~ s/['"]$//;
         $SESSION_MODEL =~ s/\s+$//;
         $SESSION_MODEL =~ s/^\s+//;
-        $SESSION_MODEL ||= $ORIG_ENV{AI_MODEL};
         chomp $SESSION_MODEL;
         close $mfh;
     }
+    $SESSION_MODEL ||= $ORIG_ENV{AI_MODEL};
 
     my %PROVIDERS = (
         'cerebras' => {
@@ -166,7 +168,7 @@ sub chat_setup {
         }
 
         # Use detected provider or fall back to configured provider
-        if ($provider_name && exists $PROVIDERS{$provider_name}) {
+        if ($provider_name and exists $PROVIDERS{$provider_name}) {
             $ai_endpoint_url = $PROVIDERS{$provider_name}{url};
         } elsif ($detected_provider) {
             $ai_endpoint_url = $PROVIDERS{$detected_provider}{url};
@@ -180,7 +182,7 @@ sub chat_setup {
             print STDERR "Please set AI_API_KEY environment variable or set $BASE_DIR/config\n";
             exit 1;
         }
-        if (defined $provider_name) {
+        if ($provider_name) {
             $v1_prefix = $provider_name eq 'anthropic' ? '' : 'v1/';
         } else {
             $v1_prefix = 'v1/';
@@ -225,7 +227,7 @@ sub chat_completion {
     };
 
     # Provider-specific options
-    if (defined $provider_name && $provider_name eq 'openrouter') {
+    if (($provider_name//'') eq 'openrouter') {
         $req->{provider} = {"only" => ["Cerebras"]};
     }
     print STDERR $json->encode($req)."\n" if $DEBUG;
@@ -261,7 +263,7 @@ sub list_models {
 
     # Handle different response formats
     my @models;
-    if (ref($resp) eq 'HASH' && exists $resp->{data}) {
+    if (ref($resp) eq 'HASH' and exists $resp->{data}) {
         @models = @{$resp->{data}};
     } elsif (ref($resp) eq 'ARRAY') {
         @models = @$resp;
@@ -383,6 +385,7 @@ sub setup_commands {
     },
     '/model'   => {},
     };
+
     # add models
     my $response = eval { http("get", $ORIG_ENV{AI_LOCAL_SERVER}?"v1/models":"v1/chat/models") };
     my $resp;
@@ -390,34 +393,33 @@ sub setup_commands {
         $resp = eval { JSON::XS::decode_json($response) };
     }
     my @models;
-    if ($resp && ref($resp) eq 'HASH' && exists $resp->{data}) {
+    if (defined $resp and ref($resp) eq 'HASH' and exists $resp->{data}) {
         @models = @{$resp->{data}};
-    } elsif ($resp && ref($resp) eq 'ARRAY') {
+    } elsif (defined $resp and ref($resp) eq 'ARRAY') {
         push @models, $_ for @$resp;
     }
     $cmds->{'/model'} = {map {$_->{id}, sub {switch_model($_->{id})}} @models};
 
-    # add sessions
+    # add available sessions
     refresh_session_completions();
 };
 
 sub refresh_session_completions {
-    my @sessions = glob("$BASE_DIR/sessions/*");
-    @sessions = map {$_ =~ s/.*\///; $_} grep {-d $_} @sessions;
+    my $available_sessions = get_sessions();
     my $session_cmds = {
         'list'   => sub { 0 },
         'create' => sub { 0 },
-        'delete' => {map {($_, sub { 0 })} @sessions},
-        'rename' => {map {($_, sub { 0 })} @sessions},
-        'switch' => {map {($_, sub {switch_session($_)})} @sessions},
-        map {($_, sub {switch_session($_)})} @sessions,
+        'delete' => {map {($_, sub { 0 })} @$available_sessions},
+        'rename' => {map {($_, sub { 0 })} @$available_sessions},
+        'switch' => {map {($_, sub {switch_session($_)})} @$available_sessions},
+        map {($_, sub {switch_session($_)})} @$available_sessions,
     };
     $cmds->{'/session'} = $session_cmds;
 }
 
 sub init_session {
     my ($session) = @_;
-    my $session_dir = "$BASE_DIR/sessions/$session";
+    my $session_dir = "$SESSIONS_DIR/$session";
     -d $session_dir or mkdir $session_dir or die "Failed to create $session_dir: $!\n";
 
     my $p_file = "$session_dir/prompt";
@@ -447,10 +449,13 @@ sub init_session {
     }
 }
 
+sub get_sessions {
+    my @sessions = glob("$SESSIONS_DIR/*");
+    return  [sort map {$_ =~ s/.*\///; $_} grep {-d $_} @sessions];
+}
+
 sub list_sessions {
-    my @sessions = glob("$BASE_DIR/sessions/*");
-    @sessions = map { $_ =~ s/.*\///; $_ } grep { -d $_ } @sessions;
-    foreach my $s (sort @sessions) {
+    foreach my $s (@{get_sessions()}) {
         if ($s eq $AI_SESSION) {
             print "${colors::green_color}* $s${colors::reset_color}\n";
         } else {
@@ -464,12 +469,13 @@ sub switch_session {
     chomp $new_session;
     $new_session =~ s/^\s*//g;
     $new_session =~ s/\s*$//g;
-    if(-d "$BASE_DIR/sessions/$new_session"){
+    if(-d "$SESSIONS_DIR/$new_session"){
         $ENV{AI_SESSION} = $new_session;
         $AI_SESSION = $new_session;
-        $HISTORY_FILE = "$BASE_DIR/sessions/$AI_SESSION/history";
-        $PROMPT_FILE  = "$BASE_DIR/sessions/$AI_SESSION/prompt";
-        $STATUS_FILE  = "$BASE_DIR/sessions/$AI_SESSION/chat";
+        $AI_SESSION_DIR = "$SESSIONS_DIR/$AI_SESSION";
+        $HISTORY_FILE = "$AI_SESSION_DIR/history";
+        $PROMPT_FILE  = "$AI_SESSION_DIR/prompt";
+        $STATUS_FILE  = "$AI_SESSION_DIR/chat";
         print "Switched to session: $new_session\n";
     } else {
         print "Session '$new_session' does not exist.\n";
@@ -479,7 +485,7 @@ sub switch_session {
 sub create_session {
     my ($name) = @_;
     $name =~ s/^\s+//; $name =~ s/\s+$//;
-    if (-d "$BASE_DIR/sessions/$name") {
+    if (-d "$SESSIONS_DIR/$name") {
         print "Session '$name' already exists.\n";
         return;
     }
@@ -492,7 +498,7 @@ sub create_session {
 sub delete_session {
     my ($name) = @_;
     $name =~ s/^\s+//; $name =~ s/\s+$//;
-    if (!-d "$BASE_DIR/sessions/$name") {
+    if (!-d "$SESSIONS_DIR/$name") {
         print "Session '$name' does not exist.\n";
         return;
     }
@@ -501,7 +507,7 @@ sub delete_session {
         return;
     }
     load_cpan("File::Path");
-    File::Path::remove_tree("$BASE_DIR/sessions/$name");
+    File::Path::remove_tree("$SESSIONS_DIR/$name");
     print "Deleted session '$name'.\n";
     refresh_session_completions();
 }
@@ -510,21 +516,22 @@ sub rename_session {
     my ($old, $new) = @_;
     $old =~ s/^\s+//; $old =~ s/\s+$//;
     $new =~ s/^\s+//; $new =~ s/\s+$//;
-    if (!-d "$BASE_DIR/sessions/$old") {
+    if (!-d "$SESSIONS_DIR/$old") {
         print "Session '$old' does not exist.\n";
         return;
     }
-    if (-d "$BASE_DIR/sessions/$new") {
+    if (-d "$SESSIONS_DIR/$new") {
         print "Session '$new' already exists.\n";
         return;
     }
-    if (rename("$BASE_DIR/sessions/$old", "$BASE_DIR/sessions/$new")) {
+    if (rename("$SESSIONS_DIR/$old", "$SESSIONS_DIR/$new")) {
         if ($old eq $AI_SESSION) {
-            $AI_SESSION = $new;
             $ENV{AI_SESSION} = $new;
-            $HISTORY_FILE = "$BASE_DIR/sessions/$AI_SESSION/history";
-            $PROMPT_FILE  = "$BASE_DIR/sessions/$AI_SESSION/prompt";
-            $STATUS_FILE  = "$BASE_DIR/sessions/$AI_SESSION/chat";
+            $AI_SESSION = $new;
+            $AI_SESSION_DIR = "$SESSIONS_DIR/$AI_SESSION";
+            $HISTORY_FILE = "$AI_SESSION_DIR/history";
+            $PROMPT_FILE  = "$AI_SESSION_DIR/prompt";
+            $STATUS_FILE  = "$AI_SESSION_DIR/chat";
         }
         print "Renamed session '$old' to '$new'.\n";
         refresh_session_completions();
@@ -540,13 +547,17 @@ sub switch_model {
     $new_model =~ s/['"]$//;
     $new_model =~ s/\s+$//;
     $new_model =~ s/^\s+//;
-    my $model_file = "$BASE_DIR/sessions/$AI_SESSION/model";
+    my $model_file = "$AI_SESSION_DIR/model";
     my $tmp_model_file = "$model_file.tmp";
     if(open(my $fh, '>', $tmp_model_file)){
         print {$fh} $new_model;
         close($fh) and do {
-            rename($tmp_model_file, $model_file);
-            $SESSION_MODEL = $new_model;
+            if(rename($tmp_model_file, $model_file)){
+                print "Switched model to '$new_model'.\n";
+                $SESSION_MODEL = $new_model;
+            } else {
+                print "Failed to switch model: $!\n";
+            }
             print "switch: $new_model\n";
         };
     } else {
@@ -802,7 +813,7 @@ sub handle_command {
         return 0;
     }
     if ($line =~ m|^/model|) {
-        my $model_file = "$BASE_DIR/sessions/$AI_SESSION/model";
+        my $model_file = "$AI_SESSION_DIR/model";
         my $current_model;
         if(open(my $fh, '<', $model_file)){
             $current_model = <$fh>;
@@ -822,9 +833,9 @@ sub handle_command {
             print STDERR "Response: $response\n" if $DEBUG;
             my $resp = JSON::XS::decode_json($response);
             my @models;
-            if ($resp && ref($resp) eq 'HASH' && exists $resp->{data}) {
+            if (defined $resp and ref($resp) eq 'HASH' and exists $resp->{data}) {
                 @models = @{$resp->{data}};
-            } elsif ($resp && ref($resp) eq 'ARRAY') {
+            } elsif (defined $resp and ref($resp) eq 'ARRAY') {
                 foreach my $model (@$resp) {
                     push @models, $model;
                 }
