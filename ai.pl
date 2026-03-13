@@ -69,6 +69,37 @@ my $STATUS_FILE  = "$AI_SESSION_DIR/chat";
 our ($api_key, $curl_handle, $ai_endpoint_url, $SESSION_MODEL, $provider_name, $v1_prefix);
 load_cpan("JSON::XS");
 my $json //= JSON::XS->new->utf8->allow_blessed->allow_unknown->allow_nonref->convert_blessed;
+# Define available tools for the AI system prompt
+my %TOOLS = (
+    bash => {
+        description => "Execute an arbitrary shell command",
+        usage => "/bash <command>",
+    },
+    read => {
+        description => "Read a file contents",
+        usage => "/read <path>",
+    },
+    write => {
+        description => "Write/overwrite a file contents",
+        usage => "/write <path> ...",
+    },
+    grep => {
+        description => "Search files with regex pattern",
+        usage => "/grep <pattern> [path]",
+    },
+);
+sub _tool_list_for_prompt {
+    my $list = "## AI TOOLS LIST\n";
+    foreach my $name (sort keys %TOOLS) {
+        my $info = $TOOLS{$name};
+        $list .= "- $name: " . $info->{description};
+        if (my $usage = $info->{usage}) {
+            $list .= qq{ (" . $usage . ")};
+        }
+        $list .= "\n";
+    }
+    return $list;
+}
 
 # Main execution
 our $cmds;
@@ -160,12 +191,15 @@ sub chat_setup {
     } else {
         # Detect provider by key prefix or use configured provider
         my $detected_provider;
-        for my $name (keys %PROVIDERS) {
-            if ($api_key =~ m/^$PROVIDERS{$name}{key_prefix}/) {
-                $detected_provider = $name;
-                last;
+        if (defined $api_key && length($api_key)) {
+            for my $name (keys %PROVIDERS) {
+                if ($api_key =~ m/^$PROVIDERS{$name}{key_prefix}/) {
+                    $detected_provider = $name;
+                    last;
+                }
             }
         }
+
 
         # Use detected provider or fall back to configured provider
         if ($provider_name and exists $PROVIDERS{$provider_name}) {
@@ -209,13 +243,13 @@ sub log_info {
 sub chat_completion {
     my ($input) = @_;
     log_info("User input: $input");
-    open(my $sfh, '>>', $STATUS_FILE) or die "Failed to write to $STATUS_FILE: $!\n";
-    print {$sfh} $json->encode({role => 'user', content => $input})."\n";
-    close $sfh or die "Failed to close $STATUS_FILE: $!\n";
-    my @jstr = do {
-        open(my $fh, '<', $STATUS_FILE) or die "Failed to read $STATUS_FILE: $!\n";
-        map {chomp; JSON::XS::decode_json($_)} <$fh>
-    };
+
+    # Get current messages, add user message, make request, only commit if successful
+    open(my $fh_read, '<', $STATUS_FILE) or die "Failed to read $STATUS_FILE: $!\n";
+    my @jstr = do { map { chomp; JSON::XS::decode_json($_) } <$fh_read> };
+    close $fh_read;
+
+    push @jstr, {role => 'user', content => $input};
 
     my $req = {
         model       => $SESSION_MODEL || $ORIG_ENV{AI_MODEL}  // 'llama-4-scout-17b-16e-instruct',
@@ -243,13 +277,122 @@ sub chat_completion {
         print "Error: Failed to parse response\n";
         return;
     }
+
+    # Process tool calls in the AI response
+    while ($resp =~ m{/(\w+)\s+([^\n]+)}g) {
+        my $tool = $1;
+        my $args = $2;
+        next unless exists $TOOLS{$tool};
+
+        log_info("Tool call detected: $tool with args: $args");
+          print "${colors::yellow_color1}Executing tool: /$tool $args${colors::reset_color}\n";
+
+        my $result = execute_tool($tool, $args);
+        if ($result) {
+            my $tool_response = "[TOOL RESULT from $tool: $result]";
+            push @jstr, 
+                {role => 'assistant', content => $resp},
+                {role => 'user', content => $tool_response};
+            log_info("Sending tool result back to AI: $tool_response");
+            last if $jstr[-1]{role} ne 'user';
+        }
+    }
+
     _utf8_off($resp);
+
+    # Write assistant message and complete the turn
+    push @jstr, {role => 'assistant', content => $resp};
     print "$resp\n";
     log_info("AI response: $resp");
-    open($sfh, '>>', $STATUS_FILE) or die "Failed to write to $STATUS_FILE: $!\n";
-    print {$sfh} $json->encode({ role => 'assistant', content => $resp })."\n";
-    close $sfh or die "Failed to close $STATUS_FILE: $!\n";
+
+    # save updated messages to status file
+    open(my $sfh_final, '>', $STATUS_FILE)
+        or die "Failed to write to $STATUS_FILE: $!\n";
+    print {$sfh_final} $json->encode($_)."\n" for @jstr;
+    close $sfh_final
+        or die "Failed to close $STATUS_FILE: $!\n";
+
     return;
+}
+
+sub execute_tool {
+    my ($tool, $args) = @_;
+    if ($tool eq 'bash') {
+        # dump args to a temp file and execute with bash, capture output
+        load_cpan("File::Temp");
+        my ($fh, $fn) = File::Temp::tempfile();
+        print {$fh} $args;
+        close($fh)
+            or do {
+                unlink $fn;
+                return "[ERR] Failed to write to temp file for bash command: $!";
+            };
+        if(open(my $fh, "bash < $fn 2>&1|")){
+            local $/;
+            my $result = <$fh>;
+            close($fh);
+            unlink $fn;
+            return $result;
+        } else {
+            return "[ERR] Failed to execute command: $args: $!";
+        }
+    } elsif ($tool eq 'read') {
+        my $file = trim($args);
+        if (open(my $fh, '<', $file)) {
+            local $/;
+            my $content = <$fh>;
+            close($fh);
+            return $content // "";
+        } else {
+            return "[ERR] File not found: $file: $!";
+        }
+    } elsif ($tool eq 'write') {
+        if (shift_args($args, \my $path)) {
+            open(my $fh, '>', $path) or die "Cannot write to $path: $!";
+            print {$fh} shift_args($args);
+            close($fh);
+            return "Written to $path";
+        } else {
+            return "[ERR] Usage: /write <path> [content]";
+        }
+    } elsif ($tool eq 'grep') {
+        my @parts = split(/\s+/, trim($args), 2);
+        if (@parts >= 1) {
+            my $pattern = $parts[0];
+            my $path_arg = @parts > 1 ? $parts[1] : '.';
+            # escape double quotes in pattern and path_arg
+            $pattern =~ s/"/\\"/g;
+            $path_arg =~ s/"/\\"/g;
+            open(my $fh, "grep -r \"$pattern\" \"$path_arg\" 2>&1|")
+                or return "[ERR] Cannot run grep: $!";
+            local $/;
+            my $result = <$fh>;
+            close($fh);
+            return $result // "";
+        } else {
+            return "[ERR] Usage: /grep <pattern> [path]";
+        }
+    }
+
+    return "[ERR] Unknown tool '$tool'";
+}
+
+sub trim {
+    my ($s) = @_;
+    $s =~ s/^\s+//;
+    $s =~ s/\s+$//;
+    return $s;
+}
+
+sub shift_args {
+    my ($args, $ref_path) = @_;
+    $args =~ s/^\s+//;
+    if ($args =~ /^(\S+)\s*(.*)/) {
+        $$ref_path = $1;
+        $args = $2;
+        return 1;
+    }
+    return 0;
 }
 
 sub list_models {
@@ -301,6 +444,17 @@ sub setup_commands {
     },
     '/nodebug' => sub {
         $DEBUG = 0;
+        return 0;
+    },
+    '/tools' => sub {
+        print "Available tools:\n";
+        foreach my $name (sort keys %TOOLS) {
+            my $info = $TOOLS{$name};
+            print "  /$name: " . $info->{description} . "\n";
+            if (my $usage = $info->{usage}) {
+                print "    Usage: $usage\n";
+            }
+        }
         return 0;
     },
     '/system' => sub {
@@ -399,6 +553,10 @@ sub setup_commands {
         push @models, $_ for @$resp;
     }
     $cmds->{'/model'} = {map {$_->{id}, sub {switch_model($_->{id})}} @models};
+
+    # add prompts
+    my @prompts = glob("$FindBin::Bin/ai/*");
+    $cmds->{'/prompt'} = {map {($_ =~ s/.*\///r, sub {switch_prompt($_)})} @prompts};
 
     # add available sessions
     refresh_session_completions();
@@ -562,6 +720,33 @@ sub switch_model {
         };
     } else {
         print "Failed to write to $tmp_model_file: $!\n";
+    }
+}
+
+sub switch_prompt {
+    my ($new_prompt) = @_;
+    my $prompt_file = "$AI_SESSION_DIR/prompt";
+    my $tmp_prompt_file = "$prompt_file.tmp";
+    my $template = "";
+    if(open(my $ofh, "$FindBin::Bin/ai/$new_prompt")){
+        local $/;
+        $template = <$ofh>;
+        close($ofh);
+    } else {
+        print "Failed to read prompt template: $!\n";
+        return;
+    }
+    if(open(my $fh, '>', $tmp_prompt_file)){
+        print {$fh} $template;
+        close($fh) and do {
+            if(rename($tmp_prompt_file, $prompt_file)){
+                print "Switched system prompt.\n";
+            } else {
+                print "Failed to switch prompt: $!\n";
+            }
+        };
+    } else {
+        print "Failed to write to $tmp_prompt_file: $!\n";
     }
 }
 
@@ -764,6 +949,17 @@ sub handle_command {
         $DEBUG = 0;
         return 0;
     }
+    if ($line =~ m|^/tools$|) {
+        print "Available tools:\n";
+        foreach my $name (sort keys %TOOLS) {
+            my $info = $TOOLS{$name};
+            print "  /$name: " . $info->{description} . "\n";
+            if (my $usage = $info->{usage}) {
+                print "    Usage: $usage\n";
+            }
+        }
+        return 0;
+    }
     if ($line =~ m|^/help|) {
         print join(", ", sort keys %$cmds)."\n";
         return 0;
@@ -847,6 +1043,39 @@ sub handle_command {
                     print "${colors::green_color}* $model->{id}${colors::reset_color}\n";
                 } else {
                     print "  $model->{id}\n";
+                }
+            }
+        }
+        return 0;
+    }
+    if ($line =~ m|^/prompt|) {
+        if($line =~ m|^/prompt\s+(.*)$| and length($1//"")){
+            switch_prompt($1);
+        } elsif($line =~ m|^/prompt\s*$|){
+            # show available prompts from the prompts directory
+            # if the prompt file exists in the session, show that as well
+            my $prompt_dir = $FindBin::Bin.'/ai';
+            my @prompts = glob("$prompt_dir/*");
+            my $current_prompt = '';
+            if(open(my $fh, '<', $PROMPT_FILE)){
+                local $/;
+                $current_prompt = <$fh>;
+            }
+            foreach my $prompt (@prompts) {
+                next if $prompt =~ m/^\.\.?$/;
+                my $prompt_name = $prompt;
+                $prompt_name =~ s/.*\///;
+                my $prompt_data;
+                if(open(my $fh, '<', $prompt)){
+                    local $/;
+                    $prompt_data = <$fh>;
+                } else {
+                    next;
+                }
+                if ($current_prompt eq $prompt_data) {
+                    print "${colors::green_color}* $prompt_name${colors::reset_color}\n";
+                } else {
+                    print "  $prompt_name\n";
                 }
             }
         }
