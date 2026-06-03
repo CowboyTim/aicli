@@ -295,16 +295,19 @@ sub chat_completion {
     $resp =~ s/<think>.*?<\/think>//msg;
     while($resp =~ m/$tools::TOOLS_RX/msg){
         my $tool_entry = $1;
-        my $args = join(" ", map {substr($resp, $-[$_], $+[$_] - $-[$_])} 2 .. @--1);
+        print "ENTRY: $tool_entry\n";
+        my @t_args;
+        @t_args = map {substr($resp, $-[$_], $+[$_] - $-[$_])} grep {defined $-[$_] and $+[$_]} 2 .. @--1 if @- >= 3;
         $tool_entry =~ m{^///((.*?)_[a-fA-F0-9]+)}gms;
         my $tool   = $1;
         my $tool_k = lc $2;
+        log_info("TOOL:$tool, K:$tool_k, A:".join(' ', @t_args));
         next unless exists $tools::TOOLS->{$tool_k};
         substr($resp, 0, pos($resp)) = '';
 
-        log_info("${colors::yellow_color1}\[TOOL $tool($args)\]${colors::reset_color}\n");
+        log_info("${colors::yellow_color1}\[TOOL $tool(".join(' ', @t_args).")\]${colors::reset_color}\n");
         push @new_turns, {role => 'asistant', content => $tool_entry};
-        my $result = execute_tool($tool_k, $tool, $args);
+        my $result = execute_tool($tool_k, $tool, \@t_args);
         my $tool_response = "[TOOL RESULT from $tool: $result]";
         log_info("${colors::yellow_color1}$tool_response${colors::reset_color}\n");
         push @new_turns, {role => 'user', content => $tool_response};
@@ -323,6 +326,7 @@ sub chat_completion {
 
     # Output and save the new conversation turns
     foreach my $turn (@new_turns) {
+        _utf8_off($turn->{content});
         print $turn->{content} . "\n" if $turn->{role} eq 'assistant';
         push @jstr, $turn;
     }
@@ -339,14 +343,14 @@ sub chat_completion {
 }
 
 sub execute_tool {
-    my ($k, $tool, $args) = @_;
+    my ($k, $tool, $t_args) = @_;
     return "[ERR] Unknown tool '$tool'" unless exists $tools::TOOLS->{$k};
     my $tn = lc("tools::$tool");
     my $ret =
     eval {
         # TODO: use Safe Eval AND fork() ?
         no strict 'refs';
-        return &{$tn}($args);
+        return &{$tn}($t_args);
     };
     if($@){
         chomp(my $err = $@);
@@ -1225,17 +1229,17 @@ BEGIN {
         $t_rx =~ s/\{\{.*?\}\}/\(.*?\)/msg;
         $t_rx =~ s/\+/\\+/msg;
         $t_rx =~ s/\n/\\n/msg;
-        push @all_t_rx, "($t_rx)";
+        push @all_t_rx, "(?:$t_rx)";
     }
-    $TOOLS_RX = join('|', @all_t_rx);
+    $TOOLS_RX = '('.join('|', @all_t_rx).')';
 }
 
 sub bash_7c48 {
-    my ($args) = @_;
+    my ($t_args) = @_;
     # dump args to a temp file and execute with bash, capture output
     main::load_cpan("File::Temp");
     my ($fh, $fn) = File::Temp::tempfile();
-    print {$fh} $args;
+    print {$fh} $t_args->[0];
     if(!close($fh)){
         my $err = $!;
         unlink $fn;
@@ -1250,18 +1254,18 @@ sub bash_7c48 {
         return "[ERR] problem running tool 'bash': $err, output: $result" if $err;
         return $result;
     }
-    return "[ERR] Failed to execute command: $args: $!";
+    return "[ERR] Failed to execute command: $!";
 }
 
 sub perl_d8d2 {
-    my ($args) = @_;
+    my ($t_args) = @_;
     # TODO
-    return "[ERR] Failed to execute command: $args: $!";
+    return "[ERR] Failed to execute command: $t_args->[0]: $!";
 }
 
 sub read_c5a3 {
-    my ($args) = @_;
-    my $file = main::trim($args);
+    my ($t_args) = @_;
+    my $file = main::trim($t_args->[0]);
     if (open(my $fh, '<', $file)) {
         local $/;
         my $content = <$fh>;
@@ -1272,11 +1276,11 @@ sub read_c5a3 {
 }
 
 sub write_edf5 {
-    my ($args) = @_;
-    if (main::shift_args($args, \my $path)) {
+    my ($t_args) = @_;
+    if (main::shift_args($t_args->[0], \my $path)) {
         open(my $fh, '>', $path)
             or die "Cannot write to $path: $!";
-        print {$fh} main::shift_args($args);
+        print {$fh} main::shift_args($t_args->[0]);
         if(!close($fh)){
             return "[ERR] problem running tool 'write' for $path: $!";
         }
@@ -1286,8 +1290,8 @@ sub write_edf5 {
 }
 
 sub grep_6629 {
-    my ($args) = @_;
-    my @parts = split(/\s+/, main::trim($args), 2);
+    my ($t_args) = @_;
+    my @parts = split(/\s+/, main::trim($t_args->[0]), 2);
     if (@parts >= 1) {
         my $path_arg = @parts > 1 ? $parts[1] : '.';
         open(my $fh, "grep", "-r", $parts[0], $path_arg, "-|")
