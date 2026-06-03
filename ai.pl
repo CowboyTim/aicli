@@ -1,7 +1,8 @@
 #!/usr/bin/perl
+#
+#  ↓ root user (possibly)
 
-use strict;
-use warnings;
+use strict; use warnings;
 
 use FindBin;
 
@@ -12,33 +13,85 @@ BEGIN {
     %ORIG_ENV = %ENV;
     %ENV = ();
     $orig_dollar0 = $0;
-    $0 = "aicli";
+    my $bd = $ORIG_ENV{BDIR}    // "session";
+    $bd =~ s/^.*\///g;
+    $bd =~ s/[^a-zA-Z0-9_-]/_/g;
+    my $ln = $ORIG_ENV{LOGNAME} // "nobody";
+    $ln =~ s/[^a-zA-Z0-9_-]/_/g;
+    $0 = "aicli:$ln:$bd";
 }
 
 use Getopt::Long;
 use Socket;
 use Cwd qw();
 use Encode qw(_utf8_on _utf8_off);
+use Errno;
+use POSIX ();
 
 # Command-line options
 my $DEBUG = $ORIG_ENV{DEBUG} // 0;
-my $help;
-GetOptions(
-    'help|?' => \$help,
-    'debug'  => \$DEBUG,
-) or show_usage();
-
-show_usage() if $help;
+{
+    my $help;
+    GetOptions(
+        'help|?' => \$help,
+        'debug'  => \$DEBUG,
+    ) or show_usage();
+    show_usage() if $help;
+}
 
 # init/setup
 my $BASE_DIR = $ORIG_ENV{AI_DIR} // (glob('~/.aicli'))[0];
 -d "$BASE_DIR"
     or mkdir $BASE_DIR
     or die "Failed to create $BASE_DIR: $!\n";
+if($< == 0){
+    my $UID = 1000;
+    my $GID = 1000;
+    my $target_uid = $ENV{UID} // $UID;
+
+    # we were root, chown the dirs properly, and drop privileges
+    chown($UID, $GID, $BASE_DIR)
+        or die "Error chown to $UID:$GID for $BASE_DIR: $!\n";
+
+    # now drop privileges
+    local $! = 0;
+    # drop to GID
+    $) = "$GID 983 986 992 109";
+    die "[ERROR] setting EGID to $GID: $!\n"
+        if $!;
+    $( = $);
+    die "[ERROR] setting RGID to $): $!\n"
+        if $!;
+    # drop to UID
+    $> = $target_uid;
+    die "[ERROR] setting EUID to $target_uid: $!\n"
+        if $!;
+    $< = $>;
+    die "[ERROR] setting RUID to $>: $!\n"
+        if $!;
+}
+
+# Final safety check: ensure we're not running as root
+die "[ERROR] running as root EUID/RUID is not allowed\n"
+    if $< == 0 or $> == 0;
+die "[ERROR] running as root EGID/RGID is not allowed\n"
+    if $( == 0 or $) == 0;
+
+if($ORIG_ENV{CDIR}){
+    chdir($ORIG_ENV{CDIR})
+        or die "Error chdir to CDIR=$ORIG_ENV{CDIR}: $!\n";
+}
+
+#  ↑ root user (possibly)
+#--------------------------------------------------------
+#  ↓ user 1000 (node)
+
 my $SESSIONS_DIR = "$BASE_DIR/sessions";
 -d $SESSIONS_DIR
     or mkdir $SESSIONS_DIR
     or die "Failed to create $SESSIONS_DIR: $!\n";
+
+# config vars
 my $CONFIG_FILE = $ORIG_ENV{AI_CONFIG}
     // "$BASE_DIR/config";
 my $AI_PROMPT_TEMPLATE = $ORIG_ENV{AI_PROMPT_TEMPLATE}
@@ -68,7 +121,7 @@ my $STATUS_FILE  = "$AI_SESSION_DIR/chat";
 # Variables/Handles
 our ($api_key, $curl_handle, $ai_endpoint_url, $SESSION_MODEL, $provider_name, $v1_prefix);
 load_cpan("JSON::XS");
-my $json //= JSON::XS->new->utf8->allow_blessed->allow_unknown->allow_nonref->convert_blessed;
+$::JSON //= JSON::XS->new->utf8->allow_blessed->allow_unknown->allow_nonref->convert_blessed;
 
 
 # Main execution
@@ -94,13 +147,10 @@ sub load_cpan {
 }
 
 sub chat_setup {
-    if (!-f $CONFIG_FILE) {
-        log_error("Please set AI_DIR/AI_CONFIG/AI_API_KEY environment variable or set $BASE_DIR/config");
-        exit 1;
-    } else {
+    if (-f $CONFIG_FILE) {
         open(my $fh, ". $CONFIG_FILE; set|")
             or die "Failed to read $CONFIG_FILE: $!\n";
-        my %envs = map { chomp; split m/=/, $_, 2 } grep m/^AI_/, <$fh>;
+        my %envs = map {chomp; split m/=/, $_, 2} grep m/^AI_/, <$fh>;
         while (my ($key, $value) = each %envs) {
             $ORIG_ENV{$key} //= $value =~ s/^['"]//r =~ s/['"]$//r;
         }
@@ -212,7 +262,6 @@ sub log_info {
 
 sub log_error {
     my ($message) = @_;
-    return unless $DEBUG;
     my $LOG_FILE = $ORIG_ENV{AI_LOG} // "&STDOUT";
     my $lfh;
     open($lfh, ">>$LOG_FILE") or open($lfh, ">&STDERR") or return;
@@ -243,11 +292,11 @@ sub chat_completion {
 
     # Provider-specific options
     $req->{provider} = {only => ["Cerebras"]} if ($provider_name//'') eq 'openrouter';
-    log_info($json->encode($req));
+    log_info($::JSON->encode($req));
     log_info("Requesting completion from AI API $ai_endpoint_url with ".($api_key//'<no api key>'));
 
     CHAT_LOOP:
-    my $raw = http("post", "v1/chat/completions", $json->encode($req));
+    my $raw = http("post", "v1/chat/completions", $::JSON->encode($req));
     if(!$raw){
         log_error("No response from API");
         return;
@@ -330,7 +379,7 @@ sub chat_completion {
     # save updated messages to status file
     open(my $sfh_final, '>', $STATUS_FILE)
          or die "Failed to write to $STATUS_FILE: $!\n";
-    print {$sfh_final} $json->encode($_)."\n" for @jstr;
+    print {$sfh_final} $::JSON->encode($_)."\n" for @jstr;
     close $sfh_final
          or die "Failed to close $STATUS_FILE: $!\n";
 
@@ -396,7 +445,7 @@ sub setup_commands {
     '/clear' => sub {
         open(my $fh, '>', $STATUS_FILE)
             or die "Failed to write to $STATUS_FILE: $!\n";
-        print {$fh} $json->encode({ role => 'system', content => '' })."\n";
+        print {$fh} $::JSON->encode({ role => 'system', content => '' })."\n";
         close $fh
             or die "Failed to close $STATUS_FILE: $!\n";
         return 0;
@@ -429,7 +478,7 @@ sub setup_commands {
         $line =~ s|^/system||;
         open(my $sfh, '>>', $STATUS_FILE)
             or die "Failed to write to $STATUS_FILE: $!\n";
-        print {$sfh} $json->encode({ role => 'system', content => $line })."\n";
+        print {$sfh} $::JSON->encode({ role => 'system', content => $line })."\n";
         close $sfh
             or die "Failed to close $STATUS_FILE: $!\n";
         return 0;
@@ -462,7 +511,7 @@ sub setup_commands {
                 $data = '```'."\n".$data."\n".'```'."\n";
                 open(my $sfh, '>>', $STATUS_FILE)
                     or next;
-                print {$sfh} $json->encode({role => 'user', content => $data})."\n";
+                print {$sfh} $::JSON->encode({role => 'user', content => $data})."\n";
                 close $sfh;
                 print "${colors::green_color}✓${colors::reset_color} added $file to chat\n";
             }
@@ -570,7 +619,7 @@ sub init_session {
         $prompt .= _tool_list_for_prompt();
         open(my $fh, '>', $s_file)
             or die "Failed to write to $s_file: $!\n";
-        print {$fh} $json->encode({role => 'system', content => ($prompt // "")})."\n";
+        print {$fh} $::JSON->encode({role => 'system', content => ($prompt // "")})."\n";
         close $fh
             or die "Failed to close $s_file: $!\n";
     }
@@ -579,7 +628,7 @@ sub init_session {
 sub _tool_list_for_prompt {
     my $list = "\nTOOLS 'syntax': \n///TOOL_{HEX}+{T1}+{T2}\n{{path}}\n{T1}\n{{content}}\n{T2}\nTOOL_{HEX}\n where {{path}}, {{content} is substituted by the LLM";
     $list .= "TOOLS:\n```json\n";
-    $list .= $json->encode($tools::TOOLS);
+    $list .= $::JSON->encode($tools::TOOLS);
     $list .= "\n";
     log_info("TOOLS SECTION>>$list<<");
     return $list;
@@ -894,7 +943,7 @@ sub handle_command {
         $line =~ s|^/system||;
         open(my $sfh, '>>', $STATUS_FILE)
             or die "Failed to write to $STATUS_FILE: $!\n";
-        print {$sfh} $json->encode({ role => 'system', content => $line })."\n";
+        print {$sfh} $::JSON->encode({ role => 'system', content => $line })."\n";
         close $sfh
             or die "Failed to close $STATUS_FILE: $!\n";
         return 0;
@@ -910,7 +959,7 @@ sub handle_command {
         }:'';
         open(my $fh, '>', $STATUS_FILE)
             or die "Failed to write to $STATUS_FILE: $!\n";
-        print {$fh} $json->encode({ role => 'system', content => ($prompt // "") })."\n";
+        print {$fh} $::JSON->encode({ role => 'system', content => ($prompt // "") })."\n";
         close $fh
             or die "Failed to close $STATUS_FILE: $!\n";
         return 0;
@@ -1087,7 +1136,7 @@ sub handle_command {
                 $data = '```'."\n".$data."\n".'```'."\n";
                 open(my $sfh, '>>', $STATUS_FILE)
                     or next;
-                print {$sfh} $json->encode({role => 'user', content => $data})."\n";
+                print {$sfh} $::JSON->encode({role => 'user', content => $data})."\n";
                 close $sfh;
                 print "${colors::green_color}✓${colors::reset_color} added $file to chat\n";
             }
@@ -1102,27 +1151,24 @@ sub handle_command {
     return;
 }
 
+our $response = \(my $buffer = ""); 
 sub http {
     my ($m, $path, $data) = @_;
     my $full_url = "$ai_endpoint_url/$path";
-    eval {load_cpan("WWW::Curl::Easy")};
-    if($@){
-        log_error("Please install WWW::Curl::Easy\n\nE.g.:\n  sudo apt install libwww-curl-perl");
-        exit 1;
-    }
     $data //= "";
     log_info("URL: $full_url");
     log_info("DATA: $data");
+    $$response = "";
     $curl_handle //= do {
-        my $ch = WWW::Curl::Easy->new();
-        $ch->setopt(WWW::Curl::Easy::CURLOPT_IPRESOLVE(), WWW::Curl::Easy::CURL_IPRESOLVE_V6());
-        $ch->setopt(WWW::Curl::Easy::CURLOPT_WRITEFUNCTION(), sub {
-            my ($chunk, $u_ref) = @_;
-            $$u_ref .= $chunk;
+        my $ch = curl->new();
+        $ch->setopt(curl::CURLOPT_IPRESOLVE(), curl::CURL_IPRESOLVE_V6());
+        $ch->setopt(curl::CURLOPT_WRITEFUNCTION(), sub {
+            my ($ch, $chunk) = @_;
+            $$response .= $chunk;
             return length($chunk);
         });
-        $ch->setopt(WWW::Curl::Easy::CURLOPT_VERBOSE(), $DEBUG?1:0);
-        $ch->setopt(WWW::Curl::Easy::CURLOPT_HTTPHEADER(), [
+        $ch->setopt(curl::CURLOPT_VERBOSE(), $DEBUG?1:0);
+        $ch->setopt(curl::CURLOPT_HTTPHEADER(), [
             "Accept: application/json",
             "Content-Type: application/json",
             "User-Agent: AI Chat/0.1",
@@ -1133,32 +1179,51 @@ sub http {
             ):()),
         ]);
         if(my $proxy = $ORIG_ENV{AI_PROXY} // $ORIG_ENV{HTTPS_PROXY} // $ORIG_ENV{HTTP_PROXY}){
-            $ch->setopt(WWW::Curl::Easy::CURLOPT_PROXY(), $proxy);
+            $ch->setopt(curl::CURLOPT_PROXY(), $proxy);
         }
         $ch;
     };
-    $curl_handle->setopt(WWW::Curl::Easy::CURLOPT_URL(), $full_url);
-    my $resp = "";
-    $curl_handle->setopt(WWW::Curl::Easy::CURLOPT_WRITEDATA(), \$resp);
+    $curl_handle->setopt(curl::CURLOPT_URL(), $full_url);
     if(lc($m) eq "post"){
-        $curl_handle->setopt(WWW::Curl::Easy::CURLOPT_POST(), 1);
+        $curl_handle->setopt(curl::CURLOPT_POST(), 1);
         if(length($data)){
-            $curl_handle->setopt(WWW::Curl::Easy::CURLOPT_POSTFIELDS(), $data);
-            $curl_handle->setopt(WWW::Curl::Easy::CURLOPT_POSTFIELDSIZE_LARGE(), length($data));
+            $curl_handle->setopt(curl::CURLOPT_POSTFIELDS(), $data);
+            $curl_handle->setopt(curl::CURLOPT_POSTFIELDSIZE_LARGE(), length($data));
         }
     }
     if(lc($m) eq "get"){
-        $curl_handle->setopt(WWW::Curl::Easy::CURLOPT_HTTPGET(), 1);
+        $curl_handle->setopt(curl::CURLOPT_HTTPGET(), 1);
     }
     $curl_handle->perform();
-    my $r_code = $curl_handle->getinfo(WWW::Curl::Easy::CURLINFO_HTTP_CODE());
+    my $r_code = $curl_handle->getinfo(curl::CURLINFO_HTTP_CODE());
     if($r_code != 200){
         log_info("ERROR: $r_code");
         return;
     }
     log_info("OK: $r_code");
-    log_info("RESPONSE:\n$resp");
-    return $resp;
+    log_info("RESPONSE:\n$$response");
+    return $$response;
+}
+
+package curl;
+
+use strict; use warnings;
+our @ISA = "Net::Curl::Easy";
+
+BEGIN {
+    eval {
+        main::load_cpan("Net::Curl");
+        main::load_cpan("Net::Curl::Easy");
+    };
+    if($@){
+        main::log_error("Please install CPAN Net::Curl");
+        exit 1;
+    }
+    foreach my $k (keys %Net::Curl::Easy::){
+        next unless $k =~ /^CURL/; # Only grab curl constants/options
+        no strict 'refs';
+        *{"${k}"} = \&{"Net::Curl::Easy::${k}"};
+    }
 }
 
 package tools;
@@ -1231,6 +1296,7 @@ sub bash_7c48 {
         return "[ERR] failed to write to temp file: $err";
     }
     local $ENV{PATH} = $ORIG_ENV{PATH};
+    local $!;
     if(open(my $fh, "bash < $fn 2>&1|")){
         local $/;
         my $result = <$fh>;
@@ -1245,7 +1311,6 @@ sub bash_7c48 {
 
 sub perl_d8d2 {
     my ($t_args) = @_;
-    # TODO
     return "[ERR] failed to execute command: $t_args->[0]: $!";
 }
 
@@ -1280,7 +1345,8 @@ sub grep_6629 {
     my $pattern = $t_args->[1];
     return "[ERR] not enough parameters" unless length($path//"") and length($pattern//"");
     local $ENV{PATH} = $ORIG_ENV{PATH};
-    open(my $fh, "grep", $pattern, $path, "-|")
+    local $!;
+    open(my $fh, "-|", "grep", $pattern, $path)
         or return "[ERR] cannot run grep: $!";
     local $/;
     my $result = <$fh>;
