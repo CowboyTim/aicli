@@ -51,7 +51,7 @@ if (!$AI_SESSION) {
     # Generate a UUID for default session
     eval {load_cpan("Data::UUID")};
     if ($@) {
-        print STDERR "Please install Data::UUID module to generate UUIDs\n";
+        log_error("Please install Data::UUID module to generate UUIDs");
         exit 1;
     }
     my $ug = Data::UUID->new();
@@ -71,44 +71,44 @@ load_cpan("JSON::XS");
 my $json //= JSON::XS->new->utf8->allow_blessed->allow_unknown->allow_nonref->convert_blessed;
 
 # Define available tools for the AI system prompt
-my $TOOLS = {        
-    bash => {      
+my $TOOLS = {
+    bash => {
         description => "Execute an arbitrary shell script",
         syntax => "\n///BASH_7c48+EO_dfd7e6b99d1bf15480fa\n{{code}}\nEO_dfd7e6b99d1bf15480fa\nBASH_7c48\n",
         parameters  => [
             {name => "code", required => 1, type => "string", description => "The bash code to execute"},
         ]
-    },                                                
-    perl => {                                                            
-        description => "Execute a perl script",                 
+    },
+    perl => {
+        description => "Execute a perl script",
         syntax => "\n///PERL_d8d2+EO_929b2e8d61111fac138f\n{{code}}\nEO_929b2e8d61111fac138f\nPERL_d8d2",
         parameters  => [
             {name => "code", required => 1, type => "string", description => "The perl code to execute"},
         ]
-    },                                                
-    read => {                                          
-        description => "Read a file contents",      
+    },
+    read => {
+        description => "Read a file contents",
         syntax => "\n///READ_c5a3+EO_d0f15b09ea7648f828e7\n{{path}}\nEO_d0f15b09ea7648f828e7\nREAD_c5a3",
         parameters  => [
             {name => "{{path}}", required => 1, type => "string", description => "The path to the file"},
         ]
-    },                                              
-    write => {                                      
-        description => "Write or overwrite a file's contents",                         
+    },
+    write => {
+        description => "Write or overwrite a file's contents",
         syntax => "\n///WRITE_edf5+EO_d0684c052bf3d9c503a8+EO_ecdeef376b1647fa824a\n{{path}}\nEO_d0684c052bf3d9c503a8\n{{content}}\nEO_ecdeef376b1647fa824a\nWRITE_edf5",
         parameters  => [
-            {name => "{{path}}"  , requided => 1, type => "string", description => "The path to the file"         },      
-            {name => "{{content" , requided => 1, type => "string", description => "The raw text content to write"}      
+            {name => "{{path}}"  , requided => 1, type => "string", description => "The path to the file"         },
+            {name => "{{content" , requided => 1, type => "string", description => "The raw text content to write"}
         ]
-    },                             
-    grep => {                                          
-        description => "Search file with a regex pattern using PERL grep",      
+    },
+    grep => {
+        description => "Search file with a regex pattern using PERL grep",
         syntax => "\n///GREP_6629+EO_a575a5c230c77d451640+EO_aaddf906cba61ec85a13\n{{path}}\nEO_a575a5c230c77d451640\n{{regex}}\nEO_aaddf906cba61ec85a13\nGREP_6629",
         parameters  => [
             {name => "{{path}}"  , required => 1, type => "string", description => "The file path or directory to scan" },
             {name => "{{regex}}" , required => 1, type => "string", description => "The PERL regular expression pattern"},
         ]
-    },                                                                                        
+    },
 };
 
 # Main execution
@@ -135,7 +135,7 @@ sub load_cpan {
 
 sub chat_setup {
     if (!-f $CONFIG_FILE) {
-        print STDERR "Please set AI_DIR/AI_CONFIG/AI_API_KEY environment variable or set $BASE_DIR/config\n";
+        log_error("Please set AI_DIR/AI_CONFIG/AI_API_KEY environment variable or set $BASE_DIR/config");
         exit 1;
     } else {
         open(my $fh, ". $CONFIG_FILE; set|")
@@ -217,13 +217,13 @@ sub chat_setup {
         } elsif ($detected_provider) {
             $ai_endpoint_url = $PROVIDERS{$detected_provider}{url};
         } else {
-            print STDERR "Unable to detect provider from API key. Set AI_PROVIDER environment variable.\n";
-            print STDERR "Supported providers: ".join(', ', keys %PROVIDERS)."\n";
+            log_error("Unable to detect provider from API key. Set AI_PROVIDER environment variable");
+            log_error("Supported providers: ".join(', ', keys %PROVIDERS));
             exit 1;
         }
         $api_key = $ORIG_ENV{AI_API_KEY};
         if (!$api_key) {
-            print STDERR "Please set AI_API_KEY environment variable or set $BASE_DIR/config\n";
+            log_error("Please set AI_API_KEY environment variable or set $BASE_DIR/config");
             exit 1;
         }
         if ($provider_name) {
@@ -246,7 +246,18 @@ sub log_info {
     my $lfh;
     open($lfh, ">>$LOG_FILE") or open($lfh, ">&STDERR") or return;
     print {$lfh} "INFO: [$$]: ".scalar(localtime()).": $message\n";
-    close $lfh or die "Failed to close $LOG_FILE: $!\n";
+    close $lfh or die "Failed to close dup/file $LOG_FILE: $!\n";
+    return;
+}
+
+sub log_error {
+    my ($message) = @_;
+    return unless $DEBUG;
+    my $LOG_FILE = $ORIG_ENV{AI_LOG} // "&STDOUT";
+    my $lfh;
+    open($lfh, ">>$LOG_FILE") or open($lfh, ">&STDERR") or return;
+    print {$lfh} "ERROR: [$$]: ".scalar(localtime()).": $message\n";
+    close $lfh or die "Failed to close dup/file $LOG_FILE: $!\n";
     return;
 }
 
@@ -277,7 +288,7 @@ sub chat_completion {
 
     my $raw = http("post", "v1/chat/completions", $json->encode($req));
     if(!$raw){
-        print "Error: No response from API\n";
+        log_error("No response from API");
         return;
     }
 
@@ -299,19 +310,17 @@ sub chat_completion {
                 }
                 if (defined $delta && length($delta)) {
                     _utf8_off($delta);
-                    print $delta;        # immediate output to user
+                    print $delta;
                     $assistant_text .= $delta;
                 }
             };
-            if ($@) {
-                warn "Failed to decode SSE event: $event";
-            }
+            log_info("Failed to decode SSE event: $event, error: $@") if $@;
         }
     } else {
         # Non‑streaming response (original behaviour)
         my $decoded = JSON::XS->new->utf8->decode($raw);
         unless (exists $decoded->{choices}[0]{message}{content}) {
-            print "Error: Failed to parse response\n";
+            log_error("Failed to parse response");
             return;
         }
         $assistant_text = $decoded->{choices}[0]{message}{content};
@@ -338,7 +347,7 @@ sub chat_completion {
         }
 
         log_info("Tool call detected: $tool with args: $args");
-          print "${colors::yellow_color1}Executing tool: /$tool $args${colors::reset_color}\n";
+        log_info("${colors::yellow_color1}Executing tool: /$tool $args${colors::reset_color}\n");
 
         my $result = execute_tool($tool, $args);
         if ($result) {
@@ -480,7 +489,7 @@ sub list_models {
     my $model_path = $provider_name eq 'anthropic' ? 'models' : 'v1/chat/models';
     my $response = http("get", $model_path);
     if (!$response) {
-        print "Error: Failed to fetch models\n";
+        log_error("Failed to fetch models");
         return;
     }
     my $resp = JSON::XS::decode_json($response);
@@ -492,7 +501,7 @@ sub list_models {
     } elsif (ref($resp) eq 'ARRAY') {
         @models = @$resp;
     } else {
-        print "Error: Failed to parse models response\n";
+        log_error("Failed to parse models response");
         return;
     }
 
@@ -1128,7 +1137,7 @@ sub handle_command {
                     push @models, $model;
                 }
             } else {
-                print "Error: Failed to parse models response\n";
+                log_error("Failed to parse models response");
             }
             foreach my $model (@models) {
                 if ($model->{id} eq $current_model) {
@@ -1221,7 +1230,7 @@ sub http {
     my $full_url = "$ai_endpoint_url/$path";
     eval {load_cpan("WWW::Curl::Easy")};
     if($@){
-        print STDERR "Please install WWW::Curl::Easy\n\nE.g.:\n  sudo apt install libwww-curl-perl\n";
+        log_error("Please install WWW::Curl::Easy\n\nE.g.:\n  sudo apt install libwww-curl-perl");
         exit 1;
     }
     $data //= "";
