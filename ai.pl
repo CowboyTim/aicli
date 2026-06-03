@@ -295,7 +295,6 @@ sub chat_completion {
     $resp =~ s/<think>.*?<\/think>//msg;
     while($resp =~ m/$tools::TOOLS_RX/msg){
         my $tool_entry = $1;
-        print "ENTRY: $tool_entry\n";
         my @t_args;
         @t_args = map {substr($resp, $-[$_], $+[$_] - $-[$_])} grep {defined $-[$_] and $+[$_]} 2 .. @--1 if @- >= 3;
         $tool_entry =~ m{^///((.*?)_[a-fA-F0-9]+)}gms;
