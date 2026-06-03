@@ -247,8 +247,6 @@ sub chat_completion {
     log_info("Requesting completion from AI API $ai_endpoint_url with ".($api_key//'<no api key>'));
 
     CHAT_LOOP:
-    my @new_turns;
-
     my $raw = http("post", "v1/chat/completions", $json->encode($req));
     if(!$raw){
         log_error("No response from API");
@@ -256,13 +254,13 @@ sub chat_completion {
     }
 
     # Variable to hold the assembled assistant message
-    my $assistant_text = '';
+    my $resp = '';
 
     if ($ORIG_ENV{AI_STREAM} // 0){
         # Parse Server-Sent Events (SSE) stream
         foreach my $event (split /\n\n/, $raw) {
             next unless $event =~ s/^data:\s*//;
-            if ($event eq '[DONE]') { last; }
+            last if $event eq '[DONE]';
             eval {
                 my $decoded = JSON::XS->new->utf8->decode($event);
                 my $delta = '';
@@ -274,7 +272,7 @@ sub chat_completion {
                 if (defined $delta && length($delta)) {
                     _utf8_off($delta);
                     print $delta;
-                    $assistant_text .= $delta;
+                    $resp .= $delta;
                 }
             };
             log_info("Failed to decode SSE event: $event, error: $@") if $@;
@@ -286,11 +284,12 @@ sub chat_completion {
             log_error("Failed to parse response");
             return;
         }
-        $assistant_text = $decoded->{choices}[0]{message}{content};
+        $resp = $decoded->{choices}[0]{message}{content};
     }
 
-    my $resp = $assistant_text;
+    _utf8_off($resp);
     my $pos = 0;
+    my $newturns = 0;
 
     $resp =~ s/<think>.*?<\/think>//msg;
     while($resp =~ m/$tools::TOOLS_RX/msg){
@@ -304,30 +303,28 @@ sub chat_completion {
         next unless exists $tools::TOOLS->{$tool_k};
         substr($resp, 0, pos($resp)) = '';
 
-        log_info("${colors::yellow_color1}\[TOOL $tool(".join(' ', @t_args).")\]${colors::reset_color}\n");
-        push @new_turns, {role => 'asistant', content => $tool_entry};
+        print "${colors::yellow_color1}\[TOOL $tool(".join(' ', @t_args).")\]${colors::reset_color}\n";
+        push @jstr, {role => 'asistant', content => $tool_entry};
         my $result = execute_tool($tool_k, $tool, \@t_args);
-        my $tool_response = "[TOOL RESULT from $tool: $result]";
-        log_info("${colors::yellow_color1}$tool_response${colors::reset_color}\n");
-        push @new_turns, {role => 'user', content => $tool_response};
+        my $tool_response = "[TOOL RESULT $tool: $result]";
+        print "${colors::yellow_color1}$tool_response${colors::reset_color}\n";
+        push @jstr, {role => 'user', content => $tool_response};
         $pos = pos($resp);  # Update position for next iteration
+        $newturns = 1;
     }
 
     # Add any remaining text after last tool call as final assistant message
     if (defined $resp and (pos($resp)//0) < length($resp)) {
         my $remaining_text = substr($resp, (pos($resp)//0));
-        push @new_turns, {role => 'assistant', content => $remaining_text} if length($remaining_text);
-    } elsif (!@new_turns) {
-        push @new_turns, {role => 'assistant', content => $resp};
-    }
-
-    _utf8_off($resp);
-
-    # Output and save the new conversation turns
-    foreach my $turn (@new_turns) {
-        _utf8_off($turn->{content});
-        print $turn->{content} . "\n" if $turn->{role} eq 'assistant';
-        push @jstr, $turn;
+        if(length($remaining_text)){
+            push @jstr, {role => 'assistant', content => $remaining_text};
+            _utf8_off($remaining_text);
+            print $remaining_text;
+        }
+    } elsif (!@jstr) {
+        push @jstr, {role => 'assistant', content => $resp};
+        _utf8_off($resp);
+        print $resp;
     }
 
     # save updated messages to status file
@@ -337,7 +334,7 @@ sub chat_completion {
     close $sfh_final
          or die "Failed to close $STATUS_FILE: $!\n";
 
-    goto CHAT_LOOP if @new_turns;
+    goto CHAT_LOOP if $newturns;
     return;
 }
 
