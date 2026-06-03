@@ -69,37 +69,47 @@ my $STATUS_FILE  = "$AI_SESSION_DIR/chat";
 our ($api_key, $curl_handle, $ai_endpoint_url, $SESSION_MODEL, $provider_name, $v1_prefix);
 load_cpan("JSON::XS");
 my $json //= JSON::XS->new->utf8->allow_blessed->allow_unknown->allow_nonref->convert_blessed;
+
 # Define available tools for the AI system prompt
-my %TOOLS = (
-    bash => {
-        description => "Execute an arbitrary shell command",
-        usage => "/bash <command>",
-    },
-    read => {
-        description => "Read a file contents",
-        usage => "/read <path>",
-    },
-    write => {
-        description => "Write/overwrite a file contents",
-        usage => "/write <path> ...",
-    },
-    grep => {
-        description => "Search files with regex pattern",
-        usage => "/grep <pattern> [path]",
-    },
-);
-sub _tool_list_for_prompt {
-    my $list = "## AI TOOLS LIST\n";
-    foreach my $name (sort keys %TOOLS) {
-        my $info = $TOOLS{$name};
-        $list .= "- $name: " . $info->{description};
-        if (my $usage = $info->{usage}) {
-            $list .= qq{ (" . $usage . ")};
-        }
-        $list .= "\n";
-    }
-    return $list;
-}
+my $TOOLS = {        
+    bash => {      
+        description => "Execute an arbitrary shell script",
+        syntax => "\n///BASH_7c48+EO_dfd7e6b99d1bf15480fa\n{{code}}\nEO_dfd7e6b99d1bf15480fa\nBASH_7c48\n",
+        parameters  => [
+            {name => "code", required => 1, type => "string", description => "The bash code to execute"},
+        ]
+    },                                                
+    perl => {                                                            
+        description => "Execute a perl script",                 
+        syntax => "\n///PERL_d8d2+EO_929b2e8d61111fac138f\n{{code}}\nEO_929b2e8d61111fac138f\nPERL_d8d2",
+        parameters  => [
+            {name => "code", required => 1, type => "string", description => "The perl code to execute"},
+        ]
+    },                                                
+    read => {                                          
+        description => "Read a file contents",      
+        syntax => "\n///READ_c5a3+EO_d0f15b09ea7648f828e7\n{{path}}\nEO_d0f15b09ea7648f828e7\nREAD_c5a3",
+        parameters  => [
+            {name => "{{path}}", required => 1, type => "string", description => "The path to the file"},
+        ]
+    },                                              
+    write => {                                      
+        description => "Write or overwrite a file's contents",                         
+        syntax => "\n///WRITE_edf5+EO_d0684c052bf3d9c503a8+EO_ecdeef376b1647fa824a\n{{path}}\nEO_d0684c052bf3d9c503a8\n{{content}}\nEO_ecdeef376b1647fa824a\nWRITE_edf5",
+        parameters  => [
+            {name => "{{path}}"  , requided => 1, type => "string", description => "The path to the file"         },      
+            {name => "{{content" , requided => 1, type => "string", description => "The raw text content to write"}      
+        ]
+    },                             
+    grep => {                                          
+        description => "Search file with a regex pattern using PERL grep",      
+        syntax => "\n///GREP_6629+EO_a575a5c230c77d451640+EO_aaddf906cba61ec85a13\n{{path}}\nEO_a575a5c230c77d451640\n{{regex}}\nEO_aaddf906cba61ec85a13\nGREP_6629",
+        parameters  => [
+            {name => "{{path}}"  , required => 1, type => "string", description => "The file path or directory to scan" },
+            {name => "{{regex}}" , required => 1, type => "string", description => "The PERL regular expression pattern"},
+        ]
+    },                                                                                        
+};
 
 # Main execution
 our $cmds;
@@ -244,45 +254,88 @@ sub chat_completion {
     my ($input) = @_;
     log_info("User input: $input");
 
-    # Get current messages, add user message, make request, only commit if successful
-    open(my $fh_read, '<', $STATUS_FILE) or die "Failed to read $STATUS_FILE: $!\n";
-    my @jstr = do { map { chomp; JSON::XS::decode_json($_) } <$fh_read> };
+    # Get current messages, add user message
+    open(my $fh_read, '<', $STATUS_FILE)
+        or die "Failed to read $STATUS_FILE: $!\n";
+    my @jstr = do {map {chomp; JSON::XS::decode_json($_)} <$fh_read>};
     close $fh_read;
-
     push @jstr, {role => 'user', content => $input};
 
     my $req = {
-        model       => $SESSION_MODEL || $ORIG_ENV{AI_MODEL}  // 'llama-4-scout-17b-16e-instruct',
+        model       => $SESSION_MODEL || $ORIG_ENV{AI_MODEL} // 'llama-4-scout-17b-16e-instruct',
         max_tokens  => $ORIG_ENV{AI_TOKENS} // 8192,
-        stream      => JSON::XS::false(),
+        stream      => 1,
         messages    => \@jstr,
         temperature => $ORIG_ENV{AI_TEMPERATURE} // 0,
         top_p       => 1
     };
 
     # Provider-specific options
-    if (($provider_name//'') eq 'openrouter') {
-        $req->{provider} = {"only" => ["Cerebras"]};
-    }
+    $req->{provider} = {only => ["Cerebras"]} if ($provider_name//'') eq 'openrouter';
     log_info($json->encode($req));
     log_info("Requesting completion from AI API $ai_endpoint_url with ".($api_key//'<no api key>'));
 
-    my $response = http("post", "v1/chat/completions", $json->encode($req));
-    if(!$response){
+    my $raw = http("post", "v1/chat/completions", $json->encode($req));
+    if(!$raw){
         print "Error: No response from API\n";
         return;
     }
-    my $resp = JSON::XS::decode_json($response)->{choices}[0]{message}{content};
-    if (!$resp) {
-        print "Error: Failed to parse response\n";
-        return;
+
+    # Variable to hold the assembled assistant message
+    my $assistant_text = '';
+
+    if ($ORIG_ENV{AI_STREAM} // 0){
+        # Parse Server-Sent Events (SSE) stream
+        foreach my $event (split /\n\n/, $raw) {
+            next unless $event =~ s/^data:\s*//;
+            if ($event eq '[DONE]') { last; }
+            eval {
+                my $decoded = JSON::XS->new->utf8->decode($event);
+                my $delta = '';
+                if (exists $decoded->{choices}[0]{delta}{content}) {
+                    $delta = $decoded->{choices}[0]{delta}{content};
+                } elsif (exists $decoded->{choices}[0]{message}{content}) {
+                    $delta = $decoded->{choices}[0]{message}{content};
+                }
+                if (defined $delta && length($delta)) {
+                    _utf8_off($delta);
+                    print $delta;        # immediate output to user
+                    $assistant_text .= $delta;
+                }
+            };
+            if ($@) {
+                warn "Failed to decode SSE event: $event";
+            }
+        }
+    } else {
+        # Non‑streaming response (original behaviour)
+        my $decoded = JSON::XS->new->utf8->decode($raw);
+        unless (exists $decoded->{choices}[0]{message}{content}) {
+            print "Error: Failed to parse response\n";
+            return;
+        }
+        $assistant_text = $decoded->{choices}[0]{message}{content};
     }
 
-    # Process tool calls in the AI response
+    # Re‑use the existing tool‑call processing logic on the assembled text
+    my $resp = $assistant_text;   # reuse variable name expected by downstream code
+
+     # Process tool calls in the AI response - FIXED VERSION
+    my @new_turns;  # Collect message turns to add
+    my $pos = 0;
+
     while ($resp =~ m{/(\w+)\s+([^\n]+)}g) {
         my $tool = $1;
         my $args = $2;
-        next unless exists $TOOLS{$tool};
+        next unless exists $TOOLS->{$tool};
+
+        # Extract assistant text BEFORE this tool call
+        if (pos($resp) > length($args) + 2 + length($tool)) {  # "/tool " prefix
+            my $assistant_text_sub = substr($resp, $pos, pos($resp) - length($args) - 2 - length($tool));
+            if (length($assistant_text_sub)) {
+                push @new_turns, {role => 'assistant', content => $assistant_text_sub};
+            }
+        }
 
         log_info("Tool call detected: $tool with args: $args");
           print "${colors::yellow_color1}Executing tool: /$tool $args${colors::reset_color}\n";
@@ -290,91 +343,119 @@ sub chat_completion {
         my $result = execute_tool($tool, $args);
         if ($result) {
             my $tool_response = "[TOOL RESULT from $tool: $result]";
-            push @jstr, 
-                {role => 'assistant', content => $resp},
-                {role => 'user', content => $tool_response};
+            push @new_turns, {role => 'user', content => $tool_response};
             log_info("Sending tool result back to AI: $tool_response");
-            last if $jstr[-1]{role} ne 'user';
         }
+
+        $pos = pos($resp);  # Update position for next iteration
+    }
+
+    # Add any remaining text after last tool call as final assistant message
+    if (defined $resp and (pos($resp)//0) < length($resp)) {
+        my $remaining_text = substr($resp, (pos($resp)//0));
+        push @new_turns, {role => 'assistant', content => $remaining_text} if length($remaining_text);
+    } elsif (!@new_turns) {
+        push @new_turns, {role => 'assistant', content => $resp};
     }
 
     _utf8_off($resp);
 
-    # Write assistant message and complete the turn
-    push @jstr, {role => 'assistant', content => $resp};
-    print "$resp\n";
-    log_info("AI response: $resp");
+    # Output and save the new conversation turns
+    foreach my $turn (@new_turns) {
+        print $turn->{content} . "\n" if $turn->{role} eq 'assistant';
+        push @jstr, $turn;
+    }
 
     # save updated messages to status file
     open(my $sfh_final, '>', $STATUS_FILE)
-        or die "Failed to write to $STATUS_FILE: $!\n";
+         or die "Failed to write to $STATUS_FILE: $!\n";
     print {$sfh_final} $json->encode($_)."\n" for @jstr;
     close $sfh_final
-        or die "Failed to close $STATUS_FILE: $!\n";
+         or die "Failed to close $STATUS_FILE: $!\n";
 
     return;
 }
 
+sub _tool_bash {
+    my ($args) = @_;
+    # dump args to a temp file and execute with bash, capture output
+    load_cpan("File::Temp");
+    my ($fh, $fn) = File::Temp::tempfile();
+    print {$fh} $args;
+    if(!close($fh)){
+        my $err = $!;
+        unlink $fn;
+        return "[ERR] Failed to write to temp file for bash command: $err";
+    }
+    if(open(my $fh, "bash < $fn 2>&1|")){
+        local $/;
+        my $result = <$fh>;
+        close($fh);
+        my $err = $?;
+        unlink $fn;
+        return "[ERR] problem running tool 'bash': $err, output: $result" if $err;
+        return $result;
+    }
+    return "[ERR] Failed to execute command: $args: $!";
+}
+
+sub _tool_read {
+    my ($args) = @_;
+    my $file = trim($args);
+    if (open(my $fh, '<', $file)) {
+        local $/;
+        my $content = <$fh>;
+        close($fh);
+        return $content // "";
+    }
+    return "[ERR] File not found: $file: $!";
+}
+
+sub _tool_write {
+    my ($args) = @_;
+    if (shift_args($args, \my $path)) {
+        open(my $fh, '>', $path)
+            or die "Cannot write to $path: $!";
+        print {$fh} shift_args($args);
+        if(!close($fh)){
+            return "[ERR] problem running tool 'write' for $path: $!";
+        }
+        return "Written to $path";
+    }
+    return "[ERR] Usage: /write <path> [content]";
+}
+
+sub _tool_grep {
+    my ($args) = @_;
+    my @parts = split(/\s+/, trim($args), 2);
+    if (@parts >= 1) {
+        my $path_arg = @parts > 1 ? $parts[1] : '.';
+        open(my $fh, "grep", "-r", $parts[0], $path_arg, "-|")
+            or return "[ERR] Cannot run grep: $!";
+        local $/;
+        my $result = <$fh>;
+        close($fh);
+        return "[ERR] problem running tool 'bash': $?" if $?;
+        return $result // "";
+    }
+    return "[ERR] Usage: /grep <pattern> [path]";
+}
+
 sub execute_tool {
     my ($tool, $args) = @_;
-    if ($tool eq 'bash') {
-        # dump args to a temp file and execute with bash, capture output
-        load_cpan("File::Temp");
-        my ($fh, $fn) = File::Temp::tempfile();
-        print {$fh} $args;
-        close($fh)
-            or do {
-                unlink $fn;
-                return "[ERR] Failed to write to temp file for bash command: $!";
-            };
-        if(open(my $fh, "bash < $fn 2>&1|")){
-            local $/;
-            my $result = <$fh>;
-            close($fh);
-            unlink $fn;
-            return $result;
-        } else {
-            return "[ERR] Failed to execute command: $args: $!";
-        }
-    } elsif ($tool eq 'read') {
-        my $file = trim($args);
-        if (open(my $fh, '<', $file)) {
-            local $/;
-            my $content = <$fh>;
-            close($fh);
-            return $content // "";
-        } else {
-            return "[ERR] File not found: $file: $!";
-        }
-    } elsif ($tool eq 'write') {
-        if (shift_args($args, \my $path)) {
-            open(my $fh, '>', $path) or die "Cannot write to $path: $!";
-            print {$fh} shift_args($args);
-            close($fh);
-            return "Written to $path";
-        } else {
-            return "[ERR] Usage: /write <path> [content]";
-        }
-    } elsif ($tool eq 'grep') {
-        my @parts = split(/\s+/, trim($args), 2);
-        if (@parts >= 1) {
-            my $pattern = $parts[0];
-            my $path_arg = @parts > 1 ? $parts[1] : '.';
-            # escape double quotes in pattern and path_arg
-            $pattern =~ s/"/\\"/g;
-            $path_arg =~ s/"/\\"/g;
-            open(my $fh, "grep -r \"$pattern\" \"$path_arg\" 2>&1|")
-                or return "[ERR] Cannot run grep: $!";
-            local $/;
-            my $result = <$fh>;
-            close($fh);
-            return $result // "";
-        } else {
-            return "[ERR] Usage: /grep <pattern> [path]";
-        }
+    return "[ERR] Unknown tool '$tool'" unless exists $TOOLS->{$tool};
+    my $tn = "_tool_$tool";
+    my $ret;
+    eval {
+        # TODO: use Safe Eval AND fork() ?
+        no strict 'subs';
+        return &{$tn}($args);
+    };
+    if($@){
+        chomp(my $err = $@);
+        return "[ERR] problem running tool '$tool': $err";
     }
-
-    return "[ERR] Unknown tool '$tool'";
+    return $ret;
 }
 
 sub trim {
@@ -448,8 +529,8 @@ sub setup_commands {
     },
     '/tools' => sub {
         print "Available tools:\n";
-        foreach my $name (sort keys %TOOLS) {
-            my $info = $TOOLS{$name};
+        foreach my $name (sort keys %$TOOLS) {
+            my $info = $TOOLS->{$name};
             print "  /$name: " . $info->{description} . "\n";
             if (my $usage = $info->{usage}) {
                 print "    Usage: $usage\n";
@@ -590,7 +671,8 @@ sub init_session {
         open(my $pfh, '>', $p_file)
             or die "Failed to write to $p_file: $!\n";
         print {$pfh} $prompt;
-        close $pfh or die "Failed to close $p_file: $!\n";
+        close $pfh
+            or die "Failed to close $p_file: $!\n";
     }
     if(!-s $s_file or ($ORIG_ENV{AI_CLEAR}//0)){
         my $prompt;
@@ -599,12 +681,22 @@ sub init_session {
             $prompt = <$fh>;
             close($fh);
         }
+        $prompt .= _tool_list_for_prompt();
         open(my $fh, '>', $s_file)
             or die "Failed to write to $s_file: $!\n";
-        print {$fh} $json->encode({ role => 'system', content => ($prompt // "") })."\n";
+        print {$fh} $json->encode({role => 'system', content => ($prompt // "")})."\n";
         close $fh
             or die "Failed to close $s_file: $!\n";
     }
+}
+
+sub _tool_list_for_prompt {
+    my $list = "\nTOOLS 'syntax': \n///TOOL_{HEX}+{T1}+{T2}\n{{path}}\n{T1}\n{{content}}\n{T2}\nTOOL_{HEX}\n where {{path}}, {{content} is substituted by the LLM";
+    $list .= "TOOLS:\n```json\n";
+    $list .= $json->encode($TOOLS);
+    $list .= "\n";
+    log_info("TOOLS SECTION>>$list<<");
+    return $list;
 }
 
 sub get_sessions {
@@ -951,8 +1043,8 @@ sub handle_command {
     }
     if ($line =~ m|^/tools$|) {
         print "Available tools:\n";
-        foreach my $name (sort keys %TOOLS) {
-            my $info = $TOOLS{$name};
+        foreach my $name (sort keys %$TOOLS) {
+            my $info = $TOOLS->{$name};
             print "  /$name: " . $info->{description} . "\n";
             if (my $usage = $info->{usage}) {
                 print "    Usage: $usage\n";
