@@ -70,46 +70,6 @@ our ($api_key, $curl_handle, $ai_endpoint_url, $SESSION_MODEL, $provider_name, $
 load_cpan("JSON::XS");
 my $json //= JSON::XS->new->utf8->allow_blessed->allow_unknown->allow_nonref->convert_blessed;
 
-# Define available tools for the AI system prompt
-my $TOOLS = {
-    bash => {
-        description => "Execute an arbitrary shell script",
-        syntax => "\n///BASH_7c48+EO_dfd7e6b99d1bf15480fa\n{{code}}\nEO_dfd7e6b99d1bf15480fa\nBASH_7c48\n",
-        parameters  => [
-            {name => "code", required => 1, type => "string", description => "The bash code to execute"},
-        ]
-    },
-    perl => {
-        description => "Execute a perl script",
-        syntax => "\n///PERL_d8d2+EO_929b2e8d61111fac138f\n{{code}}\nEO_929b2e8d61111fac138f\nPERL_d8d2",
-        parameters  => [
-            {name => "code", required => 1, type => "string", description => "The perl code to execute"},
-        ]
-    },
-    read => {
-        description => "Read a file contents",
-        syntax => "\n///READ_c5a3+EO_d0f15b09ea7648f828e7\n{{path}}\nEO_d0f15b09ea7648f828e7\nREAD_c5a3",
-        parameters  => [
-            {name => "{{path}}", required => 1, type => "string", description => "The path to the file"},
-        ]
-    },
-    write => {
-        description => "Write or overwrite a file's contents",
-        syntax => "\n///WRITE_edf5+EO_d0684c052bf3d9c503a8+EO_ecdeef376b1647fa824a\n{{path}}\nEO_d0684c052bf3d9c503a8\n{{content}}\nEO_ecdeef376b1647fa824a\nWRITE_edf5",
-        parameters  => [
-            {name => "{{path}}"  , requided => 1, type => "string", description => "The path to the file"         },
-            {name => "{{content" , requided => 1, type => "string", description => "The raw text content to write"}
-        ]
-    },
-    grep => {
-        description => "Search file with a regex pattern using PERL grep",
-        syntax => "\n///GREP_6629+EO_a575a5c230c77d451640+EO_aaddf906cba61ec85a13\n{{path}}\nEO_a575a5c230c77d451640\n{{regex}}\nEO_aaddf906cba61ec85a13\nGREP_6629",
-        parameters  => [
-            {name => "{{path}}"  , required => 1, type => "string", description => "The file path or directory to scan" },
-            {name => "{{regex}}" , required => 1, type => "string", description => "The PERL regular expression pattern"},
-        ]
-    },
-};
 
 # Main execution
 our $cmds;
@@ -286,6 +246,9 @@ sub chat_completion {
     log_info($json->encode($req));
     log_info("Requesting completion from AI API $ai_endpoint_url with ".($api_key//'<no api key>'));
 
+    CHAT_LOOP:
+    my @new_turns;
+
     my $raw = http("post", "v1/chat/completions", $json->encode($req));
     if(!$raw){
         log_error("No response from API");
@@ -326,36 +289,25 @@ sub chat_completion {
         $assistant_text = $decoded->{choices}[0]{message}{content};
     }
 
-    # Re‑use the existing tool‑call processing logic on the assembled text
-    my $resp = $assistant_text;   # reuse variable name expected by downstream code
-
-     # Process tool calls in the AI response - FIXED VERSION
-    my @new_turns;  # Collect message turns to add
+    my $resp = $assistant_text;
     my $pos = 0;
 
-    while ($resp =~ m{/(\w+)\s+([^\n]+)}g) {
-        my $tool = $1;
-        my $args = $2;
-        next unless exists $TOOLS->{$tool};
+    $resp =~ s/<think>.*?<\/think>//msg;
+    while($resp =~ m/$tools::TOOLS_RX/msg){
+        my $tool_entry = $1;
+        my $args = join(" ", map {substr($resp, $-[$_], $+[$_] - $-[$_])} 2 .. @--1);
+        $tool_entry =~ m{^///((.*?)_[a-fA-F0-9]+)}gms;
+        my $tool   = $1;
+        my $tool_k = lc $2;
+        next unless exists $tools::TOOLS->{$tool_k};
+        substr($resp, 0, pos($resp)) = '';
 
-        # Extract assistant text BEFORE this tool call
-        if (pos($resp) > length($args) + 2 + length($tool)) {  # "/tool " prefix
-            my $assistant_text_sub = substr($resp, $pos, pos($resp) - length($args) - 2 - length($tool));
-            if (length($assistant_text_sub)) {
-                push @new_turns, {role => 'assistant', content => $assistant_text_sub};
-            }
-        }
-
-        log_info("Tool call detected: $tool with args: $args");
-        log_info("${colors::yellow_color1}Executing tool: /$tool $args${colors::reset_color}\n");
-
-        my $result = execute_tool($tool, $args);
-        if ($result) {
-            my $tool_response = "[TOOL RESULT from $tool: $result]";
-            push @new_turns, {role => 'user', content => $tool_response};
-            log_info("Sending tool result back to AI: $tool_response");
-        }
-
+        log_info("${colors::yellow_color1}\[TOOL $tool($args)\]${colors::reset_color}\n");
+        push @new_turns, {role => 'asistant', content => $tool_entry};
+        my $result = execute_tool($tool_k, $tool, $args);
+        my $tool_response = "[TOOL RESULT from $tool: $result]";
+        log_info("${colors::yellow_color1}$tool_response${colors::reset_color}\n");
+        push @new_turns, {role => 'user', content => $tool_response};
         $pos = pos($resp);  # Update position for next iteration
     }
 
@@ -382,82 +334,18 @@ sub chat_completion {
     close $sfh_final
          or die "Failed to close $STATUS_FILE: $!\n";
 
+    goto CHAT_LOOP if @new_turns;
     return;
 }
 
-sub _tool_bash {
-    my ($args) = @_;
-    # dump args to a temp file and execute with bash, capture output
-    load_cpan("File::Temp");
-    my ($fh, $fn) = File::Temp::tempfile();
-    print {$fh} $args;
-    if(!close($fh)){
-        my $err = $!;
-        unlink $fn;
-        return "[ERR] Failed to write to temp file for bash command: $err";
-    }
-    if(open(my $fh, "bash < $fn 2>&1|")){
-        local $/;
-        my $result = <$fh>;
-        close($fh);
-        my $err = $?;
-        unlink $fn;
-        return "[ERR] problem running tool 'bash': $err, output: $result" if $err;
-        return $result;
-    }
-    return "[ERR] Failed to execute command: $args: $!";
-}
-
-sub _tool_read {
-    my ($args) = @_;
-    my $file = trim($args);
-    if (open(my $fh, '<', $file)) {
-        local $/;
-        my $content = <$fh>;
-        close($fh);
-        return $content // "";
-    }
-    return "[ERR] File not found: $file: $!";
-}
-
-sub _tool_write {
-    my ($args) = @_;
-    if (shift_args($args, \my $path)) {
-        open(my $fh, '>', $path)
-            or die "Cannot write to $path: $!";
-        print {$fh} shift_args($args);
-        if(!close($fh)){
-            return "[ERR] problem running tool 'write' for $path: $!";
-        }
-        return "Written to $path";
-    }
-    return "[ERR] Usage: /write <path> [content]";
-}
-
-sub _tool_grep {
-    my ($args) = @_;
-    my @parts = split(/\s+/, trim($args), 2);
-    if (@parts >= 1) {
-        my $path_arg = @parts > 1 ? $parts[1] : '.';
-        open(my $fh, "grep", "-r", $parts[0], $path_arg, "-|")
-            or return "[ERR] Cannot run grep: $!";
-        local $/;
-        my $result = <$fh>;
-        close($fh);
-        return "[ERR] problem running tool 'bash': $?" if $?;
-        return $result // "";
-    }
-    return "[ERR] Usage: /grep <pattern> [path]";
-}
-
 sub execute_tool {
-    my ($tool, $args) = @_;
-    return "[ERR] Unknown tool '$tool'" unless exists $TOOLS->{$tool};
-    my $tn = "_tool_$tool";
-    my $ret;
+    my ($k, $tool, $args) = @_;
+    return "[ERR] Unknown tool '$tool'" unless exists $tools::TOOLS->{$k};
+    my $tn = lc("tools::$tool");
+    my $ret =
     eval {
         # TODO: use Safe Eval AND fork() ?
-        no strict 'subs';
+        no strict 'refs';
         return &{$tn}($args);
     };
     if($@){
@@ -538,8 +426,8 @@ sub setup_commands {
     },
     '/tools' => sub {
         print "Available tools:\n";
-        foreach my $name (sort keys %$TOOLS) {
-            my $info = $TOOLS->{$name};
+        foreach my $name (sort keys %$tools::TOOLS) {
+            my $info = $tools::TOOLS->{$name};
             print "  /$name: " . $info->{description} . "\n";
             if (my $usage = $info->{usage}) {
                 print "    Usage: $usage\n";
@@ -702,7 +590,7 @@ sub init_session {
 sub _tool_list_for_prompt {
     my $list = "\nTOOLS 'syntax': \n///TOOL_{HEX}+{T1}+{T2}\n{{path}}\n{T1}\n{{content}}\n{T2}\nTOOL_{HEX}\n where {{path}}, {{content} is substituted by the LLM";
     $list .= "TOOLS:\n```json\n";
-    $list .= $json->encode($TOOLS);
+    $list .= $json->encode($tools::TOOLS);
     $list .= "\n";
     log_info("TOOLS SECTION>>$list<<");
     return $list;
@@ -1052,8 +940,8 @@ sub handle_command {
     }
     if ($line =~ m|^/tools$|) {
         print "Available tools:\n";
-        foreach my $name (sort keys %$TOOLS) {
-            my $info = $TOOLS->{$name};
+        foreach my $name (sort keys %$tools::TOOLS) {
+            my $info = $tools::TOOLS->{$name};
             print "  /$name: " . $info->{description} . "\n";
             if (my $usage = $info->{usage}) {
                 print "    Usage: $usage\n";
@@ -1283,6 +1171,136 @@ sub http {
     log_info("RESPONSE:\n$resp");
     return $resp;
 }
+
+package tools;
+
+# Define available tools for the AI system prompt
+our $TOOLS;
+our $TOOLS_RX;
+
+BEGIN {
+    $tools::TOOLS = {
+    bash => {
+        description => "execute a bash script",
+        syntax => "\n///BASH_7c48+EO_dfd7e6b99d1bf15480fa\n{{code}}\nEO_dfd7e6b99d1bf15480fa\nBASH_7c48",
+        parameters  => [
+            {name => "code", required => 1, type => "string", description => "The bash code to execute"},
+        ]
+    },
+    perl => {
+        description => "execute a perl script",
+        syntax => "\n///PERL_d8d2+EO_929b2e8d61111fac138f\n{{code}}\nEO_929b2e8d61111fac138f\nPERL_d8d2",
+        parameters  => [
+            {name => "code", required => 1, type => "string", description => "The perl code to execute"},
+        ]
+    },
+    read => {
+        description => "read a file contents",
+        syntax => "\n///READ_c5a3+EO_d0f15b09ea7648f828e7\n{{path}}\nEO_d0f15b09ea7648f828e7\nREAD_c5a3",
+        parameters  => [
+            {name => "{{path}}", required => 1, type => "string", description => "The path to the file"},
+        ]
+    },
+    write => {
+        description => "write or overwrite a file",
+        syntax => "\n///WRITE_edf5+EO_d0684c052bf3d9c503a8+EO_ecdeef376b1647fa824a\n{{path}}\nEO_d0684c052bf3d9c503a8\n{{content}}\nEO_ecdeef376b1647fa824a\nWRITE_edf5",
+        parameters  => [
+            {name => "{{path}}"  , requided => 1, type => "string", description => "The path to the file"         },
+            {name => "{{content" , requided => 1, type => "string", description => "The raw text content to write"}
+        ]
+    },
+    grep => {
+        description => "search file with a regex pattern using PERL grep",
+        syntax => "\n///GREP_6629+EO_a575a5c230c77d451640+EO_aaddf906cba61ec85a13\n{{path}}\nEO_a575a5c230c77d451640\n{{regex}}\nEO_aaddf906cba61ec85a13\nGREP_6629",
+        parameters  => [
+            {name => "{{path}}"  , required => 1, type => "string", description => "The file path or directory to scan" },
+            {name => "{{regex}}" , required => 1, type => "string", description => "The PERL regular expression pattern"},
+        ]
+    },
+    };
+
+    my @all_t_rx;
+    foreach my $t (sort values %{$tools::TOOLS//{}}){
+        my $t_rx = $t->{syntax};
+        $t_rx =~ s/\{\{.*?\}\}/\(.*?\)/msg;
+        $t_rx =~ s/\+/\\+/msg;
+        $t_rx =~ s/\n/\\n/msg;
+        push @all_t_rx, "($t_rx)";
+    }
+    $TOOLS_RX = join('|', @all_t_rx);
+}
+
+sub bash_7c48 {
+    my ($args) = @_;
+    # dump args to a temp file and execute with bash, capture output
+    main::load_cpan("File::Temp");
+    my ($fh, $fn) = File::Temp::tempfile();
+    print {$fh} $args;
+    if(!close($fh)){
+        my $err = $!;
+        unlink $fn;
+        return "[ERR] Failed to write to temp file for bash command: $err";
+    }
+    if(open(my $fh, "bash < $fn 2>&1|")){
+        local $/;
+        my $result = <$fh>;
+        close($fh);
+        my $err = $?;
+        unlink $fn;
+        return "[ERR] problem running tool 'bash': $err, output: $result" if $err;
+        return $result;
+    }
+    return "[ERR] Failed to execute command: $args: $!";
+}
+
+sub perl_d8d2 {
+    my ($args) = @_;
+    # TODO
+    return "[ERR] Failed to execute command: $args: $!";
+}
+
+sub read_c5a3 {
+    my ($args) = @_;
+    my $file = main::trim($args);
+    if (open(my $fh, '<', $file)) {
+        local $/;
+        my $content = <$fh>;
+        close($fh);
+        return $content // "";
+    }
+    return "[ERR] File not found: $file: $!";
+}
+
+sub write_edf5 {
+    my ($args) = @_;
+    if (main::shift_args($args, \my $path)) {
+        open(my $fh, '>', $path)
+            or die "Cannot write to $path: $!";
+        print {$fh} main::shift_args($args);
+        if(!close($fh)){
+            return "[ERR] problem running tool 'write' for $path: $!";
+        }
+        return "Written to $path";
+    }
+    return "[ERR] Usage: /write <path> [content]";
+}
+
+sub grep_6629 {
+    my ($args) = @_;
+    my @parts = split(/\s+/, main::trim($args), 2);
+    if (@parts >= 1) {
+        my $path_arg = @parts > 1 ? $parts[1] : '.';
+        open(my $fh, "grep", "-r", $parts[0], $path_arg, "-|")
+            or return "[ERR] Cannot run grep: $!";
+        local $/;
+        my $result = <$fh>;
+        close($fh);
+        return "[ERR] problem running tool 'bash': $?" if $?;
+        return $result // "";
+    }
+    return "[ERR] Usage: /grep <pattern> [path]";
+}
+
 
 BEGIN {
 package colors;
