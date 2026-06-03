@@ -362,17 +362,6 @@ sub trim {
     return $s;
 }
 
-sub shift_args {
-    my ($args, $ref_path) = @_;
-    $args =~ s/^\s+//;
-    if ($args =~ /^(\S+)\s*(.*)/) {
-        $$ref_path = $1;
-        $args = $2;
-        return 1;
-    }
-    return 0;
-}
-
 sub list_models {
     my $model_path = $provider_name eq 'anthropic' ? 'models' : 'v1/chat/models';
     my $response = http("get", $model_path);
@@ -1210,11 +1199,11 @@ BEGIN {
         ]
     },
     grep => {
-        description => "search file with a regex pattern using PERL grep",
+        description => "search file with a pattern using grep unix tool",
         syntax => "\n///GREP_6629+EO_a575a5c230c77d451640+EO_aaddf906cba61ec85a13\n{{path}}\nEO_a575a5c230c77d451640\n{{regex}}\nEO_aaddf906cba61ec85a13\nGREP_6629",
         parameters  => [
             {name => "{{path}}"  , required => 1, type => "string", description => "The file path or directory to scan" },
-            {name => "{{regex}}" , required => 1, type => "string", description => "The PERL regular expression pattern"},
+            {name => "{{regex}}" , required => 1, type => "string", description => "The grep pattern"},
         ]
     },
     };
@@ -1239,24 +1228,25 @@ sub bash_7c48 {
     if(!close($fh)){
         my $err = $!;
         unlink $fn;
-        return "[ERR] Failed to write to temp file for bash command: $err";
+        return "[ERR] failed to write to temp file: $err";
     }
+    local $ENV{PATH} = $ORIG_ENV{PATH};
     if(open(my $fh, "bash < $fn 2>&1|")){
         local $/;
         my $result = <$fh>;
         close($fh);
-        my $err = $?;
+        my ($err, $errno) = ($?, $!);
         unlink $fn;
-        return "[ERR] problem running tool 'bash': $err, output: $result" if $err;
+        return "[ERR] errno: $errno, exit code: ".($err >> 8).", signal: ".($err & 127).", output: $result" if $err or $errno;
         return $result;
     }
-    return "[ERR] Failed to execute command: $!";
+    return "[ERR] problem running: $!";
 }
 
 sub perl_d8d2 {
     my ($t_args) = @_;
     # TODO
-    return "[ERR] Failed to execute command: $t_args->[0]: $!";
+    return "[ERR] failed to execute command: $t_args->[0]: $!";
 }
 
 sub read_c5a3 {
@@ -1268,37 +1258,36 @@ sub read_c5a3 {
         close($fh);
         return $content // "";
     }
-    return "[ERR] File not found: $file: $!";
+    return "[ERR] file not found: $file: $!";
 }
 
 sub write_edf5 {
     my ($t_args) = @_;
-    if (main::shift_args($t_args->[0], \my $path)) {
-        open(my $fh, '>', $path)
-            or die "Cannot write to $path: $!";
-        print {$fh} main::shift_args($t_args->[0]);
-        if(!close($fh)){
-            return "[ERR] problem running tool 'write' for $path: $!";
-        }
-        return "Written to $path";
+    my $path = main::trim($t_args->[0]);
+    main::log_info("WRITE: $path");
+    open(my $fh, '>', $path)
+        or die "Cannot write to $path: $!";
+    print {$fh} $t_args->[1];
+    if(!close($fh)){
+        return "[ERR] problem running tool 'write' for $path: $!";
     }
-    return "[ERR] Usage: /write <path> [content]";
+    return "[OK] written to $path";
 }
 
 sub grep_6629 {
     my ($t_args) = @_;
-    my @parts = split(/\s+/, main::trim($t_args->[0]), 2);
-    if (@parts >= 1) {
-        my $path_arg = @parts > 1 ? $parts[1] : '.';
-        open(my $fh, "grep", "-r", $parts[0], $path_arg, "-|")
-            or return "[ERR] Cannot run grep: $!";
-        local $/;
-        my $result = <$fh>;
-        close($fh);
-        return "[ERR] problem running tool 'bash': $?" if $?;
-        return $result // "";
-    }
-    return "[ERR] Usage: /grep <pattern> [path]";
+    my $path = $t_args->[0];
+    my $pattern = $t_args->[1];
+    return "[ERR] not enough parameters" unless length($path//"") and length($pattern//"");
+    local $ENV{PATH} = $ORIG_ENV{PATH};
+    open(my $fh, "grep", $pattern, $path, "-|")
+        or return "[ERR] cannot run grep: $!";
+    local $/;
+    my $result = <$fh>;
+    close($fh);
+    my ($err, $errno) = ($?, $!);
+    return "[ERR] errno: $errno, exit code: ".($err >> 8).", signal: ".($err & 127).", output: $result" if $err or $errno;
+    return $result // "";
 }
 
 
