@@ -335,45 +335,42 @@ sub chat_completion {
         }
         $resp = $decoded->{choices}[0]{message}{content};
     }
+    push @jstr, {role => 'asistant', content => $resp};
 
     _utf8_off($resp);
     my $pos = 0;
     my $newturns = 0;
 
-    $resp =~ s/<think>.*?<\/think>//msg;
-    while($resp =~ m/$tools::TOOLS_RX/msg){
+    my $msg_no_think = $resp =~ s/<think>.*?<\/think>\n*?//msgr;
+    while($msg_no_think =~ m/$tools::TOOLS_RX/msg){
         my $tool_entry = $1;
         my @t_args;
-        @t_args = map {substr($resp, $-[$_], $+[$_] - $-[$_])} grep {defined $-[$_] and $+[$_]} 2 .. @--1 if @- >= 3;
+        @t_args = map {substr($msg_no_think, $-[$_], $+[$_] - $-[$_])} grep {defined $-[$_] and $+[$_]} 2 .. @--1 if @- >= 3;
         $tool_entry =~ m{^///((.*?)_[a-fA-F0-9]+)}gms;
         my $tool   = $1;
         my $tool_k = lc $2;
         log_info("TOOL:$tool, K:$tool_k, A:".join(' ', @t_args));
         next unless exists $tools::TOOLS->{$tool_k};
-        substr($resp, 0, pos($resp)) = '';
+        substr($msg_no_think, 0, pos($msg_no_think)) = '';
 
         print "${colors::yellow_color1}\[TOOL $tool(".join(' ', @t_args).")\]${colors::reset_color}\n";
-        push @jstr, {role => 'asistant', content => $tool_entry};
         my $result = execute_tool($tool_k, $tool, \@t_args);
         my $tool_response = "[TOOL RESULT $tool: $result]";
         print "${colors::yellow_color1}$tool_response${colors::reset_color}\n";
         push @jstr, {role => 'user', content => $tool_response};
-        $pos = pos($resp);  # Update position for next iteration
+        $pos = pos($msg_no_think);  # Update position for next iteration
         $newturns = 1;
     }
 
+    main::log_info("MSG>>$msg_no_think<< POS: ".(pos($msg_no_think)//0));
+
     # Add any remaining text after last tool call as final assistant message
-    if (defined $resp and (pos($resp)//0) < length($resp)) {
-        my $remaining_text = substr($resp, (pos($resp)//0));
+    if (length($msg_no_think//"") and $pos < length($msg_no_think)) {
+        my $remaining_text = substr($msg_no_think, $pos);
         if(length($remaining_text)){
-            push @jstr, {role => 'assistant', content => $remaining_text};
             _utf8_off($remaining_text);
-            print $remaining_text;
+            print $remaining_text, "\n";
         }
-    } elsif (!@jstr) {
-        push @jstr, {role => 'assistant', content => $resp};
-        _utf8_off($resp);
-        print $resp;
     }
 
     # save updated messages to status file
@@ -626,7 +623,7 @@ sub init_session {
 }
 
 sub _tool_list_for_prompt {
-    my $list = "\nTOOLS 'syntax': \n///TOOL_{HEX}+{T1}+{T2}\n{{path}}\n{T1}\n{{content}}\n{T2}\nTOOL_{HEX}\n where {{path}}, {{content} is substituted by the LLM";
+    my $list = "\nTOOLS 'syntax': \n///TOOL_{HEX}+{T1}+{T2}\n{{path}}\n{T1}\n{{content}}\n{T2}\nTOOL_{HEX}\n where {{path}}, {{content} is substituted by the LLM\n";
     $list .= "TOOLS:\n```json\n";
     $list .= $::JSON->encode($tools::TOOLS);
     $list .= "\n";
