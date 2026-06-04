@@ -44,6 +44,8 @@ exec docker run --rm -it \
     -e AI_PROVIDER=${AI_PROVIDER:-lemonade} \
     -e AI_DIR=/workspace/.aicli \
     -e AI_SESSION \
+    -e AI_CLEAR \
+    -e AI_STREAM=${AI_STREAM:-0} \
     -e DEBUG \
     -e GIT_AUTHOR_NAME \
     -e GIT_AUTHOR_EMAIL \
