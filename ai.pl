@@ -1208,17 +1208,11 @@ sub http {
 package curl;
 
 use strict; use warnings;
-our @ISA = "Net::Curl::Easy";
+use base qw(Net::Curl::Easy);
 
 BEGIN {
-    eval {
-        main::load_cpan("Net::Curl");
-        main::load_cpan("Net::Curl::Easy");
-    };
-    if($@){
-        main::log_error("Please install CPAN Net::Curl");
-        exit 1;
-    }
+    eval {main::load_cpan("Net::Curl")};
+    eval {main::load_cpan("Net::Curl::Easy")};
     foreach my $k (keys %Net::Curl::Easy::){
         next unless $k =~ /^CURL/; # Only grab curl constants/options
         no strict 'refs';
@@ -1311,6 +1305,104 @@ sub bash_7c48 {
 
 sub perl_d8d2 {
     my ($t_args) = @_;
+    return "[ERR] need an actual perl program, size=0" unless length($t_args//"");
+    local $SIG{HUP}  = 'IGNORE';
+    local $SIG{INT}  = 'DEFAULT';
+    local $SIG{TERM} = 'DEFAULT';
+    local $SIG{QUIT} = 'DEFAULT';
+    local $SIG{CHLD} = 'IGNORE';
+    local $SIG{ALRM} = 'IGNORE';
+    pipe(my $read_pipe_fh, my $write_pipe_fh)
+        or die "Error setting up pipe(): $!\n";
+    my $c_pid = fork();
+    if($c_pid){
+        # current manager process
+        # here we need to catch the output and watch the process
+        main::log_info("worker $c_pid forked, getting output");
+        local $/ = "\n";
+        my $buf = "";
+        while(defined(my $d = <$read_pipe_fh>)){
+            main::log_info("got data from pipe: $d");
+            $buf .= $d;
+        }
+        main::log_info("now waitpid for $c_pid");
+        my $r = waitpid($c_pid, 0);
+        if($r == -1){
+            # no such process
+            main::log_info("no process with $c_pid");
+        } elsif($r == 0){
+            main::log_info("no processes"); # only WNOHANG, and we didn't enable that yet
+        } elsif($r == $c_pid){
+            my $e_v = $? << 8;
+            my $s_v = $? & 127;
+            if($e_v != 0 or !$s_v){
+                log_error("$c_pid exited: $e_v, signal: $s_v");
+                $buf = "[ERR] PERL exit: $e_v, signal: $s_v, output: $buf";
+            } else {
+                main::log_info("$c_pid exited: $e_v, signal: $s_v");
+            }
+        } else {
+            main::log_info("waitpid undef");
+        }
+        return $buf;
+    } elsif(!defined $c_pid){
+        # error
+        die "[ERROR] couldn't fork: $!\n";
+    } else {
+        # worker sub-process
+        eval {
+            POSIX::setsid() != -1
+                or (!$!{EPERM} and die "problem making new session/process group: $!\n");
+            open(STDOUT, '>&', $write_pipe_fh)
+                or die "Can't dup STDOUT to PIPE: $!\n";
+            *STDOUT->autoflush();
+            *STDERR->autoflush();
+            #open(STDERR, '>&STDOUT')
+            #or die "Can't dup STDERR to STDOUT: $!\n";
+            open(STDIN,  '</dev/null')
+                or die "Can't read /dev/null: $!\n";
+
+            # dup() sets $! as ioctl() is done in perl, so reset ERRNO
+            local $! = 0;
+
+            my $c1_pid = fork();
+            if($c1_pid){
+                # we're the intermediate manager process
+                my $r = waitpid($c1_pid, 0);
+                if($r == -1){
+                    main::log_info("intermediate: no PID $c1_pid");
+                } elsif($r == 0){
+                    main::log_info("no processes"); # only WNOHANG, and we didn't enable that yet
+                } else {
+                    my $e_v = $? << 8;
+                    my $s_v = $? & 127;
+                    POSIX::_exit($e_v);
+                }
+            } elsif(!defined $c1_pid){
+                die "[ERROR] couldn't fork worker: $!\n";
+            } else {
+                # full "freedom", sub-process anyways, and dockerized!
+                no strict;
+                no warnings;
+                eval $t_args->[0];
+                if($@){
+                    print $@;
+                    POSIX::_exit(255);
+                }
+                POSIX::_exit(0);
+            }
+        };
+        if($@){
+            # there are cases that we get here, mostly signals and/or die/eval
+            # caches (not the case here), also, "exit" handles END blocks, which
+            # can do nasty stuff. As we really don't want this worker process to
+            # continue, we use POSIX _exit
+            chomp(my $err = $@);
+            print "[ERROR] problem setting up fork: $err\n";
+            POSIX::_exit(1);
+        }
+        POSIX::_exit(0);
+    }
     return "[ERR] failed to execute command: $t_args->[0]: $!";
 }
 
