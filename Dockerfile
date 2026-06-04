@@ -3,6 +3,8 @@ RUN apk add --no-cache perl perl-json perl-lwp-protocol-https perl-term-readline
 RUN apk add --no-cache perl-net-curl --repository=https://dl-cdn.alpinelinux.org/alpine/edge/testing
 RUN apk add --no-cache bash
 RUN apk add --no-cache strace
+RUN apk add --no-cache lua
+RUN apk add --no-cache python3
 COPY ai.pl /
 RUN perl -cw /ai.pl
 ENV HOME=/ai
