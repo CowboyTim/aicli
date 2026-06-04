@@ -354,9 +354,15 @@ sub chat_completion {
         substr($msg_no_think, 0, pos($msg_no_think)) = '';
 
         print "${colors::yellow_color1}\[TOOL $tool(".join(' ', @t_args).")\]${colors::reset_color}\n";
-        my $result = execute_tool($tool_k, $tool, \@t_args);
-        my $tool_response = "[TOOL RESULT $tool: $result]";
-        print "${colors::yellow_color1}$tool_response${colors::reset_color}\n";
+        my ($result, $had_error) = execute_tool($tool_k, $tool, \@t_args);
+        my $tool_response = "";
+        if(!$had_error){
+            $tool_response = "[$tool RESULT_d170b4e6bb11cfd550aa\n$result\nRESULT_d170b4e6bb11cfd550aa]";
+        } else {
+            $result //= "";
+            $tool_response = "[$tool ERROR_9a7893514ebc885c2543\n$had_error\nERROR_9a7893514ebc885c2543]";
+        }
+        print "${colors::green_color}$tool_response${colors::reset_color}\n";
         push @jstr, {role => 'user', content => $tool_response};
         $pos = pos($msg_no_think);  # Update position for next iteration
         $newturns = 1;
@@ -365,6 +371,7 @@ sub chat_completion {
     main::log_info("MSG>>$msg_no_think<< POS: ".(pos($msg_no_think)//0));
 
     # Add any remaining text after last tool call as final assistant message
+    $pos //= 0;
     if (length($msg_no_think//"") and $pos < length($msg_no_think)) {
         my $remaining_text = substr($msg_no_think, $pos);
         if(length($remaining_text)){
@@ -386,7 +393,7 @@ sub chat_completion {
 
 sub execute_tool {
     my ($k, $tool, $t_args) = @_;
-    return "[ERROR] Unknown tool '$tool'" unless exists $tools::TOOLS->{$k};
+    return "", "[ERROR] Unknown tool '$tool'" unless exists $tools::TOOLS->{$k};
     my $tn = lc("tools::$tool");
     my $ret =
     eval {
@@ -396,9 +403,9 @@ sub execute_tool {
     };
     if($@){
         chomp(my $err = $@);
-        return "[ERROR] problem running tool '$tool': $err";
+        return "", "[ERROR] problem running tool '$tool': $err";
     }
-    return $ret;
+    return $ret, undef;
 }
 
 sub trim {
@@ -626,6 +633,9 @@ sub _tool_list_for_prompt {
     my $list = "\nTOOLS 'syntax': \n///TOOL_{HEX}+{T1}+{T2}\n{{path}}\n{T1}\n{{content}}\n{T2}\nTOOL_{HEX}\n where {{path}}, {{content} is substituted by the LLM\n";
     $list .= "TOOLS:\n```json\n";
     $list .= $::JSON->encode($tools::TOOLS);
+    $list .= "\n";
+    $list .= "TOOL results: [<TOOL_{HEX}> RESULT_d170b4e6bb11cfd550aa\n{{result}}\nRESULT_d170b4e6bb11cfd550aa]\n";
+    $list .= "TOOL errors: [<TOOL_{HEX}> ERROR_9a7893514ebc885c2543\n{{error}}\nERROR_9a7893514ebc885c2543]\n";
     $list .= "\n";
     log_info("TOOLS SECTION>>$list<<");
     return $list;
