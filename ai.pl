@@ -389,7 +389,7 @@ sub chat_completion {
 
 sub execute_tool {
     my ($k, $tool, $t_args) = @_;
-    return "[ERR] Unknown tool '$tool'" unless exists $tools::TOOLS->{$k};
+    return "[ERROR] Unknown tool '$tool'" unless exists $tools::TOOLS->{$k};
     my $tn = lc("tools::$tool");
     my $ret =
     eval {
@@ -399,7 +399,7 @@ sub execute_tool {
     };
     if($@){
         chomp(my $err = $@);
-        return "[ERR] problem running tool '$tool': $err";
+        return "[ERROR] problem running tool '$tool': $err";
     }
     return $ret;
 }
@@ -1287,7 +1287,7 @@ sub bash_7c48 {
     if(!close($fh)){
         my $err = $!;
         unlink $fn;
-        return "[ERR] failed to write to temp file: $err";
+        return "[ERROR] failed to write to temp file: $err";
     }
     local $ENV{PATH} = $ORIG_ENV{PATH};
     local $!;
@@ -1297,15 +1297,15 @@ sub bash_7c48 {
         close($fh);
         my ($err, $errno) = ($?, $!);
         unlink $fn;
-        return "[ERR] errno: $errno, exit code: ".($err >> 8).", signal: ".($err & 127).", output: $result" if $err or $errno;
+        return "[ERROR] errno: $errno, exit code: ".($err >> 8).", signal: ".($err & 127).", output: $result" if $err or $errno;
         return $result;
     }
-    return "[ERR] problem running: $!";
+    return "[ERROR] problem running: $!";
 }
 
 sub perl_d8d2 {
     my ($t_args) = @_;
-    return "[ERR] need an actual perl program, size=0" unless length($t_args//"");
+    return "[ERROR] need an actual perl program, size=0" unless length($t_args//"");
     local $SIG{HUP}  = 'IGNORE';
     local $SIG{INT}  = 'DEFAULT';
     local $SIG{TERM} = 'DEFAULT';
@@ -1314,16 +1314,15 @@ sub perl_d8d2 {
     local $SIG{ALRM} = 'IGNORE';
     pipe(my $read_pipe_fh, my $write_pipe_fh)
         or die "Error setting up pipe(): $!\n";
-    my $c_pid = fork();
+    my $c_pid = fork() // return "[ERROR] couldn't run the perl program, fork error: $!\n";
     if($c_pid){
-        # current manager process
+        close($write_pipe_fh);
         # here we need to catch the output and watch the process
         main::log_info("worker $c_pid forked, getting output");
-        local $/ = "\n";
         my $buf = "";
-        while(defined(my $d = <$read_pipe_fh>)){
-            main::log_info("got data from pipe: $d");
-            $buf .= $d;
+        {
+            local $/;
+            $buf = <$read_pipe_fh>;
         }
         main::log_info("now waitpid for $c_pid");
         my $r = waitpid($c_pid, 0);
@@ -1337,7 +1336,7 @@ sub perl_d8d2 {
             my $s_v = $? & 127;
             if($e_v != 0 or !$s_v){
                 log_error("$c_pid exited: $e_v, signal: $s_v");
-                $buf = "[ERR] PERL exit: $e_v, signal: $s_v, output: $buf";
+                $buf = "[ERROR] PERL exit: $e_v, signal: $s_v, output: $buf";
             } else {
                 main::log_info("$c_pid exited: $e_v, signal: $s_v");
             }
@@ -1345,52 +1344,30 @@ sub perl_d8d2 {
             main::log_info("waitpid undef");
         }
         return $buf;
-    } elsif(!defined $c_pid){
-        # error
-        die "[ERROR] couldn't fork: $!\n";
     } else {
         # worker sub-process
         eval {
+            close($read_pipe_fh);
+
             POSIX::setsid() != -1
                 or (!$!{EPERM} and die "problem making new session/process group: $!\n");
             open(STDOUT, '>&', $write_pipe_fh)
                 or die "Can't dup STDOUT to PIPE: $!\n";
             *STDOUT->autoflush();
             *STDERR->autoflush();
-            #open(STDERR, '>&STDOUT')
-            #or die "Can't dup STDERR to STDOUT: $!\n";
+            open(STDERR, '>&STDOUT')
+                or die "Can't dup STDERR to STDOUT: $!\n";
             open(STDIN,  '</dev/null')
                 or die "Can't read /dev/null: $!\n";
-
             # dup() sets $! as ioctl() is done in perl, so reset ERRNO
             local $! = 0;
+            local $@;
 
-            my $c1_pid = fork();
-            if($c1_pid){
-                # we're the intermediate manager process
-                my $r = waitpid($c1_pid, 0);
-                if($r == -1){
-                    main::log_info("intermediate: no PID $c1_pid");
-                } elsif($r == 0){
-                    main::log_info("no processes"); # only WNOHANG, and we didn't enable that yet
-                } else {
-                    my $e_v = $? << 8;
-                    my $s_v = $? & 127;
-                    POSIX::_exit($e_v);
-                }
-            } elsif(!defined $c1_pid){
-                die "[ERROR] couldn't fork worker: $!\n";
-            } else {
-                # full "freedom", sub-process anyways, and dockerized!
-                no strict;
-                no warnings;
-                eval $t_args->[0];
-                if($@){
-                    print $@;
-                    POSIX::_exit(255);
-                }
-                POSIX::_exit(0);
-            }
+            # full "freedom", sub-process anyways, and dockerized!
+            no strict;
+            no warnings;
+            eval $t_args->[0];
+            die $@ if $@
         };
         if($@){
             # there are cases that we get here, mostly signals and/or die/eval
@@ -1398,12 +1375,12 @@ sub perl_d8d2 {
             # can do nasty stuff. As we really don't want this worker process to
             # continue, we use POSIX _exit
             chomp(my $err = $@);
-            print "[ERROR] problem setting up fork: $err\n";
+            print "[ERROR] problem setting up forked process for running the perl program: $err\n";
             POSIX::_exit(1);
         }
         POSIX::_exit(0);
     }
-    return "[ERR] failed to execute command: $t_args->[0]: $!";
+    return "[ERROR] failed to execute command: $t_args->[0]: $!";
 }
 
 sub read_c5a3 {
@@ -1415,7 +1392,7 @@ sub read_c5a3 {
         close($fh);
         return $content // "";
     }
-    return "[ERR] file not found: $file: $!";
+    return "[ERROR] file not found: $file: $!";
 }
 
 sub write_edf5 {
@@ -1426,7 +1403,7 @@ sub write_edf5 {
         or die "Cannot write to $path: $!";
     print {$fh} $t_args->[1];
     if(!close($fh)){
-        return "[ERR] problem running tool 'write' for $path: $!";
+        return "[ERROR] problem running tool 'write' for $path: $!";
     }
     return "[OK] written to $path";
 }
@@ -1435,16 +1412,16 @@ sub grep_6629 {
     my ($t_args) = @_;
     my $path = $t_args->[0];
     my $pattern = $t_args->[1];
-    return "[ERR] not enough parameters" unless length($path//"") and length($pattern//"");
+    return "[ERROR] not enough parameters" unless length($path//"") and length($pattern//"");
     local $ENV{PATH} = $ORIG_ENV{PATH};
     local $!;
     open(my $fh, "-|", "grep", $pattern, $path)
-        or return "[ERR] cannot run grep: $!";
+        or return "[ERROR] cannot run grep: $!";
     local $/;
     my $result = <$fh>;
     close($fh);
     my ($err, $errno) = ($?, $!);
-    return "[ERR] errno: $errno, exit code: ".($err >> 8).", signal: ".($err & 127).", output: $result" if $err or $errno;
+    return "[ERROR] errno: $errno, exit code: ".($err >> 8).", signal: ".($err & 127).", output: $result" if $err or $errno;
     return $result // "";
 }
 
