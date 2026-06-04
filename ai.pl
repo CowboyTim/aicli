@@ -53,6 +53,9 @@ if($< == 0){
     chown($UID, $GID, $BASE_DIR)
         or die "Error chown to $UID:$GID for $BASE_DIR: $!\n";
 
+    chown($UID, $GID, $ORIG_ENV{HOME})
+        or die "Error chown to $UID:$GID for $ORIG_ENV{HOME}: $!\n";
+
     # now drop privileges
     local $! = 0;
     # drop to GID
@@ -1297,6 +1300,8 @@ sub bash_7c48 {
         return "[ERROR] failed to write to temp file: $err";
     }
     local $ENV{PATH} = $ORIG_ENV{PATH};
+    local $ENV{HOME} = $ORIG_ENV{HOME};
+    local $ENV{LOGNAME} = $ORIG_ENV{LOGNAME};
     local $!;
     if(open(my $fh, "bash < $fn 2>&1|")){
         local $/;
@@ -1355,6 +1360,12 @@ sub perl_d8d2 {
         # worker sub-process
         eval {
             close($read_pipe_fh);
+
+            local $ENV{PATH} = $ORIG_ENV{PATH};
+            local $ENV{HOME} = $ORIG_ENV{HOME};
+            local $ENV{LOGNAME} = $ORIG_ENV{LOGNAME};
+            %ORIG_ENV = ();
+            $0 = "aicli:perl_tool";
 
             POSIX::setsid() != -1
                 or (!$!{EPERM} and die "problem making new session/process group: $!\n");

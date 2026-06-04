@@ -53,6 +53,7 @@ exec docker run --rm -it \
     -e GIT_COMITTER_EMAIL \
     -e GIT_EDITOR="true" \
     -e ROCM_PATH=/opt/rocm \
+    -e HOME=/workspace \
     -v $ROCM_PATH:/opt/rocm:ro \
     --ulimit memlock=-1:-1 \
     --ulimit stack=67108864:67108864 \
