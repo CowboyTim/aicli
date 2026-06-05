@@ -17,6 +17,7 @@ This file outlines potential improvements and features for the AI coding agent (
    - Sandboxed execution for bash tool (e.g., using firejail or containers).
    - Allow configuration of allowed commands/directories for security.
    - Add more built-in tools: web search, file editing, git operations.
+   - **Proper diff (colored) viewer**: Enhance diff output with syntax highlighting and side-by-side views.
 
 4. **Configuration Management**
    - Introduce a config file (JSON/YAML) in addition to environment variables.
@@ -35,12 +36,16 @@ This file outlines potential improvements and features for the AI coding agent (
    - Git integration: AI-assisted commit messages, branch suggestions.
    - IDE-like features: code completion, refactoring suggestions via AI.
    - Project context awareness (understand repo structure, dependencies).
+   - **Questions from LLM + answer and respond**: Enable the AI to ask clarifying questions when uncertain, then incorporate user responses.
+   - **Plan mode**: Allow the AI to outline a step-by-step execution plan before proceeding with tasks.
 
 7. **User Interface Improvements**
    - Syntax highlighting for code blocks in responses.
    - Better formatting of tool outputs (tables, JSON views).
    - Customizable keybindings and command aliases.
    - Progress indicators for long-running operations.
+   - **Markdown viewer when needed**: Render markdown documents in the terminal using external tools (e.g., glow, lowdown) for rich previews.
+   - **TUI (Text User Interface)**: Explore optional full-screen interface with multiple panes (chat, files, tools) using a library like Curses::UI.
 
 8. **Testing & Quality Assurance**
    - Expand test coverage beyond session management.
