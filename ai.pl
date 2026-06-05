@@ -344,7 +344,7 @@ sub chat_completion {
     my $pos = 0;
     my $newturns = 0;
 
-    my $msg_no_think = $resp =~ s/<think>.*?<\/think>\n*?//msgr;
+    my $msg_no_think = $resp =~ s/(?:^<think>$)?.*?^<\/think>$//msgr;
     while($msg_no_think =~ m/$tools::TOOLS_RX/msg){
         my $tool_entry = $1;
         my @t_args;
@@ -1280,7 +1280,7 @@ BEGIN {
     my @all_t_rx;
     foreach my $t (sort values %{$tools::TOOLS//{}}){
         my $t_rx = $t->{syntax};
-        $t_rx =~ s/\{\{.*?\}\}/\(.*?\)/msg;
+        $t_rx =~ s/\{\{.*?\}\}/((?:(?!\\\/\\\/\\\/).)*?)/msg;
         $t_rx =~ s/\+/\\+/msg;
         $t_rx =~ s/\n/\\n/msg;
         push @all_t_rx, "(?:$t_rx)";
