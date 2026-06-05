@@ -26,12 +26,14 @@ RUN apk add --no-cache perl-dev
 RUN apk add --no-cache gcc make gcc-avr libgcc build-base musl-dev clang
 RUN apk add --no-cache openssl-dev
 RUN apk add --no-cache nasm
+RUN apk add --no-cache diffutils patch
 
 # debug
 RUN apk add --no-cache strace
 
 # ai.pl
 COPY ai.pl /
+COPY ai /ai
 RUN perl -cw /ai.pl
 ENV HOME=/ai
 USER root
