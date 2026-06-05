@@ -1302,6 +1302,8 @@ sub bash_7c48 {
     local $ENV{PATH} = $ORIG_ENV{PATH};
     local $ENV{HOME} = $ORIG_ENV{HOME};
     local $ENV{LOGNAME} = $ORIG_ENV{LOGNAME};
+    local $ENV{TMPDIR} = "/tmp";
+    local $ENV{LANG} = "en_US.UTF-8";
     local $!;
     if(open(my $fh, "bash < $fn 2>&1|")){
         local $/;
@@ -1364,6 +1366,8 @@ sub perl_d8d2 {
             local $ENV{PATH} = $ORIG_ENV{PATH};
             local $ENV{HOME} = $ORIG_ENV{HOME};
             local $ENV{LOGNAME} = $ORIG_ENV{LOGNAME};
+            local $ENV{TMPDIR} = "/tmp";
+            local $ENV{LANG} = "en_US.UTF-8";
             %ORIG_ENV = ();
             $0 = "aicli:perl_tool";
 
