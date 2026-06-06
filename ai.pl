@@ -275,6 +275,45 @@ sub log_error {
     return;
 }
 
+sub handle_llm_response {
+    my ($resp) = @_;
+
+    _utf8_off($$resp);
+    my $pos = 0;
+    my $newturns = 0;
+
+    my @rt;
+    my $msg_no_think = $$resp =~ s/(?:^<think>$)?.*?^<\/think>$//msgr;
+    while($msg_no_think =~ m/$tools::TOOLS_RX/msg){
+        my $tool_entry = $1;
+        my @t_args;
+        @t_args = map {substr($msg_no_think, $-[$_], $+[$_] - $-[$_])} grep {defined $-[$_] and $+[$_]} 2 .. @--1 if @- >= 3;
+        $tool_entry =~ m{^///((.*?)_[a-fA-F0-9]+)}gms;
+        my $tool   = $1;
+        my $tool_k = lc $2;
+        log_info("TOOL:$tool, K:$tool_k, A:".join(' ', @t_args));
+        next unless exists $tools::TOOLS->{$tool_k};
+        substr($msg_no_think, 0, pos($msg_no_think)) = '';
+
+        print "${colors::yellow_color1}\[TOOL $tool(".join(' ', @t_args).")\]${colors::reset_color}\n";
+        my ($result, $had_error) = execute_tool($tool_k, $tool, \@t_args);
+        my $tool_response = "";
+        if(!$had_error){
+            $tool_response = "[$tool RESULT_d170b4e6bb11cfd550aa\n$result\nRESULT_d170b4e6bb11cfd550aa]";
+        } else {
+            $result //= "";
+            $tool_response = "[$tool ERROR_9a7893514ebc885c2543\n$had_error\nERROR_9a7893514ebc885c2543]";
+        }
+        print "${colors::green_color}$tool_response${colors::reset_color}\n";
+        push @rt, {role => 'user', content => $tool_response};
+        $pos = pos($msg_no_think);  # Update position for next iteration
+        $newturns = 1;
+    }
+    main::log_info("MSG>>$msg_no_think<< POS: ".(pos($msg_no_think)//0));
+
+    return $newturns, $pos, \@rt;
+}
+
 sub chat_completion {
     my ($input) = @_;
     log_info("User input: $input");
@@ -308,13 +347,19 @@ sub chat_completion {
     }
 
     # Variable to hold the assembled assistant message
+    my $newturns = 0;
     my $resp = '';
 
+    *STDOUT->autoflush();
+    *STDERR->autoflush();
     if ($ORIG_ENV{AI_STREAM} // 1){
         # Parse Server-Sent Events (SSE) stream
         foreach my $event (split /\n\n/, $raw) {
             next unless $event =~ s/^data:\s*//;
-            last if $event eq '[DONE]';
+            if($event eq '[DONE]'){
+                print "\n";
+                last
+            }
             eval {
                 my $decoded = JSON::XS->new->utf8->decode($event);
                 my $delta = '';
@@ -325,12 +370,22 @@ sub chat_completion {
                 }
                 if (defined $delta && length($delta)) {
                     _utf8_off($delta);
-                    print $delta;
                     $resp .= $delta;
+                    print $delta;
                 }
             };
-            log_info("Failed to decode SSE event: $event, error: $@") if $@;
+            if($@){
+                log_info("Failed to decode SSE event: $event, error: $@");
+                last;
+            }
         }
+        # save in history
+        push @jstr, {role => 'asistant', content => $resp};
+
+        # handle tools
+        my ($t, $p, $r) = handle_llm_response(\$resp);
+        $newturns ||= $t;
+        push @jstr, @{$r//[]};
     } else {
         # Non‑streaming response (original behaviour)
         my $decoded;
@@ -346,49 +401,22 @@ sub chat_completion {
             log_error("Failed to parse response: $raw");
             return;
         }
-    }
-    push @jstr, {role => 'asistant', content => $resp};
+        # save in history
+        push @jstr, {role => 'asistant', content => $resp};
 
-    _utf8_off($resp);
-    my $pos = 0;
-    my $newturns = 0;
+        # handle tools
+        my ($t, $p, $r) = handle_llm_response(\$resp);
+        $newturns ||= $t;
+        push @jstr, @{$r//[]};
 
-    my $msg_no_think = $resp =~ s/(?:^<think>$)?.*?^<\/think>$//msgr;
-    while($msg_no_think =~ m/$tools::TOOLS_RX/msg){
-        my $tool_entry = $1;
-        my @t_args;
-        @t_args = map {substr($msg_no_think, $-[$_], $+[$_] - $-[$_])} grep {defined $-[$_] and $+[$_]} 2 .. @--1 if @- >= 3;
-        $tool_entry =~ m{^///((.*?)_[a-fA-F0-9]+)}gms;
-        my $tool   = $1;
-        my $tool_k = lc $2;
-        log_info("TOOL:$tool, K:$tool_k, A:".join(' ', @t_args));
-        next unless exists $tools::TOOLS->{$tool_k};
-        substr($msg_no_think, 0, pos($msg_no_think)) = '';
-
-        print "${colors::yellow_color1}\[TOOL $tool(".join(' ', @t_args).")\]${colors::reset_color}\n";
-        my ($result, $had_error) = execute_tool($tool_k, $tool, \@t_args);
-        my $tool_response = "";
-        if(!$had_error){
-            $tool_response = "[$tool RESULT_d170b4e6bb11cfd550aa\n$result\nRESULT_d170b4e6bb11cfd550aa]";
-        } else {
-            $result //= "";
-            $tool_response = "[$tool ERROR_9a7893514ebc885c2543\n$had_error\nERROR_9a7893514ebc885c2543]";
-        }
-        print "${colors::green_color}$tool_response${colors::reset_color}\n";
-        push @jstr, {role => 'user', content => $tool_response};
-        $pos = pos($msg_no_think);  # Update position for next iteration
-        $newturns = 1;
-    }
-
-    main::log_info("MSG>>$msg_no_think<< POS: ".(pos($msg_no_think)//0));
-
-    # Add any remaining text after last tool call as final assistant message
-    $pos //= 0;
-    if (length($msg_no_think//"") and $pos < length($msg_no_think)) {
-        my $remaining_text = substr($msg_no_think, $pos);
-        if(length($remaining_text)){
-            _utf8_off($remaining_text);
-            print $remaining_text, "\n";
+        # Add any remaining text after last tool call as final assistant message
+        $p //= 0;
+        if (length($resp) and $p < length($resp)) {
+            my $remaining_text = substr($resp, $p);
+            if(length($remaining_text)){
+                _utf8_off($remaining_text);
+                print $remaining_text, "\n";
+            }
         }
     }
 
