@@ -4,6 +4,8 @@
 
 use strict; use warnings;
 
+no warnings 'once';
+
 use FindBin;
 
 # don't leak ENV to other forks, clear $0 asap: clears envp
@@ -287,7 +289,7 @@ sub chat_completion {
     my $req = {
         model       => $SESSION_MODEL || $ORIG_ENV{AI_MODEL} // 'llama-4-scout-17b-16e-instruct',
         max_tokens  => $ORIG_ENV{AI_TOKENS} // 8192,
-        stream      => 1,
+        stream      => $Types::Serialiser::true,
         messages    => \@jstr,
         temperature => $ORIG_ENV{AI_TEMPERATURE} // 0,
         top_p       => 1
@@ -308,7 +310,7 @@ sub chat_completion {
     # Variable to hold the assembled assistant message
     my $resp = '';
 
-    if ($ORIG_ENV{AI_STREAM} // 0){
+    if ($ORIG_ENV{AI_STREAM} // 1){
         # Parse Server-Sent Events (SSE) stream
         foreach my $event (split /\n\n/, $raw) {
             next unless $event =~ s/^data:\s*//;
@@ -331,12 +333,19 @@ sub chat_completion {
         }
     } else {
         # Non‑streaming response (original behaviour)
-        my $decoded = JSON::XS->new->utf8->decode($raw);
-        unless (exists $decoded->{choices}[0]{message}{content}) {
-            log_error("Failed to parse response");
+        my $decoded;
+        eval {
+            $decoded = JSON::XS->new->utf8->decode($raw);
+            unless (exists $decoded->{choices}[0]{message}{content}) {
+                log_error("Failed JSON no message content: ".$::JSON->encode($decoded));
+                return;
+            }
+            $resp = $decoded->{choices}[0]{message}{content};
+        };
+        if($@){
+            log_error("Failed to parse response: $raw");
             return;
         }
-        $resp = $decoded->{choices}[0]{message}{content};
     }
     push @jstr, {role => 'asistant', content => $resp};
 
