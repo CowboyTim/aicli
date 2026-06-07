@@ -236,7 +236,7 @@ sub chat_completion {
 
     my $req = {
         model       => $SESSION_MODEL || $::ORIG_ENV{AI_MODEL} // 'llama-4-scout-17b-16e-instruct',
-        max_tokens  => $::ORIG_ENV{AI_TOKENS}      // 8192,
+        max_tokens  => $::ORIG_ENV{AI_TOKENS}      // 1_000_000,
         temperature => $::ORIG_ENV{AI_TEMPERATURE} // 0,
         top_p       => $::ORIG_ENV{AI_TOP_P}       // 1,
         stream      => $Types::Serialiser::true,
