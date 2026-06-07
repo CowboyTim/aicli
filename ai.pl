@@ -1288,8 +1288,10 @@ package prompt;
 
 package prompt::default;
 
-no warnings 'once';
-*prompt = *{prompt::coder};
+BEGIN {
+    no warnings 'once';
+    *prompt::default::prompt = *{prompt::coder::prompt};
+}
 
 package prompt::coder;
 
