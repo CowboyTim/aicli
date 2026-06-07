@@ -206,6 +206,169 @@ RESULT_d170b4e6bb11cfd550aa]${colors::reset_color}\n"
     rmtree($tmpdir);
 }
 
+{
+    my $v = q{
+<think>
+We need to list files under .git/ using Perl instead of Bash/unix tools. So we should write a Perl script that reads directory .git and prints entries (maybe like ls -la). Use opendir, readdir, stat for each entry to get permissions, nlink, uid, gid, size, mtime, name.
+
+We need to output similar format: total blocks? Could compute but maybe just list. Simpler: print each file with details akin to ls -l.
+
+Let's write a Perl script and execute it via the perl tool (since we have PERL_d8d2). We'll produce code that does opendir('.git'), then for each entry skip . and .., get stat, format mode, nlink, uid, gid, size, month day time/year, name.
+
+We need to run it. Use ///PERL_d8d2+EO_... code EO_... PERL_d8d2
+
+Let's craft the Perl script:
+
+```perl
+#!/usr/bin/perl
+use strict;
+use warnings;
+my $dir = '.git';
+opendir(my $dh, $dir) or die "Cannot open $dir: $!";
+my @entries = grep { !/^\.\.?$/ } readdir($dh);
+closedir $dh;
+
+# For total blocks (like ls -l), we can sum blocks from stat
+my $total_blocks = 0;
+my @files;
+foreach my $e (@entries) {
+    my $path = "$dir/$e";
+    my ($dev,$ino,$mode,$nlink,$uid,$gid,$size,$atime,$mtime,$ctime,$blksize,$blocks) = stat($path);
+    $total_blocks += $blocks;
+    push @files, [$e, $mode, $nlink, $uid, $gid, $size, $mtime];
+}
+printf "total %d\n", $total_blocks/2; # ls shows blocks in 1K? Actually ls -l total is in 1K blocks? In Linux it's 1K blocks. stat blocks are 512-byte units. So total/2 gives K.
+foreach my $f (@files) {
+    my ($name,$mode,$nlink,$uid,$gid,$size,$mtime) = @$f;
+    my $perms = sprintf("%04o", $mode & 07777);
+    # convert to symbolic? We'll just output octal for simplicity.
+    my ($dev,$ino,$rdev) = (stat("$dir/$name"))[0,1,6]; # not needed
+    my $uid_num = $uid;
+    my $gid_num = $gid;
+    # get user/group names via getpwuid/getgrgid
+    my $user = getpwuid($uid) || $uid;
+    my $group = getgrgid($gid) || $gid;
+    my $time = localtime($mtime);
+    my ($month,$day,$time_part,$year) = split ' ', $time;
+    # adjust: if year != current year, show year else time
+    my ($sec,$min,$hour,$mday,$mon,$year_now,$wday,$yday,$isdst) = localtime(time);
+    my $time_display = ($year_now - (1900+$year)) ? sprintf("%-4s",$year+1900) : $time_part;
+    printf "%s %3d %-8s %-8s %8d %s %2s %4s %s\n",
+        $perms, $nlink, $user, $group, $size,
+        $month, $day, $time_display, $name;
+}
+```
+
+But we need to ensure correct formatting. Simpler: just output like `ls -l` using `stat` and `printf`. Might be okay.
+
+Let's produce the script content then run via PERL tool.
+
+We'll embed in a heredoc marker EO_... Use unique markers.
+
+Proceed.
+
+
+</think>
+///PERL_d8d2+EO_929b2e8d61111fac138f
+#!/usr/bin/perl
+use strict;
+use warnings;
+
+my $dir = '.git';
+opendir(my $dh, $dir) or die "Cannot open $dir: $!";
+my @entries = grep { !/^\.\.?$/ } readdir($dh);
+closedir $dh;
+
+# Compute total blocks (in 1K units like ls -l)
+my $total_blocks = 0;
+my @file_info;
+foreach my $e (@entries) {
+    my $path = "$dir/$e";
+    my ($dev,$ino,$mode,$nlink,$uid,$gid,$size,$atime,$mtime,$ctime,$blksize,$blocks) = stat($path);
+    $total_blocks += $blocks;
+    push @file_info, {
+        name   => $e,
+        mode   => $mode,
+        nlink  => $nlink,
+        uid    => $uid,
+        gid    => $gid,
+        size   => $size,
+        mtime  => $mtime
+    };
+}
+printf "total %d\n", $total_blocks/2;  # convert 512-byte blocks to 1K
+
+foreach my $f (@file_info) {
+    my ($name,$mode,$nlink,$uid,$gid,$size,$mtime) = @$f{qw(name mode nlink uid gid size mtime)};
+    my $perms = sprintf("%04o", $mode & 07777);
+    # Convert to symbolic permission string
+    my $sym_perms = '';
+    $sym_perms .= ($mode & 00400) ? 'r' : '-';
+    $sym_perms .= ($mode & 00200) ? 'w' : '-';
+    $sym_perms .= ($mode & 00100) ?
+        (($mode & 004000) ? 's' : 'x') :
+        (($mode & 004000) ? 'S' : '-');
+    $sym_perms .= ($mode & 00040) ? 'r' : '-';
+    $sym_perms .= ($mode & 00020) ? 'w' : '-';
+    $sym_perms .= ($mode & 00010) ?
+        (($mode & 002000) ? 's' : 'x') :
+        (($mode & 002000) ? 'S' : '-');
+    $sym_perms .= ($mode & 00004) ? 'r' : '-';
+    $sym_perms .= ($mode & 00002) ? 'w' : '-';
+    $sym_perms .= ($mode & 00001) ?
+        (($mode & 001000) ? 't' : 'x') :
+        (($mode & 001000) ? 'T' : '-');
+
+    my $user = getpwuid($uid) || $uid;
+    my $group = getgrgid($gid) || $gid;
+
+    my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst) = localtime($mtime);
+    my @months = qw(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec);
+    my $month = $months[$mon];
+    my $time_field;
+    my ($now_sec,$now_min,$now_hour,$now_mday,$now_mon,$now_year,$now_wday,$now_yday,$now_isdst) = localtime(time);
+    if ($year == $now_year) {
+        $time_field = sprintf("%02d:%02d", $hour, $min);
+    } else {
+        $time_field = sprintf("%-4s", $year+1900);
+    }
+
+    printf "%s %3d %-8s %-8s %8d %s %2s %4s %s\n",
+        $sym_perms, $nlink, $user, $group, $size,
+        $month, $mday, $time_field, $name;
+}
+EO_929b2e8d61111fac138f
+PERL_d8d2
+EOp
+}
+    ;
+    my $tmpdir = File::Temp::tempdir('tool_XXXXXX', DIR => $btmpdir, CLEANUP => 1);
+    make_path($tmpdir);
+    chdir($tmpdir) or die $!;
+    mkdir(".git");
+    print "# in $tmpdir\n";
+    my @oklist;
+    my ($n, $p, $r) = ai::handle_llm_response(\$v, sub {push @oklist, $_[0]});
+    is($n, 1, 'tools: 1');
+    is($p, undef, 'pos: undef');
+    is_deeply($r, [{
+        'content' => '[PERL_d8d2 RESULT_d170b4e6bb11cfd550aa
+total 0
+
+RESULT_d170b4e6bb11cfd550aa]',
+        'role' => 'user'
+    }], 'r: 0') or print Dumper($r);
+    is_deeply(\@oklist, [
+        "${colors::yellow_color1}\[TOOL PERL_d8d2(...))]${colors::reset_color}\n",
+        "${colors::green_color}\[PERL_d8d2 RESULT_d170b4e6bb11cfd550aa
+total 0
+
+RESULT_d170b4e6bb11cfd550aa]${colors::reset_color}\n",
+    ], "print ok printer") or print Dumper(\@oklist);
+    chdir("/");
+    rmtree($tmpdir);
+}
+
 
 done_testing();
 

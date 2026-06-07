@@ -9,6 +9,13 @@ sub load_cpan {
     return $module;
 }
 
+sub trim {
+    my ($s) = @_;
+    $s =~ s/^\s+//;
+    $s =~ s/\s+$//;
+    return $s;
+}
+
 our $curl_handle;
 our $response = \(my $buffer = ""); 
 sub http {

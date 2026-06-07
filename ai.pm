@@ -224,14 +224,14 @@ sub chat_completion {
     push @jstr, {
         role    => 'user',
         content => $input,
-        tools   => $TOOLS //= [
-            map {{type => "function", function => {
-                name        => $_,
-                description => $tools::TOOLS->{$_}{description},
-                properties  => $tools::TOOLS->{$_}{properties} // {},
-                required    => $tools::TOOLS->{$_}{required}   // [],
-            }}} sort keys %{$tools::TOOLS},
-        ]
+#        tools   => $TOOLS //= [
+#            map {{type => "function", function => {
+#                name        => $_,
+#                description => $tools::TOOLS->{$_}{description},
+#                properties  => $tools::TOOLS->{$_}{properties} // {},
+#                required    => $tools::TOOLS->{$_}{required}   // [],
+#            }}} sort keys %{$tools::TOOLS},
+#        ]
     };
 
     my $req = {
@@ -361,13 +361,6 @@ sub execute_tool {
         return "", "[ERROR] problem running tool '$tool': $err";
     }
     return $ret, undef;
-}
-
-sub trim {
-    my ($s) = @_;
-    $s =~ s/^\s+//;
-    $s =~ s/\s+$//;
-    return $s;
 }
 
 sub list_models {
@@ -516,10 +509,10 @@ sub setup_commands {
     };
 
     # add models
-    my $response = eval { http("get", $::ORIG_ENV{AI_LOCAL_SERVER}?"v1/models":"v1/chat/models") };
+    my $response = eval {utils::http("get", $::ORIG_ENV{AI_LOCAL_SERVER}?"$AI_ENDPOINT_URL/v1/models":"$AI_ENDPOINT_URL/v1/chat/models")};
     my $resp;
     if ($response) {
-        $resp = eval { JSON::XS::decode_json($response) };
+        $resp = eval {JSON::XS::decode_json($response)};
     }
     my @models;
     if (defined $resp and ref($resp) eq 'HASH' and exists $resp->{data}) {
@@ -1013,7 +1006,7 @@ sub handle_command {
             switch_model($1);
         } elsif ($line =~ m|^/model\s*$|){
             # Show available models from the API
-            my $response = http("get", $::ORIG_ENV{AI_LOCAL_SERVER}?"v1/models":"v1/chat/models");
+            my $response = utils::http("get", $::ORIG_ENV{AI_LOCAL_SERVER}?"$AI_ENDPOINT_URL/v1/models":"$AI_ENDPOINT_URL/v1/chat/models");
             log::info("Response: $response");
             my $resp = JSON::XS::decode_json($response);
             my @models;
@@ -1266,7 +1259,7 @@ sub perl_d8d2 {
 
 sub read_c5a3 {
     my ($t_args) = @_;
-    my $file = ai::trim($t_args->[0]);
+    my $file = utils::trim($t_args->[0]);
     if (open(my $fh, '<', $file)) {
         local $/;
         my $content = <$fh>;
@@ -1278,7 +1271,7 @@ sub read_c5a3 {
 
 sub write_edf5 {
     my ($t_args) = @_;
-    my $path = ai::trim($t_args->[0]);
+    my $path = utils::trim($t_args->[0]);
     log::info("WRITE: $path");
     open(my $fh, '>', $path)
         or die "Cannot write to $path: $!";
