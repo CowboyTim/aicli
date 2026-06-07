@@ -275,16 +275,18 @@ sub log_error {
     return;
 }
 
+our $t_rx;
 sub handle_llm_response {
     my ($resp) = @_;
 
-    _utf8_off($$resp);
     my $pos = 0;
     my $newturns = 0;
 
     my @rt;
     my $msg_no_think = $$resp =~ s/(?:^<think>$)?.*?^<\/think>$//msgr;
-    while($msg_no_think =~ m/$tools::TOOLS_RX/msg){
+    _utf8_off($msg_no_think);
+    $t_rx //= tools::rx();
+    while($msg_no_think =~ m/$t_rx/msgo){
         my $tool_entry = $1;
         my @t_args;
         @t_args = map {substr($msg_no_think, $-[$_], $+[$_] - $-[$_])} grep {defined $-[$_] and $+[$_]} 2 .. @--1 if @- >= 3;
@@ -1272,11 +1274,12 @@ sub http {
 package curl;
 
 use strict; use warnings;
-use base qw(Net::Curl::Easy);
 
 BEGIN {
+    die $@ if $@;
     eval {main::load_cpan("Net::Curl")};
     eval {main::load_cpan("Net::Curl::Easy")};
+    our @ISA = qw(Net::Curl::Easy);
     foreach my $k (keys %Net::Curl::Easy::){
         next unless $k =~ /^CURL/; # Only grab curl constants/options
         no strict 'refs';
@@ -1388,6 +1391,10 @@ EOb
         push @all_t_rx, "(?:$t_rx)";
     }
     $TOOLS_RX = '('.join('|', @all_t_rx).')';
+}
+
+sub rx {
+    $TOOLS_RX;
 }
 
 sub bash_7c48 {
