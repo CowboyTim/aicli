@@ -354,7 +354,8 @@ sub chat_completion {
     *STDERR->autoflush();
     if ($ORIG_ENV{AI_STREAM} // 1){
         # Parse Server-Sent Events (SSE) stream
-        foreach my $event (split /\n\n/, $raw) {
+        while($raw =~ s/(.*?)\n\n//ms){
+            my $event = $1 // "";
             next unless $event =~ s/^data:\s*//;
             if($event eq '[DONE]'){
                 print "\n";
@@ -362,13 +363,9 @@ sub chat_completion {
             }
             eval {
                 my $decoded = JSON::XS->new->utf8->decode($event);
-                my $delta = '';
-                if (exists $decoded->{choices}[0]{delta}{content}) {
-                    $delta = $decoded->{choices}[0]{delta}{content};
-                } elsif (exists $decoded->{choices}[0]{message}{content}) {
-                    $delta = $decoded->{choices}[0]{message}{content};
-                }
-                if (defined $delta && length($delta)) {
+                my $delta = $decoded->{choices}[0]{delta}{content}
+                         // $decoded->{choices}[0]{message}{content};
+                if(length($delta//"")){
                     _utf8_off($delta);
                     $resp .= $delta;
                     print $delta;
@@ -379,8 +376,17 @@ sub chat_completion {
                 last;
             }
         }
+        if(length($raw)){
+            eval {
+                my $decoded = JSON::XS->new->utf8->decode($raw);
+                main::log_error(${colors::red_color}.$decoded->{error}.${colors::reset_color});
+            };
+            if($@){
+                main::log_error(${colors::red_color}.$raw.${colors::reset_color});
+            }
+        }
         # save in history
-        push @jstr, {role => 'asistant', content => $resp};
+        push @jstr, {role => 'assistant', content => $resp};
 
         # handle tools
         my ($t, $p, $r) = handle_llm_response(\$resp);
@@ -402,7 +408,7 @@ sub chat_completion {
             return;
         }
         # save in history
-        push @jstr, {role => 'asistant', content => $resp};
+        push @jstr, {role => 'assistant', content => $resp};
 
         # handle tools
         my ($t, $p, $r) = handle_llm_response(\$resp);
