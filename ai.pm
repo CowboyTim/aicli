@@ -164,9 +164,13 @@ sub chat_setup {
 
 our $t_rx;
 sub handle_llm_response {
-    my ($resp) = @_;
+    my ($resp, $printer_sub) = @_;
     return (0, 0, []) unless defined $resp and ref($resp) eq 'SCALAR' and length($$resp // "");
     log::info("handling>>".(${$resp //= \""})."<<");
+    $printer_sub //= sub {
+        my ($r) = @_;
+        print $r;
+    };
 
     my $pos = 0;
     my $newturns = 0;
@@ -189,7 +193,7 @@ sub handle_llm_response {
         next unless exists $tools::TOOLS->{$tool_k};
         substr($msg_no_think, 0, pos($msg_no_think)) = '';
 
-        print "${colors::yellow_color1}\[TOOL $tool(".join(' ', @t_args).")\]${colors::reset_color}\n";
+        &{$printer_sub}("${colors::yellow_color1}\[TOOL $tool\(...))\]${colors::reset_color}\n");
         my ($result, $had_error) = execute_tool($tool_k, $tool, \@t_args);
         my $tool_response = "";
         if(!$had_error){
@@ -198,7 +202,7 @@ sub handle_llm_response {
             $result //= "";
             $tool_response = "[$tool ERROR_9a7893514ebc885c2543\n$had_error\nERROR_9a7893514ebc885c2543]";
         }
-        print "${colors::green_color}$tool_response${colors::reset_color}\n";
+        &{$printer_sub}("${colors::green_color}$tool_response${colors::reset_color}\n");
         push @rt, {role => 'user', content => $tool_response};
         $pos = pos($msg_no_think);  # Update position for next iteration
         $newturns = 1;
@@ -1277,7 +1281,8 @@ EOb
     my @all_t_rx;
     foreach my $t (sort values %{$tools::TOOLS//{}}){
         my $t_rx = $t->{syntax};
-        $t_rx =~ s/\{\{.*?\}\}/((?:(?!\\\/\\\/\\\/).)*?)/msg;
+        $t_rx =~ s/\{\{.*?\}\}/(.*?)/msg;
+        #$t_rx =~ s/\{\{.*?\}\}/((?:(?!\\\/\\\/\\\/).)*?)/msg;
         $t_rx =~ s/\+/\\+/msg;
         $t_rx =~ s/\n/\\n/msg;
         push @all_t_rx, "(?:$t_rx)";
@@ -1408,7 +1413,7 @@ sub perl_d8d2 {
 
 sub read_c5a3 {
     my ($t_args) = @_;
-    my $file = trim($t_args->[0]);
+    my $file = ai::trim($t_args->[0]);
     if (open(my $fh, '<', $file)) {
         local $/;
         my $content = <$fh>;
@@ -1420,7 +1425,7 @@ sub read_c5a3 {
 
 sub write_edf5 {
     my ($t_args) = @_;
-    my $path = trim($t_args->[0]);
+    my $path = ai::trim($t_args->[0]);
     log::info("WRITE: $path");
     open(my $fh, '>', $path)
         or die "Cannot write to $path: $!";

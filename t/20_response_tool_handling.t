@@ -2,14 +2,19 @@
 use strict; use warnings;
 
 use Test::More;
-
+use Data::Dumper;
 use FindBin;
+use File::Temp;
+use File::Path qw(make_path rmtree);
 use lib "$FindBin::Bin/..";
+local $Data::Dumper::Sortkeys = 1;
+no warnings 'once';
 
-{
-    no warnings 'once';
-    $::DEBUG = ($ENV{DEBUG}//"0") == "1"?1:0;
-}
+$::DEBUG = ($ENV{DEBUG}//"0") == "1"?1:0;
+
+my $btmpdir = File::Temp::tempdir("aicli_XXXXXXX", DIR => "/tmp", CLEANUP => 1);
+make_path($btmpdir);
+print "# $btmpdir\n";
 
 use_ok("ai");
 
@@ -177,11 +182,33 @@ WRITE_edf5
 ```
 EOp
     ;
-    my ($n, $p, $r) = ai::handle_llm_response(\$v);
-    is($n, 0, 'tools: 0');
-    is($p, 0, 'pos: 0');
-    is_deeply($r, [], 'r: 0');
+    my $tmpdir = File::Temp::tempdir('tool_XXXXXX', DIR => $btmpdir, CLEANUP => 1);
+    make_path($tmpdir);
+    chdir($tmpdir) or die $!;
+    print "# in $tmpdir\n";
+    my @oklist;
+    my ($n, $p, $r) = ai::handle_llm_response(\$v, sub {push @oklist, $_[0]});
+    is($n, 1, 'tools: 1');
+    is($p, undef, 'pos: undef');
+    is_deeply($r, [{
+        'content' => '[WRITE_edf5 RESULT_d170b4e6bb11cfd550aa
+[OK] written to README.md
+RESULT_d170b4e6bb11cfd550aa]',
+        'role' => 'user'
+    }], 'r: 0') or print Dumper($r);
+    is_deeply(\@oklist, [
+        "${colors::yellow_color1}\[TOOL WRITE_edf5(...))]${colors::reset_color}\n",
+        "${colors::green_color}\[WRITE_edf5 RESULT_d170b4e6bb11cfd550aa
+[OK] written to README.md
+RESULT_d170b4e6bb11cfd550aa]${colors::reset_color}\n"
+    ], "print ok printer") or print Dumper(\@oklist);
+    chdir("/");
+    rmtree($tmpdir);
 }
 
 
 done_testing();
+
+END {
+    rmtree($btmpdir) if defined $btmpdir;
+}
