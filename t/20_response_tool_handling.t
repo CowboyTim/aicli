@@ -339,7 +339,6 @@ foreach my $f (@file_info) {
 }
 EO_929b2e8d61111fac138f
 PERL_d8d2
-EOp
 }
     ;
     my $tmpdir = File::Temp::tempdir('tool_XXXXXX', DIR => $btmpdir, CLEANUP => 1);
@@ -362,6 +361,62 @@ RESULT_d170b4e6bb11cfd550aa]',
         "${colors::yellow_color1}\[TOOL PERL_d8d2(...))]${colors::reset_color}\n",
         "${colors::green_color}\[PERL_d8d2 RESULT_d170b4e6bb11cfd550aa
 total 0
+
+RESULT_d170b4e6bb11cfd550aa]${colors::reset_color}\n",
+    ], "print ok printer") or print Dumper(\@oklist);
+    chdir("/");
+    rmtree($tmpdir);
+}
+
+{
+    my $v = q{
+    <think>
+We need to list the contents of directory ".git/" using Perl. The user wants "list me files under .git/ with perl". So we should run a command that uses `ls -la` or similar, but they specifically want it done via Perl script.
+
+Thus: We'll write and execute a small Perl snippet (via PERL tool) to list the contents of ".git/" directory. Use opendir/readdir etc., print each file name with maybe full path? Probably just names relative .git/. Let's do that.
+
+We need to output result from executing perl code via /PERL_d8d2+... We'll produce a Perl script: use strict; my $dir = ".git"; opendir(DH, $dir) or die "Cannot open directory: $!"; while (my $f = readdir DH){ print "$f\n" unless ($f eq '.' || $f eq '..'); } closedir DH;
+
+We'll then call the PERL tool.
+
+Let's do that.
+
+
+</think>
+
+///PERL_d8d2+EO_929b2e8d61111fac138f
+use strict;
+my $dir = ".git";
+opendir(my $dh, $dir) or die "Cannot open directory: $!";
+while (my $file = readdir($dh)) {
+    next if ($file eq '.' || $file eq '..');
+    print "$file\n";
+}
+closedir($dh);
+EO_929b2e8d61111fac138f
+PERL_d8d2
+
+</think>
+}
+    ;
+    my $tmpdir = File::Temp::tempdir('tool_XXXXXX', DIR => $btmpdir, CLEANUP => 1);
+    make_path($tmpdir);
+    chdir($tmpdir) or die $!;
+    mkdir(".git");
+    print "# in $tmpdir\n";
+    my @oklist;
+    my ($n, $p, $r) = ai::handle_llm_response(\$v, sub {push @oklist, $_[0]});
+    is($n, 1, 'tools: 1');
+    is($p, undef, 'pos: undef');
+    is_deeply($r, [{
+        'content' => '[PERL_d8d2 RESULT_d170b4e6bb11cfd550aa
+
+RESULT_d170b4e6bb11cfd550aa]',
+        'role' => 'user'
+    }], 'r: 0') or print Dumper($r);
+    is_deeply(\@oklist, [
+        "${colors::yellow_color1}\[TOOL PERL_d8d2(...))]${colors::reset_color}\n",
+        "${colors::green_color}\[PERL_d8d2 RESULT_d170b4e6bb11cfd550aa
 
 RESULT_d170b4e6bb11cfd550aa]${colors::reset_color}\n",
     ], "print ok printer") or print Dumper(\@oklist);

@@ -175,7 +175,7 @@ sub handle_llm_response {
     my $newturns = 0;
 
     my @rt;
-    my $msg_no_think = $$resp =~ s/(?:^<think>$)?.*?^<\/think>$//msgr;
+    my $msg_no_think = $$resp =~ s/^<think>\$.*?^<\/think>$//msgr;
     _utf8_off($msg_no_think);
     log::info("MSG THINK STRIPPED>>$msg_no_think<<");
     $t_rx //= tools::rx();
@@ -1122,10 +1122,15 @@ sub prompt {
     $list .= "///TOOL_{HEX}+{T1}+{T2}\n{{path}}\n{T1}\n{{content}}\n{T2}\nTOOL_{HEX}\n where {{path}}, {{content}} is substituted by the LLM\n";
     $list .= "TOOL results: [<TOOL_{HEX}> RESULT_d170b4e6bb11cfd550aa\n{{result}}\nRESULT_d170b4e6bb11cfd550aa]\n";
     $list .= "TOOL errors: [<TOOL_{HEX}> ERROR_9a7893514ebc885c2543\n{{error}}\nERROR_9a7893514ebc885c2543]\n";
-    $list .= "\n\nLIST OF TOOLS:\n\n```json\n";
-    $list .= $::JSON->encode($tools::TOOLS);
-    $list .= "\n```\n";
-    $list .= "\n";
+    $list .= "\n\nLIST OF TOOLS:\n\n";
+    #$list .= "```json\n".$::JSON->encode($tools::TOOLS);
+    $list .= join("\n\n", map {"```json\n".$::JSON->encode({
+        name        => $_,
+        tool        => $tools::TOOLS->{$_}{syntax},
+        description => $tools::TOOLS->{$_}{description},
+        properties  => $tools::TOOLS->{$_}{properties} // {},
+        required    => $tools::TOOLS->{$_}{required}   // [],
+    })."\n```\n"} sort keys %{$tools::TOOLS});
     $list .= "\n";
     log::info("TOOLS SECTION>>$list<<");
     return $list;
