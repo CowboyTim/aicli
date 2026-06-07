@@ -115,5 +115,3 @@ See [TODO.md](TODO.md) for current development priorities including:
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-EOF_d0684c052bf3d9c503a8
