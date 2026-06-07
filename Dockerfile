@@ -32,7 +32,7 @@ RUN apk add --no-cache diffutils patch
 RUN apk add --no-cache strace
 
 # ai.pl
-COPY ai.pl /
+COPY *.pm *.pl /
 COPY ai /ai
 RUN perl -cw /ai.pl
 ENV HOME=/ai
