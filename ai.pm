@@ -261,7 +261,7 @@ sub chat_completion {
 
     *STDOUT->autoflush();
     *STDERR->autoflush();
-    if ($::ORIG_ENV{AI_STREAM} // 1){
+    if($::ORIG_ENV{AI_STREAM}//1){
         # Parse Server-Sent Events (SSE) stream
         while($raw =~ s/(.*?)\n\n//ms){
             my $event = $1 // "";
