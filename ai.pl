@@ -4,37 +4,35 @@
 
 use strict; use warnings;
 
-no warnings 'once';
-
 use FindBin;
 use lib "$FindBin::Bin";
 
-# don't leak ENV to other forks, clear $0 asap: clears envp
+# clear $0 asap: clears envp
 my $orig_dollar0;
-%::ORIG_ENV = ();
 BEGIN {
-    %::ORIG_ENV = %ENV;
-    %ENV = ();
     $orig_dollar0 = $0;
-    my $bd = $::ORIG_ENV{BDIR}    // "session";
+    my $bd = $ENV{BDIR}    // "session";
     $bd =~ s/^.*\///g;
     $bd =~ s/[^a-zA-Z0-9_-]/_/g;
-    my $ln = $::ORIG_ENV{LOGNAME} // "nobody";
+    my $ln = $ENV{LOGNAME} // "nobody";
     $ln =~ s/[^a-zA-Z0-9_-]/_/g;
     $0 = "aicli:$ln:$bd";
 }
 
+# don't leak ENV to other forks, clear $0 asap: clears envp
+%::ORIG_ENV = %ENV;
+%ENV = ();
+
 use Getopt::Long;
 
 # Command-line options
-my $DEBUG = $::ORIG_ENV{DEBUG} // 0;
 {
     my $help;
     if(!GetOptions(
         'help|?' => \$help,
-        'debug'  => \$DEBUG,
+        'debug'  => \$::DEBUG,
     ) or $help){
-        local $ENV{PAGER} = $ENV{PAGER} // 'less';
+        local $ENV{PAGER} = $::ORIG_ENV{PAGER} // 'less';
         local $0 = $orig_dollar0;
         load_cpan("FindBin")->again();
         load_cpan("Pod::Usage")->pod2usage(2);

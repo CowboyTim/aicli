@@ -27,6 +27,7 @@ sub chat_setup {
             or die "Error chdir to CDIR=$::ORIG_ENV{CDIR}: $!\n";
     }
 
+    $BASE_DIR = $base_dir;
     my $cfg_file = $::ORIG_ENV{AI_CONFIG}
         // "$BASE_DIR/config";
     if (-f $cfg_file) {
