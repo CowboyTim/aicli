@@ -1123,17 +1123,37 @@ sub prompt {
     $list .= "TOOL results: [<TOOL_{HEX}> RESULT_d170b4e6bb11cfd550aa\n{{result}}\nRESULT_d170b4e6bb11cfd550aa]\n";
     $list .= "TOOL errors: [<TOOL_{HEX}> ERROR_9a7893514ebc885c2543\n{{error}}\nERROR_9a7893514ebc885c2543]\n";
     $list .= "\n\nLIST OF TOOLS:\n\n";
-    #$list .= "```json\n".$::JSON->encode($tools::TOOLS);
-    $list .= join("\n\n", map {"```json\n".$::JSON->encode({
-        name        => $_,
-        tool        => $tools::TOOLS->{$_}{syntax},
-        description => $tools::TOOLS->{$_}{description},
-        properties  => $tools::TOOLS->{$_}{properties} // {},
-        required    => $tools::TOOLS->{$_}{required}   // [],
-    })."\n```\n"} sort keys %{$tools::TOOLS});
+#    $list .= "```json\n".$::JSON->encode($tools::TOOLS);
+#    $list .= join("\n\n", map {"```json\n".$::JSON->encode({
+#        name        => $_,
+#        tool        => $tools::TOOLS->{$_}{syntax},
+#        description => $tools::TOOLS->{$_}{description},
+#        properties  => $tools::TOOLS->{$_}{properties} // {},
+#        required    => $tools::TOOLS->{$_}{required}   // [],
+#    })."\n```\n"} sort keys %{$tools::TOOLS});
+    $list .= join("\n\n", map {
+        "name: $_\n".
+        "tool: ```\n$tools::TOOLS->{$_}{syntax}\n```\n".
+        "description: $tools::TOOLS->{$_}{description}\n".
+        "properties:\n"._kv_print($tools::TOOLS->{$_}{properties}, 1)
+    } sort keys %{$tools::TOOLS});
     $list .= "\n";
     log::info("TOOLS SECTION>>$list<<");
     return $list;
+}
+
+sub _kv_print {
+    my ($h, $i) = @_;
+    $i //= 0;
+    my $s = "";
+    foreach my $k (sort keys %{$h//{}}){
+        if(ref($h->{$k}) eq 'HASH'){
+            $s .= (" "x$i)."$k:\n"._kv_print($h->{$k}, $i+1);
+        } else {
+            $s .= (" "x$i)."$k: $h->{$k}\n";
+        }
+    }
+    return $s;
 }
 
 package tools;
