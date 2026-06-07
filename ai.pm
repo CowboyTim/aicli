@@ -4,11 +4,9 @@ use strict; use warnings;
 
 use utils;
 
-use Socket;
 use Cwd qw();
-use Encode qw(_utf8_on _utf8_off);
+use Encode qw(_utf8_off);
 use Errno;
-use POSIX ();
 use JSON::XS;
 
 BEGIN {
@@ -1257,89 +1255,13 @@ sub bash_7c48 {
 sub perl_d8d2 {
     my ($t_args) = @_;
     return "[ERROR] need an actual perl program, size=0" unless length($t_args//"");
-    local $SIG{HUP}  = 'IGNORE';
-    local $SIG{INT}  = 'DEFAULT';
-    local $SIG{TERM} = 'DEFAULT';
-    local $SIG{QUIT} = 'DEFAULT';
-    local $SIG{CHLD} = 'IGNORE';
-    local $SIG{ALRM} = 'IGNORE';
-    pipe(my $read_pipe_fh, my $write_pipe_fh)
-        or die "Error setting up pipe(): $!\n";
-    my $c_pid = fork() // return "[ERROR] couldn't run the perl program, fork error: $!\n";
-    if($c_pid){
-        close($write_pipe_fh);
-        # here we need to catch the output and watch the process
-        log::info("worker $c_pid forked, getting output");
-        my $buf = "";
-        {
-            local $/;
-            $buf = <$read_pipe_fh>;
-        }
-        log::info("now waitpid for $c_pid");
-        my $r = waitpid($c_pid, 0);
-        if($r == -1){
-            # no such process
-            log::info("no process with $c_pid");
-        } elsif($r == 0){
-            log::info("no processes"); # only WNOHANG, and we didn't enable that yet
-        } elsif($r == $c_pid){
-            my $e_v = $? << 8;
-            my $s_v = $? & 127;
-            if($e_v != 0 or !$s_v){
-                log::error("$c_pid exited: $e_v, signal: $s_v");
-                $buf = "[ERROR] PERL exit: $e_v, signal: $s_v, output: $buf";
-            } else {
-                log::info("$c_pid exited: $e_v, signal: $s_v");
-            }
-        } else {
-            log::info("waitpid undef");
-        }
-        return $buf;
-    } else {
-        # worker sub-process
-        eval {
-            close($read_pipe_fh);
-
-            local $ENV{PATH} = $::ORIG_ENV{PATH};
-            local $ENV{HOME} = $::ORIG_ENV{HOME};
-            local $ENV{LOGNAME} = $::ORIG_ENV{LOGNAME};
-            local $ENV{TMPDIR} = "/tmp";
-            local $ENV{LANG} = "en_US.UTF-8";
-            %::ORIG_ENV = ();
-            $0 = "aicli:perl_tool";
-
-            POSIX::setsid() != -1
-                or (!$!{EPERM} and die "problem making new session/process group: $!\n");
-            open(STDOUT, '>&', $write_pipe_fh)
-                or die "Can't dup STDOUT to PIPE: $!\n";
-            *STDOUT->autoflush();
-            *STDERR->autoflush();
-            open(STDERR, '>&STDOUT')
-                or die "Can't dup STDERR to STDOUT: $!\n";
-            open(STDIN,  '</dev/null')
-                or die "Can't read /dev/null: $!\n";
-            # dup() sets $! as ioctl() is done in perl, so reset ERRNO
-            local $! = 0;
-            local $@;
-
-            # full "freedom", sub-process anyways, and dockerized!
-            no strict;
-            no warnings;
-            eval $t_args->[0];
-            die $@ if $@
-        };
-        if($@){
-            # there are cases that we get here, mostly signals and/or die/eval
-            # caches (not the case here), also, "exit" handles END blocks, which
-            # can do nasty stuff. As we really don't want this worker process to
-            # continue, we use POSIX _exit
-            chomp(my $err = $@);
-            print "[ERROR] problem setting up forked process for running the perl program: $err\n";
-            POSIX::_exit(1);
-        }
-        POSIX::_exit(0);
-    }
-    return "[ERROR] failed to execute command: $t_args->[0]: $!";
+    return utils::daemon(sub {
+        # full "freedom", sub-process anyways, and dockerized!
+        no strict;
+        no warnings;
+        eval $t_args->[0];
+        die $@ if $@
+    });
 }
 
 sub read_c5a3 {
