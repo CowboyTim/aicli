@@ -22,13 +22,15 @@ use_ok("ai");
 
 TOOLS SYNTAX, for tool 'TOOL':
 
+```
 ///TOOL_{HEX}+{T1}+{T2}
 {{path}}
 {T1}
 {{content}}
 {T2}
 TOOL_{HEX}
- where {{path}}, {{content}} is substituted by the LLM
+```
+Where {{path}}, {{content}} is substituted by the LLM
 TOOL results: [<TOOL_{HEX}> RESULT_d170b4e6bb11cfd550aa
 {{result}}
 RESULT_d170b4e6bb11cfd550aa]
@@ -41,7 +43,6 @@ LIST OF TOOLS:
 
 name: bash
 tool: ```
-
 ///BASH_7c48+EO_dfd7e6b99d1bf15480fa
 {{code}}
 EO_dfd7e6b99d1bf15480fa
@@ -56,7 +57,6 @@ properties:
 
 name: grep
 tool: ```
-
 ///GREP_6629+EO_a575a5c230c77d451640+EO_aaddf906cba61ec85a13
 {{path}}
 EO_a575a5c230c77d451640
@@ -76,7 +76,6 @@ properties:
 
 name: perl
 tool: ```
-
 ///PERL_d8d2+EO_929b2e8d61111fac138f
 {{code}}
 EO_929b2e8d61111fac138f
@@ -91,7 +90,6 @@ properties:
 
 name: read
 tool: ```
-
 ///READ_c5a3+EO_d0f15b09ea7648f828e7
 {{path}}
 EO_d0f15b09ea7648f828e7
@@ -106,7 +104,6 @@ properties:
 
 name: write
 tool: ```
-
 ///WRITE_edf5+EO_d0684c052bf3d9c503a8+EO_ecdeef376b1647fa824a
 {{path}}
 EO_d0684c052bf3d9c503a8

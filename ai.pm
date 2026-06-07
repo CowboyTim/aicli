@@ -1119,18 +1119,11 @@ package prompt::coder;
 sub prompt {
     my $list = "\n\n**TOOLS**\n\n";
     $list .= "\n\nTOOLS SYNTAX, for tool 'TOOL':\n\n";
-    $list .= "///TOOL_{HEX}+{T1}+{T2}\n{{path}}\n{T1}\n{{content}}\n{T2}\nTOOL_{HEX}\n where {{path}}, {{content}} is substituted by the LLM\n";
+    $list .= "```\n///TOOL_{HEX}+{T1}+{T2}\n{{path}}\n{T1}\n{{content}}\n{T2}\nTOOL_{HEX}\n```\nWhere {{path}}, {{content}} is substituted by the LLM\n";
     $list .= "TOOL results: [<TOOL_{HEX}> RESULT_d170b4e6bb11cfd550aa\n{{result}}\nRESULT_d170b4e6bb11cfd550aa]\n";
     $list .= "TOOL errors: [<TOOL_{HEX}> ERROR_9a7893514ebc885c2543\n{{error}}\nERROR_9a7893514ebc885c2543]\n";
     $list .= "\n\nLIST OF TOOLS:\n\n";
 #    $list .= "```json\n".$::JSON->encode($tools::TOOLS);
-#    $list .= join("\n\n", map {"```json\n".$::JSON->encode({
-#        name        => $_,
-#        tool        => $tools::TOOLS->{$_}{syntax},
-#        description => $tools::TOOLS->{$_}{description},
-#        properties  => $tools::TOOLS->{$_}{properties} // {},
-#        required    => $tools::TOOLS->{$_}{required}   // [],
-#    })."\n```\n"} sort keys %{$tools::TOOLS});
     $list .= join("\n\n", map {
         "name: $_\n".
         "tool: ```\n$tools::TOOLS->{$_}{syntax}\n```\n".
@@ -1166,7 +1159,7 @@ BEGIN {
     $tools::TOOLS = {
     bash => {
         description => "execute a bash script",
-        syntax => "\n///BASH_7c48+EO_dfd7e6b99d1bf15480fa\n{{code}}\nEO_dfd7e6b99d1bf15480fa\nBASH_7c48",
+        syntax => "///BASH_7c48+EO_dfd7e6b99d1bf15480fa\n{{code}}\nEO_dfd7e6b99d1bf15480fa\nBASH_7c48",
         properties  => {
             "code" => {type => "string", description => "The bash code to execute"},
         },
@@ -1181,7 +1174,7 @@ EOb
     },
     perl => {
         description => "execute a perl script",
-        syntax => "\n///PERL_d8d2+EO_929b2e8d61111fac138f\n{{code}}\nEO_929b2e8d61111fac138f\nPERL_d8d2",
+        syntax => "///PERL_d8d2+EO_929b2e8d61111fac138f\n{{code}}\nEO_929b2e8d61111fac138f\nPERL_d8d2",
         properties  => {
             "code" => {type => "string", description => "The perl code to execute"},
         },
@@ -1189,7 +1182,7 @@ EOb
     },
     read => {
         description => "read a file contents",
-        syntax => "\n///READ_c5a3+EO_d0f15b09ea7648f828e7\n{{path}}\nEO_d0f15b09ea7648f828e7\nREAD_c5a3",
+        syntax => "///READ_c5a3+EO_d0f15b09ea7648f828e7\n{{path}}\nEO_d0f15b09ea7648f828e7\nREAD_c5a3",
         properties  => {
             "path" => {type => "string", description => "The path to the file"},
         },
@@ -1197,7 +1190,7 @@ EOb
     },
     write => {
         description => "write or overwrite a file",
-        syntax => "\n///WRITE_edf5+EO_d0684c052bf3d9c503a8+EO_ecdeef376b1647fa824a\n{{path}}\nEO_d0684c052bf3d9c503a8\n{{content}}\nEO_ecdeef376b1647fa824a\nWRITE_edf5",
+        syntax => "///WRITE_edf5+EO_d0684c052bf3d9c503a8+EO_ecdeef376b1647fa824a\n{{path}}\nEO_d0684c052bf3d9c503a8\n{{content}}\nEO_ecdeef376b1647fa824a\nWRITE_edf5",
         properties  => {
             "path"    => {type => "string", description => "The path to the file"},
             "content" => {type => "string", description => "The raw text content to write"},
@@ -1216,7 +1209,7 @@ EOb
     },
     grep => {
         description => "search file with a pattern using grep unix tool",
-        syntax => "\n///GREP_6629+EO_a575a5c230c77d451640+EO_aaddf906cba61ec85a13\n{{path}}\nEO_a575a5c230c77d451640\n{{regex}}\nEO_aaddf906cba61ec85a13\nGREP_6629",
+        syntax => "///GREP_6629+EO_a575a5c230c77d451640+EO_aaddf906cba61ec85a13\n{{path}}\nEO_a575a5c230c77d451640\n{{regex}}\nEO_aaddf906cba61ec85a13\nGREP_6629",
         properties  => {
             "path"  => {type => "string", description => "The file path or directory to scan"},
             "regex" => {type => "string", description => "The grep pattern"},
