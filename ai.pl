@@ -615,8 +615,8 @@ sub setup_commands {
     $cmds->{'/model'} = {map {$_->{id}, sub {switch_model($_->{id})}} @models};
 
     # add prompts
-    my @prompts = glob("$FindBin::Bin/ai/*");
-    $cmds->{'/prompt'} = {map {($_ =~ s/.*\///r, sub {switch_prompt($_)})} @prompts};
+    my @all_prompts = glob("$FindBin::Bin/ai/*");
+    $cmds->{'/prompt'} = {map {($_ =~ s/.*\///r, sub {switch_prompt($_)})} @all_prompts};
 
     # add available sessions
     refresh_session_completions();
@@ -643,10 +643,17 @@ sub init_session {
     my $p_file = "$session_dir/prompt";
     my $s_file = "$session_dir/chat";
 
-    if((!-s $p_file or ($ORIG_ENV{AI_CLEAR}//0)) and open(my $fh, '<', $AI_PROMPT_TEMPLATE_FILE)){
-        local $/;
-        my $prompt = <$fh>;
-        close($fh);
+    main::log_info("checking setup: AI_CLEAR=".($ENV{AI_CLEAR}//0).", $p_file, $s_file, $AI_PROMPT_TEMPLATE_FILE");
+    if(!-s $p_file or ($ORIG_ENV{AI_CLEAR}//0)){
+        my $prompt = "";
+        if(open(my $fh, '<', $AI_PROMPT_TEMPLATE_FILE)){
+            main::log_info("using/updating $AI_PROMPT_TEMPLATE_FILE for prompt");
+            local $/;
+            $prompt = <$fh>;
+            close($fh);
+        } else {
+            main::log_info("no prompt file $AI_PROMPT_TEMPLATE_FILE, clearing $p_file");
+        }
         open(my $pfh, '>', $p_file)
             or die "Failed to write to $p_file: $!\n";
         print {$pfh} $prompt;
@@ -660,25 +667,17 @@ sub init_session {
             $prompt = <$fh>;
             close($fh);
         }
-        $prompt .= _tool_list_for_prompt();
+        if(UNIVERSAL::can("prompt::${AI_PROMPT_TEMPLATE}","prompt")){
+            main::log_info("PROMPT check for 'prompt::${AI_PROMPT_TEMPLATE}'");
+            no strict "refs";
+            $prompt .= &{"prompt::${AI_PROMPT_TEMPLATE}::prompt"}() // "";
+        }
         open(my $fh, '>', $s_file)
             or die "Failed to write to $s_file: $!\n";
         print {$fh} $::JSON->encode({role => 'system', content => ($prompt // "")})."\n";
         close $fh
             or die "Failed to close $s_file: $!\n";
     }
-}
-
-sub _tool_list_for_prompt {
-    my $list = "\nTOOLS 'syntax': \n///TOOL_{HEX}+{T1}+{T2}\n{{path}}\n{T1}\n{{content}}\n{T2}\nTOOL_{HEX}\n where {{path}}, {{content} is substituted by the LLM\n";
-    $list .= "TOOLS:\n```json\n";
-    $list .= $::JSON->encode($tools::TOOLS);
-    $list .= "\n";
-    $list .= "TOOL results: [<TOOL_{HEX}> RESULT_d170b4e6bb11cfd550aa\n{{result}}\nRESULT_d170b4e6bb11cfd550aa]\n";
-    $list .= "TOOL errors: [<TOOL_{HEX}> ERROR_9a7893514ebc885c2543\n{{error}}\nERROR_9a7893514ebc885c2543]\n";
-    $list .= "\n";
-    log_info("TOOLS SECTION>>$list<<");
-    return $list;
 }
 
 sub get_sessions {
@@ -1265,6 +1264,24 @@ BEGIN {
         no strict 'refs';
         *{"${k}"} = \&{"Net::Curl::Easy::${k}"};
     }
+}
+
+package prompt;
+
+package prompt::default;
+
+package prompt::coder;
+
+sub prompt {
+    my $list = "\nTOOLS 'syntax': \n///TOOL_{HEX}+{T1}+{T2}\n{{path}}\n{T1}\n{{content}}\n{T2}\nTOOL_{HEX}\n where {{path}}, {{content} is substituted by the LLM\n";
+    $list .= "TOOLS:\n```json\n";
+    $list .= $::JSON->encode($tools::TOOLS);
+    $list .= "\n";
+    $list .= "TOOL results: [<TOOL_{HEX}> RESULT_d170b4e6bb11cfd550aa\n{{result}}\nRESULT_d170b4e6bb11cfd550aa]\n";
+    $list .= "TOOL errors: [<TOOL_{HEX}> ERROR_9a7893514ebc885c2543\n{{error}}\nERROR_9a7893514ebc885c2543]\n";
+    $list .= "\n";
+    main::log_info("TOOLS SECTION>>$list<<");
+    return $list;
 }
 
 package tools;
