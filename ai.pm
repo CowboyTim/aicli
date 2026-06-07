@@ -175,7 +175,7 @@ sub handle_llm_response {
     my $newturns = 0;
 
     my @rt;
-    my $msg_no_think = $$resp =~ s/^<think>\$.*?^<\/think>$//msgr;
+    my $msg_no_think = $$resp =~ s/^<think>.*?^<\/think>$//msgr;
     _utf8_off($msg_no_think);
     log::info("MSG THINK STRIPPED>>$msg_no_think<<");
     $t_rx //= tools::rx();

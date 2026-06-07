@@ -1,0 +1,136 @@
+<think>
+We need to reassess sizes: The user thinks /opt/rocm is on a mount. We saw it's mounted from /dev/mapper/m.2-home ext4, size 503G total with used etc.
+
+But the script already scanned entire root filesystem excluding pseudo filesystems; that includes /opt/rocm as part of /. The sizes reported are correct for those files under /opt/rocm (they're on that mount). However maybe they want to see largest files overall, but perhaps we need to separate by mount? Or just confirm the biggest files indeed reside on that mount.
+
+We can adjust script to show filesystem type or mount point per file. Let's produce a new Perl script that uses stat to get device number and then map to mount point via /proc/self/mountinfo or using `df --output=source,target` etc. Simpler: use `stat -c "%m"`? Actually stat can give filesystem ID but not mount point easily.
+
+We could run `find` with `-printf` to output size and file and then later get mount via `df -P`. But for simplicity we can just note that all large files are under /opt/rocm which is on a separate mount. Provide reassessment: The largest files are indeed on that mount, consuming significant portion of the 503G partition.
+
+We could compute total size of /opt/rocm used by those top files etc.
+
+Let's write a quick Perl script to compute total size of /opt/rocm and maybe list biggest files there. But we already have list; just need to reassess that they are on separate mount: confirm via mount point.
+
+We can output the device major/minor for each file and compare to the device of /opt/rocm.
+
+Let's do that now.
+</think>
+///WRITE_edf5+EO_d0684c052bf3d9c503a8
+find_biggest_with_mount.pl
+EO_d0684c052bf3d9c503a8
+#!/usr/bin/env perl
+use strict;
+use warnings;
+
+# ------------------------------------------------------------
+# find_biggest_with_mount.pl
+#
+# Scans the whole filesystem (excluding pseudo fs) and reports:
+#   * total number of regular files
+#   * top N largest files with size, path, and the mount point they reside on
+#
+# Usage: perl find_biggest_with_mount.pl [TOP]
+# ------------------------------------------------------------
+
+sub human_bytes {
+    my ($bytes) = @_;
+    return sprintf("%.2f B", $bytes) if $bytes < 1024;
+    $bytes /= 1024;
+    return sprintf("%.2f KB", $bytes) if $bytes < 1024;
+    $bytes /= 1024;
+    return sprintf("%.2f MB", $bytes) if $bytes < 1024;
+    $bytes /= 1024;
+    return sprintf("%.2f GB", $bytes);
+}
+
+# Get mount point for a given path by checking /proc/self/mountinfo
+sub get_mountpoint {
+    my ($path) = @_;
+    # Normalize path (remove trailing slashes except root)
+    $path =~ s{/+$}{} unless $path eq '/';
+    open my $mnt, '<', '/proc/self/mountinfo' or die "Cannot read /proc/self/mountinfo: $!";
+    my ($best_len, $best_mp) = (0, '/');
+    while (<$mnt>) {
+        # format: 36 35 98:1 / /opt/rocm rw,relatime shared:1 - ext4 /dev/mapper/m.2-home rw
+        # fields: ... mountpoint optional...
+        # We'll parse the mountpoint (field 4) and the root of mount (field 3?) Actually easier:
+        # Use `findmnt` but we avoid external deps; approximate by checking if path starts with mountpoint.
+        my @parts = split;
+        next unless @parts >= 5;
+        my $mnt_point = $parts[4];
+        if (index($path, $mnt_point) == 0 && length($mnt_point) > $best_len) {
+            $best_len = length($mnt_point);
+            $best_mp = $mnt_point;
+        }
+    }
+    close $mnt;
+    return $best_mp;
+}
+
+# Directories we skip entirely
+my @SKIP_DIRS = qw(/proc /sys /dev /run);
+
+sub is_skipped {
+    my ($path) = @_;
+    foreach my $skip (@SKIP_DIRS) {
+        return 1 if index($path, $skip) == 0;
+    }
+    return 0;
+}
+
+# Determine how many top entries to show (default 20)
+my $TOP = shift // 20;
+
+print "Scanning filesystem... (this may take a moment)\n";
+my @files = qx{
+    find / -type f \\( \\
+        -path '/proc' -prune -o \\
+        -path '/sys'  -prune -o \\
+        -path '/dev'  -prune -o \\
+        -path '/run'  -prune -o \\
+        -print \\
+    \\) 2>/dev/null
+};
+chomp @files;
+@files = grep { !is_skipped($_) } @files;
+
+my $total = scalar @files;
+print "Total regular files found (excluding pseudoÃ¢ÂÂfs): $total\n";
+
+# Build list of [size, filepath]
+my @sized;
+foreach my $f (@files) {
+    next unless -e $f && -r _;   # skip if we cannot stat/read
+    push @sized, [ (stat($f))[7], $f ];
+}
+
+# Sort descending by size
+@sized = sort { $b->[0] <=> $a->[0] } @sized;
+
+print "\nTop $TOP largest files:\n";
+for my $i (0 .. ($TOP-1 < @sized ? $TOP-1 : $#sized)) {
+    my ($size, $path) = @{$sized[$i]};
+    my $mp = get_mountpoint($path);
+    printf "%4d: %12s (%s)  [%s]\n", $i+1, human_bytes($size), $path, $mp;
+}
+
+# Also compute total size of /opt/rocm if it exists
+if (-d '/opt/rocm') {
+    my $opt_size = qx{du -sb /opt/rocm 2>/dev/null};
+    chomp $opt_size;
+    $opt_size =~ s/\s.*//;
+    $opt_size //= 0;
+    print "\nApproximate total size of /opt/rocm: ", human_bytes($opt_size), "\n";
+}
+
+__END__
+EO_ecdeef376b1647fa824a
+WRITE_edf5
+
+Now run it.
+</think>
+///BASH_7c48+EO_dfd7e6b99d1bf15480fa
+perl find_biggest_with_mount.pl 20
+EO_dfd7e6b99d1bf15480fa
+BASH_7c48
+```

@@ -424,6 +424,35 @@ RESULT_d170b4e6bb11cfd550aa]${colors::reset_color}\n",
     rmtree($tmpdir);
 }
 
+{
+    open(my $ifh, '<', "$FindBin::Bin/../t/resources/resp_01.in") or die $!;
+    local $/;
+    my $v = <$ifh>;
+    close($ifh);
+    my $ofn ="$FindBin::Bin/../t/resources/resp_01.out";
+    open(my $ofh, '<', $ofn) or die "Error opening $ofn: $!\n";
+    local $/;
+    my $o = <$ofh>;
+    close($ofh);
+    my $tmpdir = File::Temp::tempdir('tool_XXXXXX', DIR => $btmpdir, CLEANUP => 1);
+    make_path($tmpdir);
+    chdir($tmpdir) or die $!;
+    mkdir(".git");
+    print "# in $tmpdir\n";
+    my @oklist;
+    my ($n, $p, $r) = ai::handle_llm_response(\$v, sub {push @oklist, $_[0]});
+    is($n, 1, 'tools: 1');
+    is($p, undef, 'pos: undef');
+    is_deeply($r, [{
+        'content' => '',
+        'role' => 'user',
+    }], 'r: 0') or print Dumper($r);
+    is_deeply(\@oklist, [
+    ], "print ok printer") or print Dumper(\@oklist);
+    chdir("/");
+    rmtree($tmpdir);
+}
+
 
 done_testing();
 
