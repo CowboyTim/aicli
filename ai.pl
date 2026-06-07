@@ -1325,6 +1325,13 @@ BEGIN {
             "code" => {type => "string", description => "The bash code to execute"},
         },
         required => ["code"],
+        example => <<EOb
+///BASH_7c48+EO_dfd7e6b99d1bf15480fa\n
+pwd
+ls -la
+EO_dfd7e6b99d1bf15480fa
+BASH_7c48
+EOb
     },
     perl => {
         description => "execute a perl script",
@@ -1350,12 +1357,22 @@ BEGIN {
             "content" => {type => "string", description => "The raw text content to write"},
         },
         required => ["path", "content"],
+        example => <<EOb
+
+///WRITE_edf5+EO_d0684c052bf3d9c503a8+EO_ecdeef376b1647fa824a
+perl_program.pl
+EO_d0684c052bf3d9c503a8
+#!/usr/bin/perl
+print "Hello, World!\n";
+EO_ecdeef376b1647fa824a
+WRITE_edf5
+EOb
     },
     grep => {
         description => "search file with a pattern using grep unix tool",
         syntax => "\n///GREP_6629+EO_a575a5c230c77d451640+EO_aaddf906cba61ec85a13\n{{path}}\nEO_a575a5c230c77d451640\n{{regex}}\nEO_aaddf906cba61ec85a13\nGREP_6629",
         properties  => {
-            "path"  => {type => "string", description => "The file path or directory to scan" },
+            "path"  => {type => "string", description => "The file path or directory to scan"},
             "regex" => {type => "string", description => "The grep pattern"},
         },
         required => ["path", "regex"],
