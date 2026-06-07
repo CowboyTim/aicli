@@ -1288,14 +1288,20 @@ package prompt;
 
 package prompt::default;
 
+no warnings 'once';
+*prompt = *{prompt::coder};
+
 package prompt::coder;
 
 sub prompt {
-    my $list = "\n\nTOOLS SYNTAX, for tool 'TOOL':\n\n///TOOL_{HEX}+{T1}+{T2}\n{{path}}\n{T1}\n{{content}}\n{T2}\nTOOL_{HEX}\n where {{path}}, {{content}} is substituted by the LLM\n";
+    my $list = "\n\n**TOOLS**\n\n";
+    $list .= "\n\nTOOLS SYNTAX, for tool 'TOOL':\n\n";
+    $list .= "///TOOL_{HEX}+{T1}+{T2}\n{{path}}\n{T1}\n{{content}}\n{T2}\nTOOL_{HEX}\n where {{path}}, {{content}} is substituted by the LLM\n";
     $list .= "TOOL results: [<TOOL_{HEX}> RESULT_d170b4e6bb11cfd550aa\n{{result}}\nRESULT_d170b4e6bb11cfd550aa]\n";
     $list .= "TOOL errors: [<TOOL_{HEX}> ERROR_9a7893514ebc885c2543\n{{error}}\nERROR_9a7893514ebc885c2543]\n";
     $list .= "\n\nLIST OF TOOLS:\n\n```json\n";
     $list .= $::JSON->encode($tools::TOOLS);
+    $list .= "\n```\n";
     $list .= "\n";
     $list .= "\n";
     main::log_info("TOOLS SECTION>>$list<<");
