@@ -5,7 +5,7 @@
 use strict; use warnings;
 
 use FindBin;
-use lib "$FindBin::Bin";
+use lib $FindBin::Bin;
 
 # clear $0 asap: clears envp
 my $orig_dollar0;
@@ -23,12 +23,12 @@ BEGIN {
 %::ORIG_ENV = %ENV;
 %ENV = ();
 
-use Getopt::Long;
-
 # Command-line options
 {
+    no warnings 'once';
+    require Getopt::Long;
     my $help;
-    if(!GetOptions(
+    if(!Getopt::Long::GetOptions(
         'help|?' => \$help,
         'debug'  => \$::DEBUG,
     ) or $help){
@@ -86,7 +86,8 @@ die "[ERROR] running as root EGID/RGID is not allowed\n"
 #  ↓ user 1000 (node)
 
 # Main execution
-use ai;
+require ai;
+
 ai::chat_setup($BASE_DIR);
 ai::setup_commands();
 ai::chat_loop();

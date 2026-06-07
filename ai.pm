@@ -2,7 +2,7 @@ package ai;
 
 use strict; use warnings;
 
-use log;
+use utils;
 
 use Socket;
 use Cwd qw();
@@ -16,7 +16,7 @@ BEGIN {
 }
 
 # Variables/Handles
-our ($api_key, $curl_handle, $ai_endpoint_url, $SESSION_MODEL, $provider_name, $v1_prefix);
+our ($api_key, $AI_ENDPOINT_URL, $SESSION_MODEL, $provider_name, $v1_prefix);
 our ($AI_SESSION_DIR, $HISTORY_FILE, $PROMPT_FILE, $STATUS_FILE, $BASE_DIR, $AI_PROMPT_TEMPLATE, $AI_PROMPT_TEMPLATE_FILE, $AI_SESSION, $SESSIONS_DIR);
 our $cmds;
 
@@ -53,7 +53,7 @@ sub chat_setup {
         // $::ORIG_ENV{AI_PROMPT_DEFAULT};
     if (!$AI_SESSION) {
         # Generate a UUID for default session
-        eval {log::load_cpan("Data::UUID")};
+        eval {utils::load_cpan("Data::UUID")};
         if ($@) {
             log::error("Please install Data::UUID module to generate UUIDs");
             exit 1;
@@ -120,7 +120,7 @@ sub chat_setup {
 
     # Check for local llama.cpp server
     if ($::ORIG_ENV{AI_LOCAL_SERVER}) {
-        $ai_endpoint_url = $::ORIG_ENV{AI_LOCAL_SERVER};
+        $AI_ENDPOINT_URL = $::ORIG_ENV{AI_LOCAL_SERVER};
         $provider_name = undef;  # Don't set provider_name for local servers to avoid lookups
     } else {
         # Detect provider by key prefix or use configured provider
@@ -137,9 +137,9 @@ sub chat_setup {
 
         # Use detected provider or fall back to configured provider
         if ($provider_name and exists $PROVIDERS{$provider_name}) {
-            $ai_endpoint_url = $PROVIDERS{$provider_name}{url};
+            $AI_ENDPOINT_URL = $PROVIDERS{$provider_name}{url};
         } elsif ($detected_provider) {
-            $ai_endpoint_url = $PROVIDERS{$detected_provider}{url};
+            $AI_ENDPOINT_URL = $PROVIDERS{$detected_provider}{url};
         } else {
             log::error("Unable to detect provider from API key. Set AI_PROVIDER environment variable");
             log::error("Supported providers: ".join(', ', keys %PROVIDERS));
@@ -158,7 +158,7 @@ sub chat_setup {
     }
 
     # Normalize URL - ensure it doesn't end with / for some endpoints
-    $ai_endpoint_url =~ s|/+$||;
+    $AI_ENDPOINT_URL =~ s|/+$||;
     init_session($AI_SESSION);
     return;
 }
@@ -248,10 +248,10 @@ sub chat_completion {
     # Provider-specific options
     $req->{provider} = {only => ["Cerebras"]} if ($provider_name//'') eq 'openrouter';
     log::info($::JSON->encode($req));
-    log::info("Requesting completion from AI API $ai_endpoint_url with ".($api_key//'<no api key>'));
+    log::info("Requesting completion from AI API $AI_ENDPOINT_URL with ".($api_key//'<no api key>'));
 
     CHAT_LOOP:
-    my $raw = http("post", "v1/chat/completions", $::JSON->encode($req));
+    my $raw = utils::http("post", "$AI_ENDPOINT_URL/v1/chat/completions", $::JSON->encode($req), $api_key);
     if(!$raw){
         log::error("No response from API");
         return;
@@ -654,7 +654,7 @@ sub delete_session {
         print "Cannot delete the current session.\n";
         return;
     }
-    log::load_cpan("File::Path");
+    utils::load_cpan("File::Path");
     File::Path::remove_tree("$SESSIONS_DIR/$name");
     print "Deleted session '$name'.\n";
     refresh_session_completions();
@@ -792,8 +792,8 @@ sub setup_readline {
     local $ENV{PERL_RL} = 'Gnu';
     local $ENV{TERM}    = $::ORIG_ENV{TERM} // 'vt220';
     eval {
-        log::load_cpan("Term::ReadLine");
-        log::load_cpan("Term::ReadLine::Gnu");
+        utils::load_cpan("Term::ReadLine");
+        utils::load_cpan("Term::ReadLine::Gnu");
     };
     if($@){
         print STDERR "Please install Term::ReadLine and Term::ReadLine::Gnu\n\nE.g.:\n  sudo apt install libterm-readline-gnu-perl\n";
@@ -1114,76 +1114,6 @@ sub handle_command {
     return;
 }
 
-our $response = \(my $buffer = ""); 
-sub http {
-    my ($m, $path, $data) = @_;
-    my $full_url = "$ai_endpoint_url/$path";
-    $data //= "";
-    log::info("URL: $full_url");
-    log::info("DATA: $data");
-    $$response = "";
-    $curl_handle //= do {
-        my $ch = curl->new();
-        $ch->setopt(curl::CURLOPT_IPRESOLVE(), curl::CURL_IPRESOLVE_V6());
-        $ch->setopt(curl::CURLOPT_WRITEFUNCTION(), sub {
-            my ($ch, $chunk) = @_;
-            $$response .= $chunk;
-            return length($chunk);
-        });
-        $ch->setopt(curl::CURLOPT_VERBOSE(), $::DEBUG?1:0);
-        $ch->setopt(curl::CURLOPT_HTTPHEADER(), [
-            "Accept: application/json",
-            "Content-Type: application/json",
-            "User-Agent: AI Chat/0.1",
-            "Connection: Keep-Alive",
-            "Keep-Alive: max=100",
-            ($api_key ?(
-                "Authorization: Bearer $api_key",
-            ):()),
-        ]);
-        if(my $proxy = $::ORIG_ENV{AI_PROXY} // $::ORIG_ENV{HTTPS_PROXY} // $::ORIG_ENV{HTTP_PROXY}){
-            $ch->setopt(curl::CURLOPT_PROXY(), $proxy);
-        }
-        $ch;
-    };
-    $curl_handle->setopt(curl::CURLOPT_URL(), $full_url);
-    if(lc($m) eq "post"){
-        $curl_handle->setopt(curl::CURLOPT_POST(), 1);
-        if(length($data)){
-            $curl_handle->setopt(curl::CURLOPT_POSTFIELDS(), $data);
-            $curl_handle->setopt(curl::CURLOPT_POSTFIELDSIZE_LARGE(), length($data));
-        }
-    }
-    if(lc($m) eq "get"){
-        $curl_handle->setopt(curl::CURLOPT_HTTPGET(), 1);
-    }
-    $curl_handle->perform();
-    my $r_code = $curl_handle->getinfo(curl::CURLINFO_HTTP_CODE());
-    if($r_code != 200){
-        log::info("ERROR: $r_code");
-        return;
-    }
-    log::info("OK: $r_code");
-    log::info("RESPONSE:\n$$response");
-    return $$response;
-}
-
-package curl;
-
-use strict; use warnings;
-
-BEGIN {
-    die $@ if $@;
-    eval {log::load_cpan("Net::Curl")};
-    eval {log::load_cpan("Net::Curl::Easy")};
-    our @ISA = qw(Net::Curl::Easy);
-    foreach my $k (keys %Net::Curl::Easy::){
-        next unless $k =~ /^CURL/; # Only grab curl constants/options
-        no strict 'refs';
-        *{"${k}"} = \&{"Net::Curl::Easy::${k}"};
-    }
-}
-
 package prompt;
 
 package prompt::default;
@@ -1298,7 +1228,7 @@ sub rx {
 sub bash_7c48 {
     my ($t_args) = @_;
     # dump args to a temp file and execute with bash, capture output
-    log::load_cpan("File::Temp");
+    utils::load_cpan("File::Temp");
     my ($fh, $fn) = File::Temp::tempfile();
     print {$fh} $t_args->[0];
     if(!close($fh)){
@@ -1471,5 +1401,3 @@ our $reset_color   = "\033[0m";
 }
 
 1;
-
-__END__
