@@ -314,6 +314,7 @@ sub handle_llm_response {
     return $newturns, $pos, \@rt;
 }
 
+our $TOOLS = [];
 sub chat_completion {
     my ($input) = @_;
     log_info("User input: $input");
@@ -323,15 +324,26 @@ sub chat_completion {
         or die "Failed to read $STATUS_FILE: $!\n";
     my @jstr = do {map {chomp; JSON::XS::decode_json($_)} <$fh_read>};
     close $fh_read;
-    push @jstr, {role => 'user', content => $input};
+    push @jstr, {
+        role    => 'user',
+        content => $input,
+        tools   => $TOOLS //= [
+            map {{type => "function", function => {
+                name        => $_,
+                description => $tools::TOOLS->{$_}{description},
+                properties  => $tools::TOOLS->{$_}{properties} // {},
+                required    => $tools::TOOLS->{$_}{required}   // [],
+            }}} sort keys %{$tools::TOOLS},
+        ]
+    };
 
     my $req = {
         model       => $SESSION_MODEL || $ORIG_ENV{AI_MODEL} // 'llama-4-scout-17b-16e-instruct',
-        max_tokens  => $ORIG_ENV{AI_TOKENS} // 8192,
+        max_tokens  => $ORIG_ENV{AI_TOKENS}      // 8192,
+        temperature => $ORIG_ENV{AI_TEMPERATURE} // 0,
+        top_p       => $ORIG_ENV{AI_TOP_P}       // 1,
         stream      => $Types::Serialiser::true,
         messages    => \@jstr,
-        temperature => $ORIG_ENV{AI_TEMPERATURE} // 0,
-        top_p       => 1
     };
 
     # Provider-specific options
@@ -1279,12 +1291,12 @@ package prompt::default;
 package prompt::coder;
 
 sub prompt {
-    my $list = "\nTOOLS 'syntax': \n///TOOL_{HEX}+{T1}+{T2}\n{{path}}\n{T1}\n{{content}}\n{T2}\nTOOL_{HEX}\n where {{path}}, {{content} is substituted by the LLM\n";
-    $list .= "TOOLS:\n```json\n";
-    $list .= $::JSON->encode($tools::TOOLS);
-    $list .= "\n";
+    my $list = "\n\nTOOLS SYNTAX, for tool 'TOOL':\n\n///TOOL_{HEX}+{T1}+{T2}\n{{path}}\n{T1}\n{{content}}\n{T2}\nTOOL_{HEX}\n where {{path}}, {{content}} is substituted by the LLM\n";
     $list .= "TOOL results: [<TOOL_{HEX}> RESULT_d170b4e6bb11cfd550aa\n{{result}}\nRESULT_d170b4e6bb11cfd550aa]\n";
     $list .= "TOOL errors: [<TOOL_{HEX}> ERROR_9a7893514ebc885c2543\n{{error}}\nERROR_9a7893514ebc885c2543]\n";
+    $list .= "\n\nLIST OF TOOLS:\n\n```json\n";
+    $list .= $::JSON->encode($tools::TOOLS);
+    $list .= "\n";
     $list .= "\n";
     main::log_info("TOOLS SECTION>>$list<<");
     return $list;
@@ -1301,39 +1313,44 @@ BEGIN {
     bash => {
         description => "execute a bash script",
         syntax => "\n///BASH_7c48+EO_dfd7e6b99d1bf15480fa\n{{code}}\nEO_dfd7e6b99d1bf15480fa\nBASH_7c48",
-        parameters  => [
-            {name => "code", required => 1, type => "string", description => "The bash code to execute"},
-        ]
+        properties  => {
+            "code" => {type => "string", description => "The bash code to execute"},
+        },
+        required => ["code"],
     },
     perl => {
         description => "execute a perl script",
         syntax => "\n///PERL_d8d2+EO_929b2e8d61111fac138f\n{{code}}\nEO_929b2e8d61111fac138f\nPERL_d8d2",
-        parameters  => [
-            {name => "code", required => 1, type => "string", description => "The perl code to execute"},
-        ]
+        properties  => {
+            "code" => {type => "string", description => "The perl code to execute"},
+        },
+        required => ["code"],
     },
     read => {
         description => "read a file contents",
         syntax => "\n///READ_c5a3+EO_d0f15b09ea7648f828e7\n{{path}}\nEO_d0f15b09ea7648f828e7\nREAD_c5a3",
-        parameters  => [
-            {name => "{{path}}", required => 1, type => "string", description => "The path to the file"},
-        ]
+        properties  => {
+            "path" => {type => "string", description => "The path to the file"},
+        },
+        required => ["path"],
     },
     write => {
         description => "write or overwrite a file",
         syntax => "\n///WRITE_edf5+EO_d0684c052bf3d9c503a8+EO_ecdeef376b1647fa824a\n{{path}}\nEO_d0684c052bf3d9c503a8\n{{content}}\nEO_ecdeef376b1647fa824a\nWRITE_edf5",
-        parameters  => [
-            {name => "{{path}}"  , requided => 1, type => "string", description => "The path to the file"         },
-            {name => "{{content" , requided => 1, type => "string", description => "The raw text content to write"}
-        ]
+        properties  => {
+            "path"    => {type => "string", description => "The path to the file"},
+            "content" => {type => "string", description => "The raw text content to write"},
+        },
+        required => ["path", "content"],
     },
     grep => {
         description => "search file with a pattern using grep unix tool",
         syntax => "\n///GREP_6629+EO_a575a5c230c77d451640+EO_aaddf906cba61ec85a13\n{{path}}\nEO_a575a5c230c77d451640\n{{regex}}\nEO_aaddf906cba61ec85a13\nGREP_6629",
-        parameters  => [
-            {name => "{{path}}"  , required => 1, type => "string", description => "The file path or directory to scan" },
-            {name => "{{regex}}" , required => 1, type => "string", description => "The grep pattern"},
-        ]
+        properties  => {
+            "path"  => {type => "string", description => "The file path or directory to scan" },
+            "regex" => {type => "string", description => "The grep pattern"},
+        },
+        required => ["path", "regex"],
     },
     };
 
@@ -1494,7 +1511,7 @@ sub grep_6629 {
     my ($t_args) = @_;
     my $path = $t_args->[0];
     my $pattern = $t_args->[1];
-    return "[ERROR] not enough parameters" unless length($path//"") and length($pattern//"");
+    return "[ERROR] not enough properties" unless length($path//"") and length($pattern//"");
     local $ENV{PATH} = $ORIG_ENV{PATH};
     local $!;
     open(my $fh, "-|", "grep", $pattern, $path)
