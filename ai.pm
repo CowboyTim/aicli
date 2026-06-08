@@ -4,10 +4,10 @@ use strict; use warnings;
 
 use utils;
 
-use Cwd qw();
-use Encode qw(_utf8_off);
+use Cwd ();
+use Encode ();
 use Errno;
-use JSON::XS;
+use JSON::XS ();
 
 BEGIN {
     $::JSON //= JSON::XS->new->utf8->allow_blessed->allow_unknown->allow_nonref->convert_blessed;
@@ -176,7 +176,7 @@ sub handle_llm_response {
 
     my @rt;
     my $msg_no_think = $$resp =~ s/^<think>.*?^<\/think>$//msgr;
-    _utf8_off($msg_no_think);
+    Encode::_utf8_off($msg_no_think);
     log::info("MSG THINK STRIPPED>>$msg_no_think<<");
     $t_rx //= tools::rx();
     log::info("TOOL RX: $t_rx");
@@ -253,9 +253,7 @@ sub chat_completion {
     my $newturns = 0;
     my $resp = '';
     my $rbuf = '';
-
-    my $r_sub = ($::ORIG_ENV{AI_STREAM}//1)
-    ? sub {
+    my $r_sub = sub {
         my ($ch, $raw) = @_;
         log::info("GOT STREAM $raw");
         my $sz = length($raw);
@@ -279,7 +277,7 @@ sub chat_completion {
                          // $decoded->{choices}[0]{message}{content};
                 if(length($delta//"")){
                     log::info("STREAM $delta");
-                    _utf8_off($delta);
+                    Encode::_utf8_off($delta);
                     $resp .= $delta;
                     print $delta;
                 }
@@ -288,24 +286,6 @@ sub chat_completion {
                 log::info("Failed to decode SSE event: $event, error: $@");
                 last;
             }
-        }
-        return $sz;
-    }
-    : sub {
-        my ($ch, $raw) = @_;
-        log::info("GOT FULL $raw");
-        my $sz = length($raw);
-        # Non‑streaming response (original behaviour)
-        eval {
-            my $decoded = JSON::XS->new->utf8->decode($raw);
-            unless (exists $decoded->{choices}[0]{message}{content}) {
-                log::error("Failed JSON no message content: ".$::JSON->encode($decoded));
-                return;
-            }
-            $resp = $decoded->{choices}[0]{message}{content};
-        };
-        if($@){
-            log::error("Failed to parse response: $raw");
         }
         return $sz;
     };
@@ -318,9 +298,8 @@ sub chat_completion {
             my $decoded = JSON::XS->new->utf8->decode($rbuf);
             log::error(${colors::red_color}.$decoded->{error}.${colors::reset_color});
         };
-        if($@){
-            log::error(${colors::red_color}.$rbuf.${colors::reset_color});
-        }
+        log::error(${colors::red_color}.$rbuf.${colors::reset_color} if $@;
+        $rbuf = undef;
     }
 
     # save in history
@@ -336,7 +315,7 @@ sub chat_completion {
     if (length($resp) and $p < length($resp)) {
         my $remaining_text = substr($resp, $p);
         if(length($remaining_text)){
-            _utf8_off($remaining_text);
+            Encode::_utf8_off($remaining_text);
             print $remaining_text, "\n";
         }
     }
