@@ -249,19 +249,19 @@ sub chat_completion {
     log::info("Requesting completion from AI API $AI_ENDPOINT_URL with ".($api_key//'<no api key>'));
 
     CHAT_LOOP:
-    my $raw = utils::http("post", "$AI_ENDPOINT_URL/v1/chat/completions", $::JSON->encode($req), $api_key);
-    if(!$raw){
-        log::error("No response from API");
-        return;
-    }
-
     # Variable to hold the assembled assistant message
     my $newturns = 0;
     my $resp = '';
 
-    *STDOUT->autoflush();
-    *STDERR->autoflush();
-    if($::ORIG_ENV{AI_STREAM}//1){
+    my $r_sub = ($::ORIG_ENV{AI_STREAM}//1)
+    ? sub {
+        my ($ch, $raw) = @_;
+        log::info("GOT STREAM $raw");
+        my $sz = length($raw);
+
+        *STDOUT->autoflush();
+        *STDERR->autoflush();
+        local $| = 1;
         # Parse Server-Sent Events (SSE) stream
         while($raw =~ s/(.*?)\n\n//ms){
             my $event = $1 // "";
@@ -275,6 +275,7 @@ sub chat_completion {
                 my $delta = $decoded->{choices}[0]{delta}{content}
                          // $decoded->{choices}[0]{message}{content};
                 if(length($delta//"")){
+                    log::info("STREAM $delta");
                     _utf8_off($delta);
                     $resp .= $delta;
                     print $delta;
@@ -294,18 +295,15 @@ sub chat_completion {
                 log::error(${colors::red_color}.$raw.${colors::reset_color});
             }
         }
-        # save in history
-        push @jstr, {role => 'assistant', content => $resp};
-
-        # handle tools
-        my ($t, $p, $r) = handle_llm_response(\$resp);
-        $newturns ||= $t;
-        push @jstr, @{$r//[]};
-    } else {
+        return $sz;
+    }
+    : sub {
+        my ($ch, $raw) = @_;
+        log::info("GOT FULL $raw");
+        my $sz = length($raw);
         # Non‑streaming response (original behaviour)
-        my $decoded;
         eval {
-            $decoded = JSON::XS->new->utf8->decode($raw);
+            my $decoded = JSON::XS->new->utf8->decode($raw);
             unless (exists $decoded->{choices}[0]{message}{content}) {
                 log::error("Failed JSON no message content: ".$::JSON->encode($decoded));
                 return;
@@ -314,24 +312,31 @@ sub chat_completion {
         };
         if($@){
             log::error("Failed to parse response: $raw");
-            return;
         }
-        # save in history
-        push @jstr, {role => 'assistant', content => $resp};
+        return $sz;
+    };
 
-        # handle tools
-        my ($t, $p, $r) = handle_llm_response(\$resp);
-        $newturns ||= $t;
-        push @jstr, @{$r//[]};
+    my $raw = utils::http("post", "$AI_ENDPOINT_URL/v1/chat/completions", $::JSON->encode($req), $api_key, $r_sub);
+    if(!$raw){
+        log::error("No response from API");
+        return;
+    }
 
-        # Add any remaining text after last tool call as final assistant message
-        $p //= 0;
-        if (length($resp) and $p < length($resp)) {
-            my $remaining_text = substr($resp, $p);
-            if(length($remaining_text)){
-                _utf8_off($remaining_text);
-                print $remaining_text, "\n";
-            }
+    # save in history
+    push @jstr, {role => 'assistant', content => $resp};
+
+    # handle tools
+    my ($t, $p, $r) = handle_llm_response(\$resp);
+    $newturns ||= $t;
+    push @jstr, @{$r//[]};
+
+    # Add any remaining text after last tool call as final assistant message
+    $p //= 0;
+    if (length($resp) and $p < length($resp)) {
+        my $remaining_text = substr($resp, $p);
+        if(length($remaining_text)){
+            _utf8_off($remaining_text);
+            print $remaining_text, "\n";
         }
     }
 

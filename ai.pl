@@ -24,6 +24,7 @@ BEGIN {
 %ENV = ();
 
 # Command-line options
+$::DEBUG = $::ORIG_ENV{DEBUG} || 0;
 {
     no warnings 'once';
     require Getopt::Long;

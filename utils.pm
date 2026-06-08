@@ -19,19 +19,15 @@ sub trim {
 our $curl_handle;
 our $response = \(my $buffer = ""); 
 sub http {
-    my ($m, $full_url, $data, $api_key) = @_;
+    my ($m, $full_url, $data, $api_key, $read_handle_sub) = @_;
     $data //= "";
+    log::info("RSUB: ".((defined $read_handle_sub and ref($read_handle_sub) eq 'CODE')?1:0));
     log::info("URL: $full_url");
     log::info("DATA: $data");
     $$response = "";
     $curl_handle //= do {
         my $ch = curl->new();
         $ch->setopt(curl::CURLOPT_IPRESOLVE(), curl::CURL_IPRESOLVE_V6());
-        $ch->setopt(curl::CURLOPT_WRITEFUNCTION(), sub {
-            my ($ch, $chunk) = @_;
-            $$response .= $chunk;
-            return length($chunk);
-        });
         $ch->setopt(curl::CURLOPT_VERBOSE(), $::DEBUG?1:0);
         $ch->setopt(curl::CURLOPT_HTTPHEADER(), [
             "Accept: application/json",
@@ -48,6 +44,12 @@ sub http {
         }
         $ch;
     };
+    $curl_handle->setopt(curl::CURLOPT_WRITEFUNCTION(), $read_handle_sub // sub {
+        my ($curl_handle, $chunk) = @_;
+        log::info("WRITE SUB: ".length($chunk));
+        $$response .= $chunk;
+        return length($chunk);
+    });
     $curl_handle->setopt(curl::CURLOPT_URL(), $full_url);
     if(lc($m) eq "post"){
         $curl_handle->setopt(curl::CURLOPT_POST(), 1);
