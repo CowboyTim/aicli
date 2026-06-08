@@ -224,14 +224,6 @@ sub chat_completion {
     push @jstr, {
         role    => 'user',
         content => $input,
-#        tools   => $TOOLS //= [
-#            map {{type => "function", function => {
-#                name        => $_,
-#                description => $tools::TOOLS->{$_}{description},
-#                properties  => $tools::TOOLS->{$_}{properties} // {},
-#                required    => $tools::TOOLS->{$_}{required}   // [],
-#            }}} sort keys %{$tools::TOOLS},
-#        ]
     };
 
     my $req = {
@@ -1106,7 +1098,6 @@ sub prompt {
     $list .= "TOOL results: [<TOOL_{HEX}> RESULT_d170b4e6bb11cfd550aa\n{{result}}\nRESULT_d170b4e6bb11cfd550aa]\n";
     $list .= "TOOL errors: [<TOOL_{HEX}> ERROR_9a7893514ebc885c2543\n{{error}}\nERROR_9a7893514ebc885c2543]\n";
     $list .= "\n\nLIST OF TOOLS:\n\n";
-#    $list .= "```json\n".$::JSON->encode($tools::TOOLS);
     $list .= join("\n\n", map {
         "name: $_\n".
         "tool: ```\n$tools::TOOLS->{$_}{syntax}\n```\n".
