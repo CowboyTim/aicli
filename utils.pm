@@ -45,7 +45,8 @@ sub http {
         $ch;
     };
     $curl_handle->setopt(curl::CURLOPT_WRITEFUNCTION(), $read_handle_sub // sub {
-        my ($curl_handle, $chunk) = @_;
+        my ($ch, $chunk) = @_;
+        $chunk //= $ch; # WWW::Curl::Easy: <data>, <user_ref>, Net::Curl::Easy: <handle>, <data>
         log::info("WRITE SUB: ".length($chunk));
         $$response .= $chunk;
         return length($chunk);
@@ -78,15 +79,25 @@ use strict; use warnings;
 
 BEGIN {
     die $@ if $@;
-    eval {utils::load_cpan("Net::Curl")};
-    eval {utils::load_cpan("Net::Curl::Easy")};
-    our @ISA = qw(Net::Curl::Easy);
+    eval {
+        utils::load_cpan("Net::Curl");
+    };
+    eval {
+        utils::load_cpan("Net::Curl::Easy");
+        *AUTOLOAD = *Net::Curl::Easy::AUTOLOAD;
+    };
+    eval {
+        utils::load_cpan("WWW::Curl::Easy");
+        *AUTOLOAD = *WWW::Curl::Easy::AUTOLOAD;
+    };
+    our @ISA = qw(Net::Curl::Easy WWW::Curl::Easy);
     foreach my $k (keys %Net::Curl::Easy::){
         next unless $k =~ /^CURL/; # Only grab curl constants/options
         no strict 'refs';
         *{"${k}"} = \&{"Net::Curl::Easy::${k}"};
     }
 }
+
 
 package log;
 

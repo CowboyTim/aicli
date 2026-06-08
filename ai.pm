@@ -253,8 +253,9 @@ sub chat_completion {
     my $newturns = 0;
     my $resp = '';
     my $rbuf = '';
-    my $r_sub = sub {
+    utils::http("post", "$AI_ENDPOINT_URL/v1/chat/completions", $::JSON->encode($req), $api_key, sub {
         my ($ch, $raw) = @_;
+        $raw //= $ch; # WWW::Curl::Easy: <data>, <user_ref>, Net::Curl::Easy: <handle>, <data>
         log::info("GOT STREAM $raw");
         my $sz = length($raw);
         $rbuf .= $raw;
@@ -288,10 +289,7 @@ sub chat_completion {
             }
         }
         return $sz;
-    };
-
-    utils::http("post", "$AI_ENDPOINT_URL/v1/chat/completions", $::JSON->encode($req), $api_key, $r_sub)
-        // return;
+    }) // return;
 
     if(length($rbuf)){
         eval {
