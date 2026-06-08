@@ -196,10 +196,10 @@ sub handle_llm_response {
         my ($result, $had_error) = execute_tool($tool_k, $tool, \@t_args);
         my $tool_response = "";
         if(!$had_error){
-            $tool_response = "[$tool RESULT_d170b4e6bb11cfd550aa\n$result\nRESULT_d170b4e6bb11cfd550aa]";
+            $tool_response = "[$tool RESULT_d170\n$result\nRESULT_d170]";
         } else {
             $result //= "";
-            $tool_response = "[$tool ERROR_9a7893514ebc885c2543\n$had_error\nERROR_9a7893514ebc885c2543]";
+            $tool_response = "[$tool ERROR_9a78\n$had_error\nERROR_9a78]";
         }
         &{$printer_sub}("${colors::green_color}$tool_response${colors::reset_color}\n");
         push @rt, {role => 'user', content => $tool_response};
@@ -1095,8 +1095,8 @@ sub prompt {
     my $list = "\n\n**TOOLS**\n\n";
     $list .= "\n\nTOOLS SYNTAX, for tool 'TOOL':\n\n";
     $list .= "```\n///TOOL_{HEX}+{T1}+{T2}\n{{path}}\n{T1}\n{{content}}\n{T2}\nTOOL_{HEX}\n```\nWhere {{path}}, {{content}} is substituted by the LLM\n";
-    $list .= "TOOL results: [<TOOL_{HEX}> RESULT_d170b4e6bb11cfd550aa\n{{result}}\nRESULT_d170b4e6bb11cfd550aa]\n";
-    $list .= "TOOL errors: [<TOOL_{HEX}> ERROR_9a7893514ebc885c2543\n{{error}}\nERROR_9a7893514ebc885c2543]\n";
+    $list .= "TOOL results: [<TOOL_{HEX}> RESULT_d170\n{{result}}\nRESULT_d170]\n";
+    $list .= "TOOL errors: [<TOOL_{HEX}> ERROR_9a78\n{{error}}\nERROR_9a78]\n";
     $list .= "\n\nLIST OF TOOLS:\n\n";
     $list .= join("\n\n", map {
         "name: $_\n".
@@ -1133,22 +1133,22 @@ BEGIN {
     $tools::TOOLS = {
     bash => {
         description => "execute a bash script",
-        syntax => "///BASH_7c48+EO_dfd7e6b99d1bf15480fa\n{{code}}\nEO_dfd7e6b99d1bf15480fa\nBASH_7c48",
+        syntax => "///BASH_7c48+EO_dfd7\n{{code}}\nEO_dfd7\nBASH_7c48",
         properties  => {
             "code" => {type => "string", description => "The bash code to execute"},
         },
         required => ["code"],
         example => <<EOb
-///BASH_7c48+EO_dfd7e6b99d1bf15480fa
+///BASH_7c48+EO_dfd7
 pwd
 ls -la
-EO_dfd7e6b99d1bf15480fa
+EO_dfd7
 BASH_7c48
 EOb
     },
     perl => {
         description => "execute a perl script",
-        syntax => "///PERL_d8d2+EO_929b2e8d61111fac138f\n{{code}}\nEO_929b2e8d61111fac138f\nPERL_d8d2",
+        syntax => "///PERL_d8d2+EO_929b\n{{code}}\nEO_929b\nPERL_d8d2",
         properties  => {
             "code" => {type => "string", description => "The perl code to execute"},
         },
@@ -1156,7 +1156,7 @@ EOb
     },
     read => {
         description => "read a file contents",
-        syntax => "///READ_c5a3+EO_d0f15b09ea7648f828e7\n{{path}}\nEO_d0f15b09ea7648f828e7\nREAD_c5a3",
+        syntax => "///READ_c5a3+EO_d0f1\n{{path}}\nEO_d0f1\nREAD_c5a3",
         properties  => {
             "path" => {type => "string", description => "The path to the file"},
         },
@@ -1164,25 +1164,25 @@ EOb
     },
     write => {
         description => "write or overwrite a file",
-        syntax => "///WRITE_edf5+EO_d0684c052bf3d9c503a8+EO_ecdeef376b1647fa824a\n{{path}}\nEO_d0684c052bf3d9c503a8\n{{content}}\nEO_ecdeef376b1647fa824a\nWRITE_edf5",
+        syntax => "///WRITE_edf5+EO_d068\n{{path}}\nEO_d068\n{{content}}\nEO_ecde\nWRITE_edf5",
         properties  => {
             "path"    => {type => "string", description => "The path to the file"},
             "content" => {type => "string", description => "The raw text content to write"},
         },
         required => ["path", "content"],
         example => <<EOb
-///WRITE_edf5+EO_d0684c052bf3d9c503a8+EO_ecdeef376b1647fa824a
+///WRITE_edf5+EO_d068+EO_ecde
 perl_program.pl
-EO_d0684c052bf3d9c503a8
+EO_d068
 #!/usr/bin/perl
 print "Hello, World!\\n";
-EO_ecdeef376b1647fa824a
+EO_ecde
 WRITE_edf5
 EOb
     },
     grep => {
         description => "search file with a pattern using grep unix tool",
-        syntax => "///GREP_6629+EO_a575a5c230c77d451640+EO_aaddf906cba61ec85a13\n{{path}}\nEO_a575a5c230c77d451640\n{{regex}}\nEO_aaddf906cba61ec85a13\nGREP_6629",
+        syntax => "///GREP_6629+EO_a575\n{{path}}\nEO_a575\n{{regex}}\nEO_aadd\nGREP_6629",
         properties  => {
             "path"  => {type => "string", description => "The file path or directory to scan"},
             "regex" => {type => "string", description => "The grep pattern"},
