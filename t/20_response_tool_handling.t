@@ -55,9 +55,9 @@ We are going to update the README.md file with a brief description of the projec
 
 </think>
 
-///WRITE_edf5+EO_d0684c052bf3d9c503a8+EO_ecdeef376b1647fa824a
+///WRITE_edf5+EO_d068+EO_ecde
 README.md
-EO_d0684c052bf3d9c503a8
+EO_d068[9]
 # AI-CLI: A Perl-Based Command-Line Interface for LLMs
 
 AI-CLI is an interactive command-line chat interface for interacting with various Large Language Model (LLM) providers. It supports streaming responses, tool usage (bash, perl, file operations, grep), session persistence, and multi-provider compatibility.
@@ -177,7 +177,7 @@ See [TODO.md](TODO.md) for current development priorities including:
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 EOF_d0684c052bf3d9c503a8
-EO_ecdeef376b1647fa824a
+EO_ecde[0]
 WRITE_edf5
 ```
 EOp
@@ -191,16 +191,16 @@ EOp
     is($n, 1, 'tools: 1');
     is($p, undef, 'pos: undef');
     is_deeply($r, [{
-        'content' => '[WRITE_edf5 RESULT_d170b4e6bb11cfd550aa
+        'content' => '[WRITE_edf5 RESULT_d170
 [OK] written to README.md
-RESULT_d170b4e6bb11cfd550aa]',
+RESULT_d170]',
         'role' => 'user'
     }], 'r: 0') or print Dumper($r);
     is_deeply(\@oklist, [
         "${colors::yellow_color1}\[TOOL WRITE_edf5(...))]${colors::reset_color}\n",
-        "${colors::green_color}\[WRITE_edf5 RESULT_d170b4e6bb11cfd550aa
+        "${colors::green_color}\[WRITE_edf5 RESULT_d170
 [OK] written to README.md
-RESULT_d170b4e6bb11cfd550aa]${colors::reset_color}\n"
+RESULT_d170]${colors::reset_color}\n"
     ], "print ok printer") or print Dumper(\@oklist);
     chdir("/");
     rmtree($tmpdir);
@@ -351,18 +351,18 @@ PERL_d8d2
     is($n, 1, 'tools: 1');
     is($p, undef, 'pos: undef');
     is_deeply($r, [{
-        'content' => '[PERL_d8d2 RESULT_d170b4e6bb11cfd550aa
+        'content' => '[PERL_d8d2 RESULT_d170
 total 0
 
-RESULT_d170b4e6bb11cfd550aa]',
+RESULT_d170]',
         'role' => 'user'
     }], 'r: 0') or print Dumper($r);
     is_deeply(\@oklist, [
         "${colors::yellow_color1}\[TOOL PERL_d8d2(...))]${colors::reset_color}\n",
-        "${colors::green_color}\[PERL_d8d2 RESULT_d170b4e6bb11cfd550aa
+        "${colors::green_color}\[PERL_d8d2 RESULT_d170
 total 0
 
-RESULT_d170b4e6bb11cfd550aa]${colors::reset_color}\n",
+RESULT_d170]${colors::reset_color}\n",
     ], "print ok printer") or print Dumper(\@oklist);
     chdir("/");
     rmtree($tmpdir);
@@ -384,7 +384,7 @@ Let's do that.
 
 </think>
 
-///PERL_d8d2+EO_929b2e8d61111fac138f
+///PERL_d8d2+EO_929b
 use strict;
 my $dir = ".git";
 opendir(my $dh, $dir) or die "Cannot open directory: $!";
@@ -393,7 +393,7 @@ while (my $file = readdir($dh)) {
     print "$file\n";
 }
 closedir($dh);
-EO_929b2e8d61111fac138f
+EO_929b
 PERL_d8d2
 
 </think>
@@ -409,16 +409,16 @@ PERL_d8d2
     is($n, 1, 'tools: 1');
     is($p, undef, 'pos: undef');
     is_deeply($r, [{
-        'content' => '[PERL_d8d2 RESULT_d170b4e6bb11cfd550aa
+        'content' => '[PERL_d8d2 RESULT_d170
 
-RESULT_d170b4e6bb11cfd550aa]',
+RESULT_d170]',
         'role' => 'user'
     }], 'r: 0') or print Dumper($r);
     is_deeply(\@oklist, [
         "${colors::yellow_color1}\[TOOL PERL_d8d2(...))]${colors::reset_color}\n",
-        "${colors::green_color}\[PERL_d8d2 RESULT_d170b4e6bb11cfd550aa
+        "${colors::green_color}\[PERL_d8d2 RESULT_d170
 
-RESULT_d170b4e6bb11cfd550aa]${colors::reset_color}\n",
+RESULT_d170]${colors::reset_color}\n",
     ], "print ok printer") or print Dumper(\@oklist);
     chdir("/");
     rmtree($tmpdir);

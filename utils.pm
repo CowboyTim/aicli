@@ -175,13 +175,16 @@ sub daemon {
     eval {
         $0 = "aicli:daemon";
         close($read_pipe_fh);
-        %ENV = ();
-        $ENV{PATH}    = $::ORIG_ENV{PATH};
-        $ENV{HOME}    = $::ORIG_ENV{HOME};
-        $ENV{LOGNAME} = $::ORIG_ENV{LOGNAME};
-        $ENV{TMPDIR}  = "/tmp";
-        $ENV{LANG}    = "en_US.UTF-8";
-        %::ORIG_ENV = ();
+        {
+            my %OE = %ENV;
+            %ENV = ();
+            $ENV{PATH}    //= $OE{PATH}    // $::ORIG_ENV{PATH};
+            $ENV{HOME}    //= $OE{HOME}    // $::ORIG_ENV{HOME};
+            $ENV{LOGNAME} //= $OE{LOGNAME} // $::ORIG_ENV{LOGNAME};
+            $ENV{TMPDIR}  //= $OE{TMPDIR}  // "/tmp";
+            $ENV{LANG}    //= $OE{LANG}    // "en_US.UTF-8";
+            %::ORIG_ENV = ();
+        }
 
         POSIX::setsid() != -1
             or (!$!{EPERM} and die "problem making new session/process group: $!\n");

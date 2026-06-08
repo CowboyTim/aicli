@@ -15,9 +15,9 @@ We can output the device major/minor for each file and compare to the device of 
 
 Let's do that now.
 </think>
-///WRITE_edf5+EO_d0684c052bf3d9c503a8
+///WRITE_edf5+EO_d068
 find_biggest_with_mount.pl
-EO_d0684c052bf3d9c503a8
+EO_d068
 #!/usr/bin/env perl
 use strict;
 use warnings;
@@ -124,13 +124,13 @@ if (-d '/opt/rocm') {
 }
 
 __END__
-EO_ecdeef376b1647fa824a
+EO_ecde
 WRITE_edf5
 
 Now run it.
 </think>
-///BASH_7c48+EO_dfd7e6b99d1bf15480fa
+///BASH_7c48+EO_dfd7
 perl find_biggest_with_mount.pl 20
-EO_dfd7e6b99d1bf15480fa
+EO_dfd7
 BASH_7c48
 ```

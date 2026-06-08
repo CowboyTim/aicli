@@ -1094,7 +1094,7 @@ package prompt::coder;
 sub prompt {
     my $list = "\n\n**TOOLS**\n\n";
     $list .= "\n\nTOOLS SYNTAX, for tool 'TOOL':\n\n";
-    $list .= "```\n///TOOL_{HEX}+{T1}+{T2}\n{{path}}\n{T1}\n{{content}}\n{T2}\nTOOL_{HEX}\n```\nWhere {{path}}, {{content}} is substituted by the LLM\n";
+    $list .= "```\n///TOOL_{HEX}+{T1}+{T2}\n{{path}}\n{T1}[<size of substituted T2>]\n{{content}}\n{T2}[<size of substituted T2>\nTOOL_{HEX}\n```\nWhere {{path}}, {{content}} is substituted by the LLM\n";
     $list .= "TOOL results: [<TOOL_{HEX}> RESULT_d170\n{{result}}\nRESULT_d170]\n";
     $list .= "TOOL errors: [<TOOL_{HEX}> ERROR_9a78\n{{error}}\nERROR_9a78]\n";
     $list .= "\n\nLIST OF TOOLS:\n\n";
@@ -1133,7 +1133,7 @@ BEGIN {
     $tools::TOOLS = {
     bash => {
         description => "execute a bash script",
-        syntax => "///BASH_7c48+EO_dfd7\n{{code}}\nEO_dfd7\nBASH_7c48",
+        syntax => "///BASH_7c48+EO_dfd7\n{{code}}\nEO_dfd7[LENGTH({{code}})]\nBASH_7c48",
         properties  => {
             "code" => {type => "string", description => "The bash code to execute"},
         },
@@ -1142,13 +1142,13 @@ BEGIN {
 ///BASH_7c48+EO_dfd7
 pwd
 ls -la
-EO_dfd7
+EO_dfd7[10]
 BASH_7c48
 EOb
     },
     perl => {
         description => "execute a perl script",
-        syntax => "///PERL_d8d2+EO_929b\n{{code}}\nEO_929b\nPERL_d8d2",
+        syntax => "///PERL_d8d2+EO_929b\n{{code}}\nEO_929b[LENGTH({{code}})]\nPERL_d8d2",
         properties  => {
             "code" => {type => "string", description => "The perl code to execute"},
         },
@@ -1156,7 +1156,7 @@ EOb
     },
     read => {
         description => "read a file contents",
-        syntax => "///READ_c5a3+EO_d0f1\n{{path}}\nEO_d0f1\nREAD_c5a3",
+        syntax => "///READ_c5a3+EO_d0f1\n{{path}}\nEO_d0f1[LENGTH({{path}})]\nREAD_c5a3",
         properties  => {
             "path" => {type => "string", description => "The path to the file"},
         },
@@ -1164,7 +1164,7 @@ EOb
     },
     write => {
         description => "write or overwrite a file",
-        syntax => "///WRITE_edf5+EO_d068\n{{path}}\nEO_d068\n{{content}}\nEO_ecde\nWRITE_edf5",
+        syntax => "///WRITE_edf5+EO_d068+EO_ecde\n{{path}}\nEO_d068[LENGTH({{path}})]\n{{content}}\nEO_ecde[LENGTH({{content}})]\nWRITE_edf5",
         properties  => {
             "path"    => {type => "string", description => "The path to the file"},
             "content" => {type => "string", description => "The raw text content to write"},
@@ -1173,16 +1173,16 @@ EOb
         example => <<EOb
 ///WRITE_edf5+EO_d068+EO_ecde
 perl_program.pl
-EO_d068
+EO_d068[15]
 #!/usr/bin/perl
 print "Hello, World!\\n";
-EO_ecde
+EO_ecde[39]
 WRITE_edf5
 EOb
     },
     grep => {
         description => "search file with a pattern using grep unix tool",
-        syntax => "///GREP_6629+EO_a575\n{{path}}\nEO_a575\n{{regex}}\nEO_aadd\nGREP_6629",
+        syntax => "///GREP_6629+EO_a575+EO_aada\n{{path}}\nEO_a575[LENGTH({{path}})]\n{{regex}}\nEO_aada[LENGTH({{regex}})]\nGREP_6629",
         properties  => {
             "path"  => {type => "string", description => "The file path or directory to scan"},
             "regex" => {type => "string", description => "The grep pattern"},
@@ -1195,9 +1195,9 @@ EOb
     foreach my $t (sort values %{$tools::TOOLS//{}}){
         my $t_rx = $t->{syntax};
         $t_rx =~ s/\{\{.*?\}\}/(.*?)/msg;
-        #$t_rx =~ s/\{\{.*?\}\}/((?:(?!\\\/\\\/\\\/).)*?)/msg;
         $t_rx =~ s/\+/\\+/msg;
         $t_rx =~ s/\n/\\n/msg;
+        $t_rx =~ s/\[LENGTH\(.*?\)\]/\(?:\\[(?:\\d+)\\]\)\?/msg;
         push @all_t_rx, "(?:$t_rx)";
     }
     $TOOLS_RX = '('.join('|', @all_t_rx).')';
@@ -1218,13 +1218,13 @@ sub bash_7c48 {
         unlink $fn;
         return "[ERROR] failed to write to temp file: $err";
     }
-    local $ENV{PATH} = $::ORIG_ENV{PATH};
-    local $ENV{HOME} = $::ORIG_ENV{HOME};
-    local $ENV{LOGNAME} = $::ORIG_ENV{LOGNAME};
-    local $ENV{TMPDIR} = "/tmp";
-    local $ENV{LANG} = "en_US.UTF-8";
+    local $ENV{PATH}    = $ENV{PATH}     || $::ORIG_ENV{PATH};
+    local $ENV{HOME}    = $ENV{HOME}     || $::ORIG_ENV{HOME};
+    local $ENV{LOGNAME} = $ENV{LOGNAME}  || $::ORIG_ENV{LOGNAME};
+    local $ENV{TMPDIR}  = "/tmp";
+    local $ENV{LANG}    = "en_US.UTF-8";
     local $!;
-    if(open(my $fh, "bash < $fn 2>&1|")){
+    if(open(my $fh, "bash <$fn 2>&1|")){
         local $/;
         my $result = <$fh>;
         close($fh);
@@ -1239,6 +1239,11 @@ sub bash_7c48 {
 sub perl_d8d2 {
     my ($t_args) = @_;
     return "[ERROR] need an actual perl program, size=0" unless length($t_args//"");
+    local $ENV{PATH}    = $ENV{PATH}     || $::ORIG_ENV{PATH};
+    local $ENV{HOME}    = $ENV{HOME}     || $::ORIG_ENV{HOME};
+    local $ENV{LOGNAME} = $ENV{LOGNAME}  || $::ORIG_ENV{LOGNAME};
+    local $ENV{TMPDIR}  = "/tmp";
+    local $ENV{LANG}    = "en_US.UTF-8";
     return utils::daemon(sub {
         # full "freedom", sub-process anyways, and dockerized!
         no strict;
@@ -1278,7 +1283,7 @@ sub grep_6629 {
     my $path = $t_args->[0];
     my $pattern = $t_args->[1];
     return "[ERROR] not enough properties" unless length($path//"") and length($pattern//"");
-    local $ENV{PATH} = $::ORIG_ENV{PATH};
+    local $ENV{PATH} = $ENV{PATH} || $::ORIG_ENV{PATH};
     local $!;
     open(my $fh, "-|", "grep", $pattern, $path)
         or return "[ERROR] cannot run grep: $!";
