@@ -252,18 +252,21 @@ sub chat_completion {
     # Variable to hold the assembled assistant message
     my $newturns = 0;
     my $resp = '';
+    my $rbuf = '';
 
     my $r_sub = ($::ORIG_ENV{AI_STREAM}//1)
     ? sub {
         my ($ch, $raw) = @_;
         log::info("GOT STREAM $raw");
         my $sz = length($raw);
+        $rbuf .= $raw;
+        $raw = undef;
 
         *STDOUT->autoflush();
         *STDERR->autoflush();
         local $| = 1;
         # Parse Server-Sent Events (SSE) stream
-        while($raw =~ s/(.*?)\n\n//ms){
+        while($rbuf =~ s/(.*?)\n\n//ms){
             my $event = $1 // "";
             next unless $event =~ s/^data:\s*//;
             if($event eq '[DONE]'){
@@ -284,15 +287,6 @@ sub chat_completion {
             if($@){
                 log::info("Failed to decode SSE event: $event, error: $@");
                 last;
-            }
-        }
-        if(length($raw)){
-            eval {
-                my $decoded = JSON::XS->new->utf8->decode($raw);
-                log::error(${colors::red_color}.$decoded->{error}.${colors::reset_color});
-            };
-            if($@){
-                log::error(${colors::red_color}.$raw.${colors::reset_color});
             }
         }
         return $sz;
@@ -316,10 +310,17 @@ sub chat_completion {
         return $sz;
     };
 
-    my $raw = utils::http("post", "$AI_ENDPOINT_URL/v1/chat/completions", $::JSON->encode($req), $api_key, $r_sub);
-    if(!$raw){
-        log::error("No response from API");
-        return;
+    utils::http("post", "$AI_ENDPOINT_URL/v1/chat/completions", $::JSON->encode($req), $api_key, $r_sub)
+        // return;
+
+    if(length($rbuf)){
+        eval {
+            my $decoded = JSON::XS->new->utf8->decode($rbuf);
+            log::error(${colors::red_color}.$decoded->{error}.${colors::reset_color});
+        };
+        if($@){
+            log::error(${colors::red_color}.$rbuf.${colors::reset_color});
+        }
     }
 
     # save in history
