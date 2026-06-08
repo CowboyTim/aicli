@@ -298,7 +298,7 @@ sub chat_completion {
             my $decoded = JSON::XS->new->utf8->decode($rbuf);
             log::error(${colors::red_color}.$decoded->{error}.${colors::reset_color});
         };
-        log::error(${colors::red_color}.$rbuf.${colors::reset_color} if $@;
+        log::error(${colors::red_color}.$rbuf.${colors::reset_color}) if $@;
         $rbuf = undef;
     }
 
