@@ -1165,7 +1165,7 @@ BEGIN {
         },
         required => ["code"],
         example => <<EOb
-///BASH_7c48+EO_dfd7e6b99d1bf15480fa\n
+///BASH_7c48+EO_dfd7e6b99d1bf15480fa
 pwd
 ls -la
 EO_dfd7e6b99d1bf15480fa
@@ -1197,12 +1197,11 @@ EOb
         },
         required => ["path", "content"],
         example => <<EOb
-
 ///WRITE_edf5+EO_d0684c052bf3d9c503a8+EO_ecdeef376b1647fa824a
 perl_program.pl
 EO_d0684c052bf3d9c503a8
 #!/usr/bin/perl
-print "Hello, World!\n";
+print "Hello, World!\\n";
 EO_ecdeef376b1647fa824a
 WRITE_edf5
 EOb
