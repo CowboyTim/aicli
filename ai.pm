@@ -227,12 +227,21 @@ sub chat_completion {
     };
 
     my $req = {
-        model       => $SESSION_MODEL || $::ORIG_ENV{AI_MODEL} // 'llama-4-scout-17b-16e-instruct',
-        max_tokens  => $::ORIG_ENV{AI_TOKENS}      // 1_000_000,
-        temperature => $::ORIG_ENV{AI_TEMPERATURE} // 0,
-        top_p       => $::ORIG_ENV{AI_TOP_P}       // 1,
-        stream      => $Types::Serialiser::true,
-        messages    => \@jstr,
+        model                => $SESSION_MODEL || $::ORIG_ENV{AI_MODEL} // 'llama-4-scout-17b-16e-instruct',
+        max_tokens           => $::ORIG_ENV{AI_TOKENS}              // 1_000_000,
+        temperature          => $::ORIG_ENV{AI_TEMPERATURE}         // 0.6,
+        top_p                => $::ORIG_ENV{AI_TOP_P}               // 0.95,
+        top_k                => $::ORIG_ENV{AI_TOP_K}               // 20,
+        min_p                => $::ORIG_ENV{AI_MIN_P}               // 0.0,
+        presense_penalty     => $::ORIG_ENV{AI_PRESENCE_PENALTY}    // 0.0,
+        repeat_penalty       => $::ORIG_ENV{AI_REPEAT_PENALTY}      // 1.0,
+        frequency_penalty    => $::ORIG_ENV{AI_FREQUENCY_PENALTY}   // 0.1,
+        repeat_last_n        => $::ORIG_ENV{AI_REPEAT_LAST_N}       // 1000,
+        #reasoning            => $Types::Serialiser::true,
+        #reasoning_budget     => 1000000,
+        #chat_template_kwargs => '{"enable_thinking": true}',
+        stream               => $Types::Serialiser::true,
+        messages             => \@jstr,
     };
 
     # Provider-specific options
@@ -266,8 +275,14 @@ sub chat_completion {
             }
             eval {
                 my $decoded = JSON::XS->new->utf8->decode($event);
-                my $delta = $decoded->{choices}[0]{delta}{content}
-                         // $decoded->{choices}[0]{message}{content};
+                my $msg_entry = $decoded->{choices}[0] // {};
+                my $reasoning_content = $msg_entry->{delta}{reasoning_content};
+                if(length($reasoning_content//"")){
+                    Encode::_utf8_off($reasoning_content);
+                    print "${colors::yellow_color1}$reasoning_content${colors::reset_color}";
+                }
+                my $delta = $msg_entry->{delta}{content}
+                         // $msg_entry->{message}{content};
                 if(length($delta//"")){
                     log::info("STREAM $delta");
                     Encode::_utf8_off($delta);
@@ -299,16 +314,6 @@ sub chat_completion {
     my ($t, $p, $r) = handle_llm_response(\$resp);
     $newturns ||= $t;
     push @jstr, @{$r//[]};
-
-    # Add any remaining text after last tool call as final assistant message
-    $p //= 0;
-    if (length($resp) and $p < length($resp)) {
-        my $remaining_text = substr($resp, $p);
-        if(length($remaining_text)){
-            Encode::_utf8_off($remaining_text);
-            print $remaining_text, "\n";
-        }
-    }
 
     # save updated messages to status file
     open(my $sfh_final, '>', $STATUS_FILE)
@@ -1086,7 +1091,7 @@ package prompt::default;
 
 BEGIN {
     no warnings 'once';
-    *prompt::default::prompt = *{prompt::coder::prompt};
+    #*prompt::default::prompt = *{prompt::coder::prompt};
 }
 
 package prompt::coder;
