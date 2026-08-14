@@ -92,6 +92,7 @@ require ai;
 ai::chat_setup($BASE_DIR);
 ai::setup_commands();
 ai::chat_loop();
+ai::cleanup_chat();
 
 __END__
 
