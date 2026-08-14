@@ -864,6 +864,7 @@ sub input_terminal {
         if($@ and $@ !~ m/EXIT WANTED: 6df87ccd-2c9a-4303-982c-54b60ebb2aa1/){
             die $@;
         }
+        return unless defined $line;
         return unless $::LOOP;
         $line //= "";
         # e.g. a regular command /
