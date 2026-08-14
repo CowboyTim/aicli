@@ -28,6 +28,7 @@ sub chat_setup {
     $BASE_DIR = $base_dir;
     my $cfg_file = $::ORIG_ENV{AI_CONFIG}
         // "$BASE_DIR/config";
+    log::info("open config $cfg_file");
     if (-f $cfg_file) {
         open(my $fh, ". $cfg_file; set|")
             or die "Failed to read $cfg_file: $!\n";
@@ -226,9 +227,10 @@ sub chat_completion {
         content => $input,
     };
 
+    my $model = $SESSION_MODEL || $::ORIG_ENV{AI_MODEL};
     my $req = {
-        model                => $SESSION_MODEL || $::ORIG_ENV{AI_MODEL} // 'llama-4-scout-17b-16e-instruct',
-        max_tokens           => $::ORIG_ENV{AI_TOKENS}              // 1_000_000,
+        ($model ? (model => $model):()),
+        max_tokens           => $::ORIG_ENV{AI_TOKENS}              // 100_000,
         temperature          => $::ORIG_ENV{AI_TEMPERATURE}         // 0.6,
         top_p                => $::ORIG_ENV{AI_TOP_P}               // 0.95,
         top_k                => $::ORIG_ENV{AI_TOP_K}               // 20,
@@ -245,7 +247,8 @@ sub chat_completion {
     };
 
     # Provider-specific options
-    $req->{provider} = {only => ["Cerebras"]} if ($provider_name//'') eq 'openrouter';
+    $req->{provider} = {only => [split m/ +/m, $::ORIG_ENV{OPENROUTER_PROVIDER}]}
+        if ($provider_name//'') eq 'openrouter' and length($::ORIG_ENV{OPENROUTER_PROVIDER})//"";
     log::info($::JSON->encode($req));
     log::info("Requesting completion from AI API $AI_ENDPOINT_URL with ".($api_key//'<no api key>'));
 
