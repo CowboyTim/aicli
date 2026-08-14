@@ -301,14 +301,26 @@ sub chat_completion {
             }
         }
         return $sz;
-    }) // return;
+    }) // do {
+        log::info("GOT ERROR RESPONSE REMAINING >>$rbuf<<");
+        my $decoded = eval {JSON::XS->new->utf8->decode($rbuf)};
+        my $emsg = "$decoded->{error}{code}: $decoded->{error}{message}";
+        $emsg   .= ", limit: $decoded->{error}{metadata}{headers}{'X-RateLimit-Limit'}";
+        $emsg   .= ", remaining: $decoded->{error}{metadata}{headers}{'X-RateLimit-Remaining'}";
+        $emsg   .= ", reset: ".POSIX::strftime("%F %T", gmtime($decoded->{error}{metadata}{headers}{'X-RateLimit-Reset'} =~ s/^(.*)?...$/$1/gr));
+        log::error(${colors::red_color}.$emsg.${colors::reset_color});
+        return;
+    };
 
+    log::info("GOT RESPONSE REMAINING >>$rbuf<<");
     if(length($rbuf)){
         eval {
             my $decoded = JSON::XS->new->utf8->decode($rbuf);
             log::error(${colors::red_color}.$decoded->{error}.${colors::reset_color});
         };
-        log::error(${colors::red_color}.$rbuf.${colors::reset_color}) if $@;
+        if($@){
+            log::error(${colors::red_color}.$rbuf.${colors::reset_color});
+        }
         $rbuf = undef;
     }
 
