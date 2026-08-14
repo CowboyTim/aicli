@@ -815,13 +815,10 @@ sub setup_readline {
     $term->add_defun("flag-insert-newline", sub {
         my ($c, $k) = @_;
         $::shift_enter_pressed = 1;
-        my $pr = get_chat_prompt($::P1OR2 = 1);
-        $term->message("\n");
-        $term->set_prompt($pr);
-        $term->save_prompt();
-        $term->clear_message();
-        $term->restore_prompt();
-        $term->on_new_line();
+        $::P1OR2 = 1;
+        $term->insert_text("\n");
+        $term->redisplay();
+        $attribs->{done} = 1;
         return 0;
     });
     $term->parse_and_bind('"\e[13;2u": flag-insert-newline');
@@ -868,23 +865,9 @@ sub input_terminal {
         }
         return unless defined $line;
         return unless $::LOOP;
+        log::info("CURRENT BUF: >>$buf<<LINE>>$line<<");
         $line //= "";
         # e.g. a regular command /
-        if($line !~ m/^$/ms and !length($buf) and !$mlm){
-            my $r_val = handle_command($line);
-            if(($r_val//0) == 1){
-                $::T->write_history($HISTORY_FILE);
-                return;
-            }
-            $buf .= "$line\n";
-            $mlm = 0;
-            $::P1OR2 = 0;
-            log::info("BUF: >>$buf<<");
-            $::T->addhistory($buf);
-            $::T->write_history($HISTORY_FILE);
-            chomp $buf;
-            return $buf;
-        }
         if((!$mlm or $line =~ m/^$/ms) and length($buf)){
             $mlm = 0;
             $::P1OR2 = 0;
@@ -900,6 +883,21 @@ sub input_terminal {
             $::P1OR2 = 1;
             $buf .= "$line\n" if length($line);
             goto READ_AGAIN;
+        }
+        if($line !~ m/^$/ms and !length($buf) and !$mlm){
+            my $r_val = handle_command($line);
+            if(($r_val//0) == 1){
+                $::T->write_history($HISTORY_FILE);
+                return;
+            }
+            $buf .= "$line\n";
+            $mlm = 0;
+            $::P1OR2 = 0;
+            log::info("BUF: >>$buf<<");
+            $::T->addhistory($buf);
+            $::T->write_history($HISTORY_FILE);
+            chomp $buf;
+            return $buf;
         }
         $buf .= "$line\n" if length($line);
         goto READ_AGAIN;
