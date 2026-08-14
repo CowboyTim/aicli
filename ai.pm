@@ -874,6 +874,14 @@ sub input_terminal {
                 $::T->write_history($HISTORY_FILE);
                 return;
             }
+            $buf .= "$line\n";
+            $mlm = 0;
+            $::P1OR2 = 0;
+            log::info("BUF: >>$buf<<");
+            $::T->addhistory($buf);
+            $::T->write_history($HISTORY_FILE);
+            chomp $buf;
+            return $buf;
         }
         if((!$mlm or $line =~ m/^$/ms) and length($buf)){
             $mlm = 0;
