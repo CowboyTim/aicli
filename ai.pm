@@ -765,6 +765,7 @@ sub exitshell {
 sub setup_readline {
     local $ENV{PERL_RL} = 'Gnu';
     local $ENV{TERM}    = $::ORIG_ENV{TERM} // 'vt220';
+    my $sig_h = $SIG{INT} = sub {$::LOOP = 0};
     eval {
         utils::load_cpan("Term::ReadLine");
         utils::load_cpan("Term::ReadLine::Gnu");
@@ -774,6 +775,16 @@ sub setup_readline {
         exit 1;
     }
     my $term = Term::ReadLine->new("aicli");
+    my $attribs = $term->Attribs;
+    $attribs->{catch_signals}  = 0;
+    $attribs->{catch_sigwinch} = 0;
+    $attribs->{event_hook}     = sub {
+        die "EXIT WANTED: 6df87ccd-2c9a-4303-982c-54b60ebb2aa1\n"
+            unless $::LOOP
+    };
+    $attribs->{horizontal_scroll_mode} = 0;
+    $attribs->{attempted_completion_function} = \&chat_word_completions_cli;
+    $attribs->{ignore_completion_duplicates}  = 1;
     $term->read_init_file("$BASE_DIR/inputrc");
     $term->ReadLine('Term::ReadLine::Gnu') eq 'Term::ReadLine::Gnu'
         or die "Term::ReadLine::Gnu needs to be loaded\n";
@@ -781,13 +792,46 @@ sub setup_readline {
     $term->using_history();
     $term->ReadHistory($HISTORY_FILE);
     $term->clear_signals();
-    my $attribs = $term->Attribs();
-    $attribs->{attempted_completion_function} = \&chat_word_completions_cli;
-    $attribs->{ignore_completion_duplicates}  = 1;
-    return ($term, $attribs);
+    $SIG{WINCH} = sub {
+        $term->reset_screen_size();
+        my ($n_rows, $n_cols) = $term->get_screen_size();
+        $term->redisplay();
+        return;
+    };
+    $SIG{INT} = $SIG{TERM} = sub {
+        $term->write_history($HISTORY_FILE);
+        $term->clear_message();
+        $term->crlf();
+        $term->set_prompt("");
+        $term->redisplay();
+        $term->resize_terminal();
+        $term->free_line_state();
+        $term->cleanup_after_signal();
+        return &$sig_h(@_) if defined $sig_h and ref($sig_h) eq 'CODE';
+        return;
+    };
+    $term->add_defun("flag-insert-newline", sub {
+        my ($c, $k) = @_;
+        $::shift_enter_pressed = 1;
+        my $pr = get_chat_prompt($::P1OR2 = 1);
+        $term->message("\n");
+        $term->set_prompt($pr);
+        $term->save_prompt();
+        $term->clear_message();
+        $term->restore_prompt();
+        $term->on_new_line();
+        return 0;
+    });
+    $term->parse_and_bind('"\e[13;2u": flag-insert-newline');
+    $term->clear_message();
+    $term->on_new_line();
+    $term->redisplay();
+    $term->reset_screen_size();
+    return $term;
 }
 
 sub get_chat_prompt {
+    my ($f) = @_;
     # https://jafrog.com/2013/11/23/colors-in-terminal.html
     # https://ss64.com/bash/syntax-colors.html
     my $prompt_term1  =
@@ -804,45 +848,50 @@ sub get_chat_prompt {
             .$colors::reset_color;
     my $ps1 = eval 'return "'.$prompt_term1.'"' || '► ';
     my $ps2 = eval 'return "'.$prompt_term2.'"' || '│ ';
-    return ($ps1, $ps2);
+    return $ps2 if $f;
+    return $ps1;
 }
 
 sub input_terminal {
-    my ($term, $attribs) = setup_readline();
+    $::T = setup_readline();
     return sub {
         my $buf = '';
-        my $p1or2 = 0;
+        my $mlm = 0;
+        $::shift_enter_pressed = 0;
       READ_AGAIN:
-        my ($t_ps1, $t_ps2) = get_chat_prompt();
-        my $line = $term->readline($p1or2 == 0?$t_ps1:$t_ps2);
-        return unless defined $line;
-        if($line !~ m/^$/ms){
-            if(!length($buf)){
-                my $r_val = handle_command($line);
-                if(defined $r_val){
-                    if($r_val == 1){
-                        $term->WriteHistory($HISTORY_FILE);
-                        return;
-                    } else {
-                        goto READ_AGAIN;
-                    }
-                }
-            }
-            $buf .= "$line\n";
-            $p1or2 = 1;
-            goto READ_AGAIN;
-        } else {
-            if(length($buf)){
-                log::info("BUF: >>$buf<<");
-                $term->addhistory($buf);
-                $term->WriteHistory($HISTORY_FILE);
-                chomp $buf;
-                return $buf;
-            } else {
-                goto READ_AGAIN;
+        return unless $::LOOP;
+        my $line = eval{$::T->readline(get_chat_prompt($::P1OR2))};
+        if($@ and $@ !~ m/EXIT WANTED: 6df87ccd-2c9a-4303-982c-54b60ebb2aa1/){
+            die $@;
+        }
+        return unless $::LOOP;
+        $line //= "";
+        # e.g. a regular command /
+        if($line !~ m/^$/ms and !length($buf) and !$mlm){
+            my $r_val = handle_command($line);
+            if(($r_val//0) == 1){
+                $::T->write_history($HISTORY_FILE);
+                return;
             }
         }
-        return;
+        if((!$mlm or $line =~ m/^$/ms) and length($buf)){
+            $mlm = 0;
+            $::P1OR2 = 0;
+            log::info("BUF: >>$buf<<");
+            $::T->addhistory($buf);
+            $::T->write_history($HISTORY_FILE);
+            chomp $buf;
+            return $buf;
+        }
+        if($::shift_enter_pressed or $mlm){
+            $::shift_enter_pressed = 0;
+            $mlm = 1;
+            $::P1OR2 = 1;
+            $buf .= "$line\n" if length($line);
+            goto READ_AGAIN;
+        }
+        $buf .= "$line\n" if length($line);
+        goto READ_AGAIN;
     };
 }
 
@@ -859,10 +908,12 @@ sub input_stdin {
 }
 
 sub chat_loop {
+    $::LOOP = 1;
     my $input_cli_sub = -t STDIN ? input_terminal() : input_stdin();
-    while(1){
+    while($::LOOP){
         log::info("Waiting for user input...");
         my $chat_request = &{$input_cli_sub}();
+        last unless $::LOOP;
         unless(defined $chat_request){
             print "\n";
             last;
@@ -871,6 +922,24 @@ sub chat_loop {
         chat_completion($chat_request);
     }
     return;
+}
+
+sub cleanup_chat {
+    return unless $::T;
+    log::info("cleanup terminal");
+    $::T->write_history($HISTORY_FILE);
+    $::T->clear_message();
+    $::T->set_prompt("");
+    $::T->redisplay();
+    $::T->resize_terminal();
+    $::T->free_line_state();
+    $::T->cleanup_after_signal();
+    $::T = undef;
+    return;
+}
+
+END {
+    ai::cleanup_chat();
 }
 
 sub handle_command {
