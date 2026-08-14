@@ -253,6 +253,7 @@ sub chat_completion {
     log::info("Requesting completion from AI API $AI_ENDPOINT_URL with ".($api_key//'<no api key>'));
 
     CHAT_LOOP:
+    return unless $::LOOP;
     # Variable to hold the assembled assistant message
     my $newturns = 0;
     my $resp = '';
@@ -260,7 +261,7 @@ sub chat_completion {
     utils::http("post", "$AI_ENDPOINT_URL/v1/chat/completions", $::JSON->encode($req), $api_key, sub {
         my ($ch, $raw) = @_;
         $raw //= $ch; # WWW::Curl::Easy: <data>, <user_ref>, Net::Curl::Easy: <handle>, <data>
-        log::info("GOT STREAM $raw");
+        log::info("GOT STREAM ".do {local $_=$raw;chomp;chomp;$_});
         my $sz = length($raw);
         $rbuf .= $raw;
         $raw = undef;
@@ -270,6 +271,7 @@ sub chat_completion {
         local $| = 1;
         # Parse Server-Sent Events (SSE) stream
         while($rbuf =~ s/(.*?)\n\n//ms){
+            return 0 unless $::LOOP;
             my $event = $1 // "";
             next unless $event =~ s/^data:\s*//;
             if($event eq '[DONE]'){
