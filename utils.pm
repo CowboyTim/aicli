@@ -29,21 +29,21 @@ sub http {
         my $ch = curl->new();
         $ch->setopt(curl::CURLOPT_IPRESOLVE(), curl::CURL_IPRESOLVE_V6());
         $ch->setopt(curl::CURLOPT_VERBOSE(), $::DEBUG?1:0);
-        $ch->setopt(curl::CURLOPT_HTTPHEADER(), [
-            "Accept: application/json",
-            "Content-Type: application/json",
-            "User-Agent: AI Chat/0.1",
-            "Connection: Keep-Alive",
-            "Keep-Alive: max=100",
-            ($api_key ?(
-                "Authorization: Bearer $api_key",
-            ):()),
-        ]);
         if(my $proxy = $::ORIG_ENV{AI_PROXY} // $::ORIG_ENV{HTTPS_PROXY} // $::ORIG_ENV{HTTP_PROXY}){
             $ch->setopt(curl::CURLOPT_PROXY(), $proxy);
         }
         $ch;
     };
+    $curl_handle->setopt(curl::CURLOPT_HTTPHEADER(), [
+        "Accept: application/json",
+        "Content-Type: application/json",
+        "User-Agent: AI Chat/0.1",
+        "Connection: Keep-Alive",
+        "Keep-Alive: max=100",
+        ($api_key ?(
+            "Authorization: Bearer $api_key",
+        ):())
+    ]);
     $curl_handle->setopt(curl::CURLOPT_WRITEFUNCTION(), $read_handle_sub // sub {
         my ($ch, $chunk) = @_;
         $chunk //= $ch; # WWW::Curl::Easy: <data>, <user_ref>, Net::Curl::Easy: <handle>, <data>
