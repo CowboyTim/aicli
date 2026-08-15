@@ -15,7 +15,7 @@ BEGIN {
 
 # Variables/Handles
 our ($api_key, $AI_ENDPOINT_URL, $SESSION_MODEL, $provider_name, $v1_prefix);
-our ($AI_SESSION_DIR, $HISTORY_FILE, $PROMPT_FILE, $STATUS_FILE, $BASE_DIR, $AI_PROMPT_TEMPLATE, $AI_PROMPT_TEMPLATE_FILE, $AI_SESSION, $SESSIONS_DIR);
+our ($AI_SESSION_DIR, $HISTORY_FILE, $PROMPT_FILE, $STATUS_FILE, $BASE_DIR, $AI_PROMPT_TEMPLATE, $AI_PROMPT_TEMPLATE_FILE, $AI_SESSION, $SESSIONS_DIR, $AI_PROVIDER);
 our $cmds;
 
 sub chat_setup {
@@ -93,39 +93,32 @@ sub chat_setup {
             url => 'https://openrouter.ai/api',
             key_prefix => 'sk-or-',
         },
-        'openai' => {
-            url => 'https://api.openai.com/v1',
-            key_prefix => 'sk-',
-        },
-        'groq' => {
-            url => 'https://api.groq.com/openai/v1',
-            key_prefix => 'gsk_',
-        },
-        'anthropic' => {
-            url => 'https://api.anthropic.com/v1',
-            key_prefix => 'sk-ant-',
-        },
-        'bedrock' => {
-            url => 'https://bedrock-runtime.us-east-1.amazonaws.com',
-            key_prefix => 'AKIA',  # AWS access key
+        'nvidia' => {
+            url => 'https://integrate.api.nvidia.com',
+            key_prefix => 'nvapi-gkX-',
         },
         'lemonade' => {
             url => 'http://localhost:8000/v1',
-            key_prefix => '',
         },
     );
 
     $provider_name = lc($::ORIG_ENV{AI_PROVIDER} // '');
+    $api_key = $::ORIG_ENV{AI_API_KEY};
 
     # Check for local llama.cpp server
     if ($::ORIG_ENV{AI_LOCAL_SERVER}) {
         $AI_ENDPOINT_URL = $::ORIG_ENV{AI_LOCAL_SERVER};
         $provider_name = undef;  # Don't set provider_name for local servers to avoid lookups
     } else {
+        if (!$api_key) {
+            log::error("Please set AI_API_KEY environment variable or set $BASE_DIR/config");
+            exit 1;
+        }
         # Detect provider by key prefix or use configured provider
         my $detected_provider;
         if (defined $api_key && length($api_key)) {
             for my $name (keys %PROVIDERS) {
+                next unless $PROVIDERS{$name}{key_prefix};
                 if ($api_key =~ m/^$PROVIDERS{$name}{key_prefix}/) {
                     $detected_provider = $name;
                     last;
@@ -133,20 +126,16 @@ sub chat_setup {
             }
         }
 
-
         # Use detected provider or fall back to configured provider
         if ($provider_name and exists $PROVIDERS{$provider_name}) {
             $AI_ENDPOINT_URL = $PROVIDERS{$provider_name}{url};
+            $AI_PROVIDER = $provider_name;
         } elsif ($detected_provider) {
             $AI_ENDPOINT_URL = $PROVIDERS{$detected_provider}{url};
+            $AI_PROVIDER = $detected_provider;
         } else {
             log::error("Unable to detect provider from API key. Set AI_PROVIDER environment variable");
             log::error("Supported providers: ".join(', ', keys %PROVIDERS));
-            exit 1;
-        }
-        $api_key = $::ORIG_ENV{AI_API_KEY};
-        if (!$api_key) {
-            log::error("Please set AI_API_KEY environment variable or set $BASE_DIR/config");
             exit 1;
         }
         if ($provider_name) {
@@ -227,29 +216,10 @@ sub chat_completion {
         content => $input,
     };
 
-    my $model = $SESSION_MODEL || $::ORIG_ENV{AI_MODEL};
-    my $req = {
-        ($model ? (model => $model):()),
-        max_tokens           => $::ORIG_ENV{AI_TOKENS}              // 100_000,
-        temperature          => $::ORIG_ENV{AI_TEMPERATURE}         // 0.6,
-        top_p                => $::ORIG_ENV{AI_TOP_P}               // 0.95,
-        top_k                => $::ORIG_ENV{AI_TOP_K}               // 20,
-        min_p                => $::ORIG_ENV{AI_MIN_P}               // 0.0,
-        presense_penalty     => $::ORIG_ENV{AI_PRESENCE_PENALTY}    // 0.0,
-        repeat_penalty       => $::ORIG_ENV{AI_REPEAT_PENALTY}      // 1.0,
-        frequency_penalty    => $::ORIG_ENV{AI_FREQUENCY_PENALTY}   // 0.1,
-        repeat_last_n        => $::ORIG_ENV{AI_REPEAT_LAST_N}       // 1000,
-        #reasoning            => $Types::Serialiser::true,
-        #reasoning_budget     => 1000000,
-        #chat_template_kwargs => '{"enable_thinking": true}',
-        stream               => $Types::Serialiser::true,
-        messages             => \@jstr,
-    };
-
-    # Provider-specific options
-    $req->{provider} = {only => [split m/ +/m, $::ORIG_ENV{OPENROUTER_PROVIDER}]}
-        if ($provider_name//'') eq 'openrouter' and length($::ORIG_ENV{OPENROUTER_PROVIDER})//"";
-    log::info($::JSON->encode($req));
+    my $req = do {no strict 'refs'; &{"provider::${AI_PROVIDER}::req"}(@jstr)};
+    @jstr = ();
+    $req = $::JSON->encode($req);
+    log::info($req);
     log::info("Requesting completion from AI API $AI_ENDPOINT_URL with ".($api_key//'<no api key>'));
 
     CHAT_LOOP:
@@ -258,7 +228,7 @@ sub chat_completion {
     my $newturns = 0;
     my $resp = '';
     my $rbuf = '';
-    utils::http("post", "$AI_ENDPOINT_URL/v1/chat/completions", $::JSON->encode($req), $api_key, sub {
+    utils::http("post", "$AI_ENDPOINT_URL/v1/chat/completions", $req, $api_key, sub {
         my ($ch, $raw) = @_;
         $raw //= $ch; # WWW::Curl::Easy: <data>, <user_ref>, Net::Curl::Easy: <handle>, <data>
         log::info("GOT STREAM ".do {local $_=$raw;chomp;chomp;$_});
@@ -303,11 +273,16 @@ sub chat_completion {
         return $sz;
     }) // do {
         log::info("GOT ERROR RESPONSE REMAINING >>$rbuf<<");
-        my $decoded = eval {JSON::XS->new->utf8->decode($rbuf)};
-        my $emsg = "$decoded->{error}{code}: $decoded->{error}{message}";
-        $emsg   .= ", limit: $decoded->{error}{metadata}{headers}{'X-RateLimit-Limit'}";
-        $emsg   .= ", remaining: $decoded->{error}{metadata}{headers}{'X-RateLimit-Remaining'}";
-        $emsg   .= ", reset: ".POSIX::strftime("%F %T", gmtime($decoded->{error}{metadata}{headers}{'X-RateLimit-Reset'} =~ s/^(.*)?...$/$1/gr));
+        my $decoded = eval {length($rbuf) and $_ = JSON::XS->new->utf8->decode($rbuf) and $rbuf = ""; $_};
+        my $emsg = "ERROR: ".($@//"");
+        if($decoded and $decoded->{error}){
+            $emsg .= "$decoded->{error}{code}: $decoded->{error}{message}";
+            if($decoded->{error}{metadata}){
+                $emsg .= ", limit: $decoded->{error}{metadata}{headers}{'X-RateLimit-Limit'}";
+                $emsg .= ", remaining: $decoded->{error}{metadata}{headers}{'X-RateLimit-Remaining'}";
+                $emsg .= ", reset: ".POSIX::strftime("%F %T", gmtime($decoded->{error}{metadata}{headers}{'X-RateLimit-Reset'} =~ s/^(.*)?...$/$1/gr));
+            }
+        }
         log::error(${colors::red_color}.$emsg.${colors::reset_color});
         return;
     };
@@ -333,7 +308,7 @@ sub chat_completion {
     push @jstr, @{$r//[]};
 
     # save updated messages to status file
-    open(my $sfh_final, '>', $STATUS_FILE)
+    open(my $sfh_final, '>>', $STATUS_FILE)
          or die "Failed to write to $STATUS_FILE: $!\n";
     print {$sfh_final} $::JSON->encode($_)."\n" for @jstr;
     close $sfh_final
@@ -1177,6 +1152,77 @@ sub handle_command {
     }
     return;
 }
+
+package provider;
+
+use strict; use warnings;
+
+sub req {
+    my (@jstr) = @_;
+    my $model = $SESSION_MODEL || $::ORIG_ENV{AI_MODEL};
+    my $req = {
+        ($model ? (model => $model):()),
+        max_tokens   => $::ORIG_ENV{AI_TOKENS}      // 100_000,
+        temperature  => $::ORIG_ENV{AI_TEMPERATURE} // 0.6,
+        top_p        => $::ORIG_ENV{AI_TOP_P}       // 0.95,
+        top_k        => $::ORIG_ENV{AI_TOP_K}       // 20,
+        min_p        => $::ORIG_ENV{AI_MIN_P}       // 0.0,
+        stream       => $Types::Serialiser::true,
+        messages     => \@jstr,
+    };
+
+    return $req;
+}
+
+package provider::openrouter;
+
+use strict; use warnings;
+use base qw(provider);
+
+sub req {
+    my (@jstr) = @_;
+    my $req = provider::req(@jstr);
+    # Provider-specific options
+    $req->{provider} = {only => [split m/ +/m, $::ORIG_ENV{OPENROUTER_PROVIDER}]}
+        if length($::ORIG_ENV{OPENROUTER_PROVIDER})//"";
+    return $req;
+}
+
+
+package provider::nvidia;
+
+use strict; use warnings;
+use base qw(provider);
+
+sub req {
+    my (@jstr) = @_;
+    my $req = provider::req(@jstr);
+    $req->{chat_template_kwargs} = {"enable_thinking" => $Types::Serialiser::true};
+    $req->{model} //= 'nvidia/nemotron-3.5-lightning-30b-a3b';
+    return $req;
+}
+
+package provider::cerebras;
+
+use strict; use warnings;
+use base qw(provider);
+
+sub req {
+    my (@jstr) = @_;
+    my $req = provider::req(@jstr);
+    delete $req->{min_p};
+    delete $req->{top_k};
+    $req->{model} //= 'gpt-oss-120b';
+    return $req;
+}
+
+package provider::lemonade;
+
+use strict; use warnings;
+use base qw(provider);
+
+*req = *provider::req;
+
 
 package prompt;
 
