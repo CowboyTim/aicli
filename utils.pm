@@ -27,7 +27,6 @@ sub http {
     $$response = "";
     $curl_handle //= do {
         my $ch = curl->new();
-        $ch->setopt(curl::CURLOPT_IPRESOLVE(), curl::CURL_IPRESOLVE_V6());
         $ch->setopt(curl::CURLOPT_VERBOSE(), $::DEBUG?1:0);
         if(my $proxy = $::ORIG_ENV{AI_PROXY} // $::ORIG_ENV{HTTPS_PROXY} // $::ORIG_ENV{HTTP_PROXY}){
             $ch->setopt(curl::CURLOPT_PROXY(), $proxy);
