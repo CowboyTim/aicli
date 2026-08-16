@@ -15,7 +15,7 @@ BEGIN {
 
 # Variables/Handles
 our ($api_key, $AI_ENDPOINT_URL, $SESSION_MODEL, $provider_name, $v1_prefix);
-our ($AI_SESSION_DIR, $HISTORY_FILE, $PROMPT_FILE, $STATUS_FILE, $BASE_DIR, $AI_PROMPT_TEMPLATE, $AI_PROMPT_TEMPLATE_FILE, $AI_SESSION, $SESSIONS_DIR, $AI_PROVIDER);
+our ($AI_SESSION_DIR, $HISTORY_FILE, $PROMPT_FILE, $STATUS_FILE, $BASE_DIR, $AI_PROMPT_TEMPLATE, $AI_PROMPT_TEMPLATE_FILE, $AI_SESSION, $SESSIONS_DIR, $AI_PROVIDER, $AI_URL);
 our $cmds;
 
 sub chat_setup {
@@ -147,6 +147,11 @@ sub chat_setup {
 
     # Normalize URL - ensure it doesn't end with / for some endpoints
     $AI_ENDPOINT_URL =~ s|/+$||;
+
+    # AI_RAW point for e.g. non-jinja
+    $AI_URL = "$AI_ENDPOINT_URL/v1/chat/completions";
+    $AI_URL = "$AI_ENDPOINT_URL/v1/completions" if $::ORIG_ENV{AI_RAW};
+
     init_session($AI_SESSION);
     return;
 }
@@ -165,7 +170,11 @@ sub handle_llm_response {
     my $newturns = 0;
 
     my @rt;
-    my $msg_no_think = $$resp =~ s/^<think>.*?^<\/think>$//msgr;
+    my $msg_no_think = "";
+    if($$resp =~ s/^\n<think>.*?^<\/think>\n$//msgr){
+        $$resp =~ s/^\n<think>.*?^<\/think>\n$//msg;
+        $msg_no_think = $$resp;
+    }
     Encode::_utf8_off($msg_no_think);
     log::info("MSG THINK STRIPPED>>$msg_no_think<<");
     $t_rx //= tools::rx();
@@ -215,8 +224,11 @@ sub chat_completion {
         role    => 'user',
         content => $input,
     };
-
-    my $req = do {no strict 'refs'; &{"provider::${AI_PROVIDER}::req"}(@jstr)};
+    my $req = do {
+        no strict 'refs';
+        my $w = $::ORIG_ENV{AI_RAW}?"raw":"req";
+        &{"provider::${AI_PROVIDER}::${w}"}(@jstr)
+    };
     @jstr = ();
     $req = $::JSON->encode($req);
     log::info($req);
@@ -226,9 +238,11 @@ sub chat_completion {
     return unless $::LOOP;
     # Variable to hold the assembled assistant message
     my $newturns = 0;
+    my $thinking = 0;
+    my $was_thinking = 0;
     my $resp = '';
     my $rbuf = '';
-    utils::http("post", "$AI_ENDPOINT_URL/v1/chat/completions", $req, $api_key, sub {
+    utils::http("post", $AI_URL, $req, $api_key, sub {
         my ($ch, $raw) = @_;
         $raw //= $ch; # WWW::Curl::Easy: <data>, <user_ref>, Net::Curl::Easy: <handle>, <data>
         log::info("GOT STREAM ".do {local $_=$raw;chomp;chomp;$_});
@@ -257,12 +271,31 @@ sub chat_completion {
                     print "${colors::yellow_color1}$reasoning_content${colors::reset_color}";
                 }
                 my $delta = $msg_entry->{delta}{content}
-                         // $msg_entry->{message}{content};
+                         // $msg_entry->{message}{content}
+                         // $msg_entry->{text};
                 if(length($delta//"")){
                     log::info("STREAM $delta");
                     Encode::_utf8_off($delta);
                     $resp .= $delta;
-                    print $delta;
+                    if($resp =~ m/(<think>).*?(?:(<\/think>)|$)/s){
+                        $thinking = ($1 and !$2) ? 1 : 0;
+                    }
+                    if($was_thinking){
+                        if($thinking){
+                            print ${colors::yellow_color1}.$delta.${colors::reset_color};
+                        } else {
+                            print ${colors::yellow_color1}.$delta.${colors::reset_color};
+                            $was_thinking = 0;
+                        }
+                    } else {
+                        if($thinking){
+                            print ${colors::yellow_color1}.$delta.${colors::reset_color};
+                            $was_thinking = 1;
+                        } else {
+                            print ${colors::green_color}.$delta.${colors::reset_color};
+                            $was_thinking = 0;
+                        }
+                    }
                 }
             };
             if($@){
@@ -291,7 +324,7 @@ sub chat_completion {
     if(length($rbuf)){
         eval {
             my $decoded = JSON::XS->new->utf8->decode($rbuf);
-            log::error(${colors::red_color}.$decoded->{error}.${colors::reset_color});
+            log::error(${colors::red_color}.($decoded->{error}//"ERROR").${colors::reset_color});
         };
         if($@){
             log::error(${colors::red_color}.$rbuf.${colors::reset_color});
@@ -1153,9 +1186,36 @@ sub handle_command {
     return;
 }
 
+package model;
+
+use strict; use warnings;
+
+sub transform {
+    my (@jstr) = @_;
+    my $model = $SESSION_MODEL || $::ORIG_ENV{AI_MODEL};
+    my %r = (
+        n_predict    => $::ORIG_ENV{AI_TOKENS}      // 100_000,
+        temperature  => $::ORIG_ENV{AI_TEMPERATURE} // 0.6,
+        stream       => $Types::Serialiser::true,
+        model        => $model,
+    );
+    if($model =~ m/qwen/i){
+        my $s_t = "<|im_start|>";
+        my $e_t = "<|im_end|>";
+        my $msg = join("", map {"${s_t}$_->{role}\n$_->{content}${e_t}\n"} @jstr);
+        $msg   .= "${s_t}assistant";
+        return {%r, prompt => $msg, stop => [$e_t]};
+    }
+    return;
+}
+
+package model::qwen;
+
 package provider;
 
 use strict; use warnings;
+
+*raw = *model::transform;
 
 sub req {
     my (@jstr) = @_;
@@ -1179,6 +1239,8 @@ package provider::openrouter;
 use strict; use warnings;
 use base qw(provider);
 
+*raw = *provider::raw;
+
 sub req {
     my (@jstr) = @_;
     my $req = provider::req(@jstr);
@@ -1194,6 +1256,8 @@ package provider::nvidia;
 use strict; use warnings;
 use base qw(provider);
 
+*raw = *provider::raw;
+
 sub req {
     my (@jstr) = @_;
     my $req = provider::req(@jstr);
@@ -1206,6 +1270,8 @@ package provider::cerebras;
 
 use strict; use warnings;
 use base qw(provider);
+
+*raw = *provider::raw;
 
 sub req {
     my (@jstr) = @_;
@@ -1222,6 +1288,7 @@ use strict; use warnings;
 use base qw(provider);
 
 *req = *provider::req;
+*raw = *provider::raw;
 
 
 package prompt;
