@@ -108,7 +108,7 @@ sub chat_setup {
     # Check for local llama.cpp server
     if ($::ORIG_ENV{AI_LOCAL_SERVER}) {
         $AI_ENDPOINT_URL = $::ORIG_ENV{AI_LOCAL_SERVER};
-        $provider_name = undef;  # Don't set provider_name for local servers to avoid lookups
+        $AI_PROVIDER = $provider_name;
     } else {
         if (!$api_key) {
             log::error("Please set AI_API_KEY environment variable or set $BASE_DIR/config");
