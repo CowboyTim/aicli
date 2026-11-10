@@ -211,7 +211,7 @@ API key prefix: C<sk-> (standard OpenAI keys)
 
 API key prefix: C<gsk_->
 
-=item B Anthropic>
+=item B<Anthropic>
 
 API key prefix: C<sk-ant->
 
