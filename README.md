@@ -1,116 +1,214 @@
-# AI-CLI: A Perl-Based Command-Line Interface for LLMs
+# AI-CLI: a coding agent for the command line, in Perl
 
-AI-CLI is an interactive command-line chat interface for interacting with various Large Language Model (LLM) providers. It supports streaming responses, tool usage (bash, perl, file operations, grep), session persistence, and multi-provider compatibility.
+AI-CLI is an interactive chat with an LLM that can act. The model can run tools
+(bash, perl, read/write files, grep), gets the results back and continues, in a
+loop, until it has an answer. Think of pi, hermes or opencode, but as a small
+Perl program: plain `fork()`, `exec()`, `eval`, `select()` and libcurl, no
+framework.
 
 ## Features
 
-- **Multi-provider Support**: Works with Cerebras, OpenRouter, OpenAI, Groq, Anthropic, Bedrock, and local servers (like llama.cpp via Lemonade/ROCm)
-- **Streaming & Non-streaming Modes**: Real-time token output with Server-Sent Events (SSE) parsing
-- **Built-in Tools**:
-  - `/bash` - Execute bash commands
-  - `/perl` - Run Perl scripts
-  - `/read` - Read file contents
-  - `/write` - Write/overwrite files
-  - `/grep` - Search files with regex patterns
-- **Session Management**: Persistent chat histories, per-session configuration, and model switching
-- **Docker-friendly**: Runs as non-root user with volume mounts for workspace and SSH agent forwarding
-- **Extensible Tool System**: Easy to add new tools following the existing pattern
-- **Customizable Prompts**: Switch between different system prompt templates (e.g., coder, default)
+- **Agent loop**: the answer of the model is scanned for tool calls, they are
+  executed, the results go back to the model, until it is done
+- **Thinking is shown**: reasoning (`reasoning_content`/`reasoning` deltas and
+  `<think>` blocks) streams in its own color, and is not kept in the history
+- **Tools the Perl way**: bash and grep are `exec()`ed in a forked child, perl
+  code is `eval`ed in a forked child (optionally in a `Safe` compartment)
+- **Text based tool protocol**: no function-calling API needed, so it works
+  with any model, also on raw completion endpoints
+- **Providers**: Cerebras, OpenRouter, NVIDIA, Lemonade, and any OpenAI
+  compatible local server (llama.cpp, ...)
+- **Sessions**: every conversation is a directory with its history, system
+  prompt and model
+- **Slash commands** with TAB completion, multi-line input, readline history
+- **Docker wrapper** to keep what the model does inside a container
 
-## Quick Start
+## Quick start
 
-### Using Docker (Recommended)
+### Docker (recommended)
+
+The tools run whatever the model asks for, without confirmation. The container
+is the sandbox.
+
 ```bash
-# Clone this repository
-git clone <repository-url>
-cd <repository-directory>
-
-# Run with Docker (adjust environment variables as needed)
-./aicli.sh
+docker build -t local/ai/aicli:latest .
+cd ~/my-project
+/path/to/aicli.sh
 ```
 
-### Direct Installation
-1. Ensure you have Perl and required dependencies installed:
-   ```bash
-   # On Alpine/Debian-based systems:
-   apk add perl perl-json perl-lwp-protocol-https perl-term-readline-gnu perl-json-xs perl-net-curl
-   # or
-   apt-get install perl libjson-perl libwww-perl libterm-readline-gnu-perl libjson-xs-perl libnet-curl-perl
-   ```
+`aicli.sh` mounts the current directory, and is set up for a local llama.cpp
+server on an AMD ROCm machine: adjust it (`AI_LOCAL_SERVER`, `AI_MODEL`, the
+`--device` options) to your setup.
 
-2. Copy `ai.pl` and the `ai/` directory to your desired location
+### Direct
 
-3. Set required environment variables:
-   ```bash
-   export AI_API_KEY="your-api-key-here"
-   export AI_PROVIDER="openrouter"  # or cerebras, openai, etc.
-   export AI_MODEL="model-name"     # optional, provider-dependent
-   ```
+```bash
+# Alpine
+apk add perl perl-json-xs perl-net-curl perl-term-readline-gnu bash grep
+# Debian/Ubuntu
+apt-get install perl libjson-xs-perl libnet-curl-perl libterm-readline-gnu-perl
 
-4. Run the script:
-   ```bash
-   perl ai.pl
-   ```
+export AI_API_KEY="csk-..."            # provider detected from the key
+export AI_PROMPT_TEMPLATE=coder        # the prompt with the tools
+perl ai.pl
+```
+
+or with a local server:
+
+```bash
+AI_LOCAL_SERVER=http://localhost:8080 AI_PROMPT_TEMPLATE=coder perl ai.pl
+```
+
+Not interactive, one request per line of stdin:
+
+```bash
+echo "which files here are bigger than 1MB?" | AI_SESSION=demo perl ai.pl
+```
+
+### Perl modules
+
+| Module | Needed for | Alpine | Debian/Ubuntu |
+|--------|------------|--------|---------------|
+| `JSON::XS` | everything | `perl-json-xs` | `libjson-xs-perl` |
+| `Net::Curl` (or `WWW::Curl`) | HTTP, streaming | `perl-net-curl` | `libnet-curl-perl` |
+| `Term::ReadLine::Gnu` | interactive input | `perl-term-readline-gnu` | `libterm-readline-gnu-perl` |
+| `Data::UUID` | optional: session ids | `perl-data-uuid` | `libdata-uuid-perl` |
+
+Everything else is core Perl (`Safe`, `POSIX`, `File::Temp`, `Time::HiRes`,
+`Getopt::Long`, `Pod::Usage`; `Test::More` for the tests). To build the XS
+modules from CPAN you need a compiler plus the libcurl and readline headers
+(`curl-dev readline-dev` / `libcurl4-openssl-dev libreadline-dev`).
 
 ## Usage
 
-Once running, you can:
-- Chat naturally with the AI
-- Use commands prefixed with `/`:
-  - `/exit` or `/quit` - Leave the chat
-  - `/clear` - Clear conversation history
-  - `/history` - View full chat history
-  - `/tools` - List available tools
-  - `/session list` - See all chat sessions
-  - `/session create <name>` - Create a new session
-  - `/model <model-name>` - Switch AI model for current session
-  - `/files <pattern>` - Add matching files to conversation context
-- Invoke tools in your prompts using the syntax:
-  ```
-  ///TOOL_{HEX}+{T1}+{T2}
-  {{path}}
-  {T1}
-  {{content}}
-  {T2}
-  TOOL_{HEX}
-  ```
+Type to chat. A line that starts with `/` is a command and is never sent to
+the model:
+
+| Command | |
+|---------|---|
+| `/help` | list the commands |
+| `/exit`, `/quit` | leave (also ctrl-D) |
+| `/clear` | forget the conversation, keep the system prompt |
+| `/session [list]` | list the sessions |
+| `/session create\|delete\|switch <name>`, `/session rename <old> <new>` | manage sessions, `/session <name>` switches too |
+| `/model [name]` | list the models of the API, or set the model of this session |
+| `/prompt [name]` | list the prompt templates, or switch the system prompt |
+| `/system <text>` | add a system message |
+| `/files [regex]` | add matching files of the current directory to the conversation (`.aiignore` is respected) |
+| `/tools` | list the tools |
+| `/chdir <dir>`, `/cd`, `/pwd`, `/ls` | working directory |
+| `/history` | input history |
+| `/debug`, `/nodebug` | debug logging |
+
+Keys: TAB completes commands, shift-enter starts multi-line input (an empty
+line sends it). **Ctrl-C while the model answers or a tool runs stops that
+turn** and returns to the prompt; ctrl-C at the prompt leaves.
+
+## How it works
+
+```
+ you ──► chat file ──► POST /v1/chat/completions (stream)
+              ▲                 │
+              │        thinking │ answer      shown as they stream in
+              │                 ▼
+              │        tool calls in the answer?
+              │            │ yes                    │ no
+              │            ▼                        ▼
+              └── results ◄── fork: exec/eval      done, back to the prompt
+```
+
+Every step is appended to the `chat` file of the session, and every request is
+built from that file, so a session can be continued at any time.
+
+### Tools
+
+The model calls a tool by writing a block in its answer. The syntax is
+explained to the model in the system prompt of the `coder` template (the
+`default` template is a plain chat without tools):
+
+```
+///WRITE_edf5+EO_d068+EO_ecde
+hello.pl
+EO_d068
+print "Hello, World!\n";
+EO_ecde
+WRITE_edf5
+```
+
+The result goes back as the next message, `[WRITE_edf5 RESULT_d170 ... RESULT_d170]`
+or `[WRITE_edf5 ERROR_9a78 ... ERROR_9a78]`.
+
+| Tool | How it runs |
+|------|-------------|
+| `bash` | script in a temp file, `exec bash` in a forked child |
+| `perl` | `eval` in a forked child, or `Safe->reval` with `AI_PERL_SAFE` |
+| `grep` | `exec grep -rn` in a forked child, no shell |
+| `read`, `write` | in the chat process |
+
+A forked tool process has its own session/process group, stdin from
+`/dev/null`, stdout+stderr captured through a pipe, and a minimal environment:
+no `AI_*` variable, so no API key. The parent waits in a `select()` loop and
+kills the process group on `AI_TOOL_TIMEOUT` or ctrl-C.
+
+The parser is forgiving, because models are sloppy: sentinels may be the ones
+of the header or the ones of the tool definition, the `[length]` suffix and the
+closing tag are optional. Tool calls inside thinking are ignored. A call that
+cannot be parsed is answered with an error, so the model can correct itself.
+
+Adding a tool: add an entry to `$tools::TOOLS` in `ai.pm` (its `syntax` defines
+the tag and the sentinels) and a sub named after the lowercased tag
+(`sub mytool_1a2b {my ($t_args) = @_; ...}`) that returns the result or dies.
 
 ## Configuration
 
-Configuration is primarily done through environment variables:
+Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `AI_API_KEY` | API key for your chosen provider | (required) |
-| `AI_PROVIDER` | Provider name (cerebras, openrouter, openai, groq, anthropic, bedrock, lemonade) | auto-detected from key |
-| `AI_MODEL` | Model identifier | provider-dependent |
-| `AI_TOKENS` | Max tokens per response | 8192 |
-| `AI_TEMPERATURE` | Sampling temperature | 0 |
-| `AI_STREAM` | Enable streaming (1) or not (0) | 1 |
-| `AI_SESSION` | Session name | auto-generated UUID |
-| `AI_DIR` | Base directory for data storage | `~/.aicli` |
-| `AI_PROMPT_TEMPLATE` | System prompt template | `coder` |
-| `DEBUG` | Enable debug logging | 0 |
+| `AI_API_KEY` | API key | required, except for local servers |
+| `AI_PROVIDER` | `cerebras`, `openrouter`, `nvidia`, `lemonade` | detected from the key prefix |
+| `AI_LOCAL_SERVER` | URL of an OpenAI compatible server, instead of a provider | |
+| `AI_MODEL` | model for sessions without their own | provider-dependent |
+| `AI_SESSION` | session name | new `session-<uuid>` |
+| `AI_PROMPT_TEMPLATE` | `default` (chat) or `coder` (with tools), a file in `ai/` | `default` |
+| `AI_PROMPT_TEMPLATE_FILE` | a system prompt file of your own | |
+| `AI_CLEAR` | start with an empty conversation and a fresh system prompt | 0 |
+| `AI_TOKENS` | max tokens per answer | 100000 |
+| `AI_TEMPERATURE`, `AI_TOP_P`, `AI_TOP_K`, `AI_MIN_P` | sampling | 0.6, 0.95, 20, 0.0 |
+| `AI_MAX_TURNS` | max requests per input (tool loop), 0 = no limit | 50 |
+| `AI_SHOW_THINKING` | 0 hides the thinking | 1 |
+| `AI_TOOL_TIMEOUT` | seconds for a bash/perl/grep tool, 0 = no limit | 120 |
+| `AI_TOOL_MAX_OUTPUT` | max bytes of a tool result, the middle is cut out | 65536 |
+| `AI_TOOL_ENV` | extra environment variables to pass to tools | |
+| `AI_PERL_SAFE` | perl tool in a `Safe` compartment: `1`, or extra opcodes like `:filesys_read` | off |
+| `AI_RAW` | use `/v1/completions` with a prompt built here (qwen only) | off |
+| `AI_DIR` | base directory | `~/.aicli` |
+| `AI_PS1`, `AI_PS2` | input prompts | |
+| `AI_PROXY` / `HTTPS_PROXY` / `HTTP_PROXY`, `NO_PROXY` | proxy | |
+| `DEBUG`, `AI_LOG` | debug logging, and where to | 0, stdout |
 
-## Project Structure
+`perl ai.pl --help` and `perldoc ai.pl` have the full reference.
 
-- `ai.pl` - Main application logic
-- `aicli.sh` - Docker wrapper script with volume/device forwarding
-- `Dockerfile` - Alpine-based container image build instructions
-- `ai/` - System prompt templates (coder, default)
-- `t/` - Test suite
-- `TODO.md` - Roadmap of planned enhancements
-- `AGENTS.md` - Technical analysis of the project
-- `MEMORY.md` - Additional project notes
+## Project structure
 
-## Development
+- `ai.pl` - entry point: options, drop privileges, POD
+- `ai.pm` - chat loop, streaming, commands, sessions, providers, prompt, tools
+- `utils.pm` - HTTP (curl multi + `select()`), `fork_run()`, logging
+- `ai/` - system prompt templates (`default`, `coder`)
+- `aicli.sh`, `Dockerfile` - docker wrapper and image
+- `t/` - tests
+- `TODO.md` - roadmap
+- `AGENTS.md` - notes and rules for (AI) contributors
 
-See [TODO.md](TODO.md) for current development priorities including:
-- Enhanced streaming with token statistics (TTFT/TPOT)
-- Thinking tag visualization during streaming
-- Improved error handling and retry mechanisms
-- Sandboxed tool execution
-- Configuration file support (JSON/YAML)
+## Tests
+
+```bash
+prove -I. t
+```
+
+The LLM is scripted in the tests. `t/45_http_e2e.t` runs the real HTTP code
+against a small fake server (and `ai.pl` itself as a process), it is skipped
+without a curl module.
 
 ## License
 

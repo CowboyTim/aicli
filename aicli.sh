@@ -30,9 +30,9 @@ exec docker run --rm -it \
     $extra_opts \
     $DOCKER_RUN_OPTS \
     -e TERM \
-    -e ALL_PROXX \
+    -e ALL_PROXY \
     -e HTTP_PROXY \
-    -e HTTPS_PROX \
+    -e HTTPS_PROXY \
     -e TMPDIR=/tmp \
     -e UID=${EUID} \
     -e LOGNAME \
@@ -50,8 +50,8 @@ exec docker run --rm -it \
     -e DEBUG \
     -e GIT_AUTHOR_NAME \
     -e GIT_AUTHOR_EMAIL \
-    -e GIT_COMITTER_NAME \
-    -e GIT_COMITTER_EMAIL \
+    -e GIT_COMMITTER_NAME \
+    -e GIT_COMMITTER_EMAIL \
     -e GIT_EDITOR="true" \
     -e ROCM_PATH=/opt/rocm \
     -e HOME=/workspace \

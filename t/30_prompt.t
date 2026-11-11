@@ -12,115 +12,38 @@ $::DEBUG = ($ENV{DEBUG}//"0") == "1"?1:0;
 
 use_ok("ai");
 
+# the tools section that the "coder" template adds to the system prompt
 {
     my $p = prompt::coder::prompt();
-    is($p, q{
+    like($p, qr/\A\n\n\*\*TOOLS\*\*\n/, "starts with the TOOLS header");
+    like($p, qr/To call a tool, write its block exactly/, "says how to call a tool");
+    like($p, qr{^///TOOL_\{HEX\}\+\{T1\}\+\{T2\}\n\{\{path\}\}\n\{T1\}\[<size of substituted \{\{path\}\}>\]\n\{\{content\}\}\n\{T2\}\[<size of substituted \{\{content\}\}>\]\nTOOL_\{HEX\}\n}m, "generic syntax");
+    like($p, qr/^TOOL results: \[<TOOL_\{HEX\}> RESULT_d170\n\{\{result\}\}\nRESULT_d170\]$/m, "result format");
+    like($p, qr/^TOOL errors: \[<TOOL_\{HEX\}> ERROR_9a78\n\{\{error\}\}\nERROR_9a78\]$/m, "error format");
 
-**TOOLS**
+    # every tool: name, syntax, description, properties - sorted by name
+    my @names = $p =~ m/^name: (\w+)$/mg;
+    is_deeply(\@names, [sort keys %$tools::TOOLS], "all tools listed, sorted");
+    foreach my $name (sort keys %$tools::TOOLS){
+        my $t = $tools::TOOLS->{$name};
+        like($p, qr/^name: $name\ntool: ```\n\Q$t->{syntax}\E\n```\ndescription: \Q$t->{description}\E\nproperties:\n/m, "$name: syntax and description");
+        like($p, qr/^ $_:\n  description: \Q$t->{properties}{$_}{description}\E\n  type: string\n/m, "$name: property $_")
+            for sort keys %{$t->{properties}};
+        like($p, qr/^example: ```\n\Q$t->{example}\E```\n/m, "$name: example")
+            if $t->{example};
+    }
 
-
-
-TOOLS SYNTAX, for tool 'TOOL':
-
-```
-///TOOL_{HEX}+{T1}+{T2}
-{{path}}
-{T1}
-{{content}}
-{T2}
-TOOL_{HEX}
-```
-Where {{path}}, {{content}} is substituted by the LLM
-TOOL results: [<TOOL_{HEX}> RESULT_d170b4e6bb11cfd550aa
-{{result}}
-RESULT_d170b4e6bb11cfd550aa]
-TOOL errors: [<TOOL_{HEX}> ERROR_9a7893514ebc885c2543
-{{error}}
-ERROR_9a7893514ebc885c2543]
-
-
-LIST OF TOOLS:
-
-name: bash
-tool: ```
-///BASH_7c48+EO_dfd7e6b99d1bf15480fa
-{{code}}
-EO_dfd7e6b99d1bf15480fa
-BASH_7c48
-```
-description: execute a bash script
-properties:
- code:
-  description: The bash code to execute
-  type: string
-
-
-name: grep
-tool: ```
-///GREP_6629+EO_a575a5c230c77d451640+EO_aaddf906cba61ec85a13
-{{path}}
-EO_a575a5c230c77d451640
-{{regex}}
-EO_aaddf906cba61ec85a13
-GREP_6629
-```
-description: search file with a pattern using grep unix tool
-properties:
- path:
-  description: The file path or directory to scan
-  type: string
- regex:
-  description: The grep pattern
-  type: string
-
-
-name: perl
-tool: ```
-///PERL_d8d2+EO_929b2e8d61111fac138f
-{{code}}
-EO_929b2e8d61111fac138f
-PERL_d8d2
-```
-description: execute a perl script
-properties:
- code:
-  description: The perl code to execute
-  type: string
-
-
-name: read
-tool: ```
-///READ_c5a3+EO_d0f15b09ea7648f828e7
-{{path}}
-EO_d0f15b09ea7648f828e7
-READ_c5a3
-```
-description: read a file contents
-properties:
- path:
-  description: The path to the file
-  type: string
-
-
-name: write
-tool: ```
-///WRITE_edf5+EO_d0684c052bf3d9c503a8+EO_ecdeef376b1647fa824a
-{{path}}
-EO_d0684c052bf3d9c503a8
-{{content}}
-EO_ecdeef376b1647fa824a
-WRITE_edf5
-```
-description: write or overwrite a file
-properties:
- content:
-  description: The raw text content to write
-  type: string
- path:
-  description: The path to the file
-  type: string
-
-}, 'prompt ok') or print ">>\n$p\n<<\n";
+    # what the prompt shows must be what the parser accepts
+    foreach my $name (grep {$tools::TOOLS->{$_}{example}} sort keys %$tools::TOOLS){
+        my $called;
+        no warnings 'redefine';
+        no strict 'refs';
+        local *{"tools::".lc($tools::TOOLS->{$name}{tag})} = sub {$called = $_[0]; "ok"};
+        my ($n) = ai::handle_llm_response(\$tools::TOOLS->{$name}{example}, sub {});
+        is($n, 1, "$name: the example is a valid tool call");
+        is(scalar(@{$called // []}), scalar(@{$tools::TOOLS->{$name}{required}}), "$name: example has all arguments");
+    }
+    is(UNIVERSAL::can("prompt::default", "prompt"), undef, "the default template has no tools section");
 }
 
 done_testing();

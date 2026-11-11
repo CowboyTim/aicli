@@ -17,7 +17,8 @@ sub trim {
 }
 
 our $curl_handle;
-our $response = \(my $buffer = ""); 
+our $response = \(my $buffer = "");
+our ($http_error, $http_code);
 sub http {
     my ($m, $full_url, $data, $api_key, $read_handle_sub) = @_;
     $data //= "";
@@ -30,6 +31,9 @@ sub http {
         $ch->setopt(curl::CURLOPT_VERBOSE(), $::DEBUG?1:0);
         if(my $proxy = $::ORIG_ENV{AI_PROXY} // $::ORIG_ENV{HTTPS_PROXY} // $::ORIG_ENV{HTTP_PROXY}){
             $ch->setopt(curl::CURLOPT_PROXY(), $proxy);
+            if(my $no_proxy = $::ORIG_ENV{NO_PROXY} // $::ORIG_ENV{no_proxy}){
+                eval {$ch->setopt(curl::CURLOPT_NOPROXY(), $no_proxy)};
+            }
         }
         $ch;
     };
@@ -61,15 +65,65 @@ sub http {
     if(lc($m) eq "get"){
         $curl_handle->setopt(curl::CURLOPT_HTTPGET(), 1);
     }
-    $curl_handle->perform();
-    my $r_code = $curl_handle->getinfo(curl::CURLINFO_HTTP_CODE());
+    $http_error = undef;
+    $http_code  = 0;
+    if(!eval {_perform($curl_handle); 1}){
+        chomp($http_error = "$@");
+        $http_error ||= "unknown http error";
+        log::info("HTTP ERROR: $http_error");
+        return;
+    }
+    my $r_code = $http_code = $curl_handle->getinfo(curl::CURLINFO_HTTP_CODE());
     if($r_code != 200){
+        $http_error = "HTTP status $r_code";
         log::info("ERROR: $r_code");
         return;
     }
     log::info("OK: $r_code");
     log::info("RESPONSE:\n$$response");
     return $$response;
+}
+
+# true when the user asked to stop the current turn (ctrl-C while busy)
+sub aborted {
+    return $::ABORT ? 1 : 0;
+}
+
+# Drive one transfer. No threads: with Net::Curl::Multi the transfer is driven
+# from a select() loop, so an abort is noticed while the server is still
+# silent. Without it (WWW::Curl) this falls back to a blocking perform().
+# Dies on any transfer error.
+sub _perform {
+    my ($ch) = @_;
+    my $multi = eval {Net::Curl::Multi->new()};
+    if(!$multi){
+        my $rc = $ch->perform();
+        die $ch->strerror($rc)."\n" if $rc;
+        return;
+    }
+    $multi->add_handle($ch);
+    my $attached = 1;
+    my $ok = eval {
+        my $running = 1;
+        while($running){
+            die "interrupted\n" if aborted();
+            my ($rin, $win, $ein) = $multi->fdset();
+            my $t = $multi->timeout();
+            $t = ($t < 0 or $t > 250) ? 0.25 : $t/1000;
+            select($rin, $win, $ein, $t);
+            $running = $multi->perform();
+            while(my ($msg, $easy, $result) = $multi->info_read()){
+                $multi->remove_handle($easy);
+                $attached = 0;
+                die "$result\n" if $result+0;
+            }
+        }
+        1;
+    };
+    my $err = $@;
+    eval {$multi->remove_handle($ch)} if $attached;
+    die $err unless $ok;
+    return;
 }
 
 package curl;
@@ -84,6 +138,7 @@ BEGIN {
     eval {
         utils::load_cpan("Net::Curl::Easy");
         *AUTOLOAD = *Net::Curl::Easy::AUTOLOAD;
+        utils::load_cpan("Net::Curl::Multi");
     };
     eval {
         utils::load_cpan("WWW::Curl::Easy");
@@ -126,89 +181,123 @@ sub error {
 package utils;
 
 use POSIX ();
+use IO::Handle ();
+use Time::HiRes ();
 
-sub daemon {
-    my ($worker_sub) = @_;
+# hooks run in every forked tool process before the worker (e.g. drop secrets)
+our @CHILD_INIT;
+
+# Environment handed to tool processes: an allow-list, never the AI_* settings
+# (API key!). AI_TOOL_ENV can name extra variables to pass through.
+sub tool_env {
+    my %src = (%ENV, %::ORIG_ENV);
+    my @keep = (qw(PATH HOME LOGNAME USER SHELL TERM LANG LC_ALL TZ TMPDIR SSH_AUTH_SOCK),
+        (grep {m/^GIT_/} keys %src),
+        (grep {length} split m/[\s,]+/, $src{AI_TOOL_ENV} // ''));
+    my %e = map {($_ => $src{$_})} grep {defined $src{$_} and !m/^AI_/} @keep;
+    $e{PATH}   //= '/usr/local/bin:/usr/bin:/bin';
+    $e{TMPDIR} //= '/tmp';
+    $e{LANG}   //= 'C.UTF-8';
+    return %e;
+}
+
+# Run $worker_sub in a forked child (own session, clean environment, stdin
+# from /dev/null, stdout+stderr captured through a pipe). The worker may
+# exec(). The parent multiplexes with select(): it collects the output and
+# watches for a timeout or a user abort, in which case the whole process group
+# of the child is signalled.
+#
+# Returns the output in scalar context, or
+#   ($output, $exit_code, $signal, $why)
+# where $why is '' or the reason the child was stopped early.
+sub fork_run {
+    my ($worker_sub, %o) = @_;
     $worker_sub //= sub {die "need a valid worker\n"};
-    local $SIG{HUP}  = 'IGNORE';
-    local $SIG{INT}  = 'DEFAULT';
-    local $SIG{TERM} = 'DEFAULT';
-    local $SIG{QUIT} = 'DEFAULT';
-    local $SIG{CHLD} = 'IGNORE';
-    local $SIG{ALRM} = 'IGNORE';
+    my $timeout = $o{timeout} // 0;
+    local $SIG{CHLD} = 'DEFAULT';
+    local $SIG{PIPE} = 'IGNORE';
     pipe(my $read_pipe_fh, my $write_pipe_fh)
         or die "Error setting up pipe(): $!\n";
-    my $c_pid = fork() // return "[ERROR] couldn't run the perl program, fork error: $!\n";
-    if($c_pid){
-        close($write_pipe_fh);
-        # here we need to catch the output and watch the process
-        log::info("worker $c_pid forked, getting output");
-        my $buf = "";
-        {
-            local $/;
-            $buf = <$read_pipe_fh>;
-        }
-        log::info("now waitpid for $c_pid");
-        my $r = waitpid($c_pid, 0);
-        if($r == -1){
-            # no such process
-            log::info("no process with $c_pid");
-        } elsif($r == 0){
-            log::info("no processes"); # only WNOHANG, and we didn't enable that yet
-        } elsif($r == $c_pid){
-            my $e_v = $? << 8;
-            my $s_v = $? & 127;
-            if($e_v != 0 or !$s_v){
-                log::error("$c_pid exited: $e_v, signal: $s_v");
-                $buf = "[ERROR] PERL exit: $e_v, signal: $s_v, output: $buf";
-            } else {
-                log::info("$c_pid exited: $e_v, signal: $s_v");
-            }
-        } else {
-            log::info("waitpid undef");
-        }
-        return $buf;
-    }
-
-    # worker sub-process
-    eval {
-        $0 = "aicli:daemon";
-        close($read_pipe_fh);
-        {
-            my %OE = %ENV;
-            %ENV = ();
-            $ENV{PATH}    //= $OE{PATH}    // $::ORIG_ENV{PATH};
-            $ENV{HOME}    //= $OE{HOME}    // $::ORIG_ENV{HOME};
-            $ENV{LOGNAME} //= $OE{LOGNAME} // $::ORIG_ENV{LOGNAME};
-            $ENV{TMPDIR}  //= $OE{TMPDIR}  // "/tmp";
-            $ENV{LANG}    //= $OE{LANG}    // "en_US.UTF-8";
+    # nothing buffered may be inherited (and printed twice) by the child
+    STDOUT->flush();
+    STDERR->flush();
+    my $c_pid = fork() // die "fork error: $!\n";
+    if(!$c_pid){
+        # worker sub-process, never returns
+        my $ok = eval {
+            $0 = "aicli:tool";
+            close($read_pipe_fh);
+            $SIG{$_} = 'DEFAULT' for qw(INT TERM QUIT HUP PIPE CHLD ALRM WINCH);
+            %ENV = tool_env();
             %::ORIG_ENV = ();
+            $_->() for @CHILD_INIT;
+            POSIX::setsid() != -1
+                or (!$!{EPERM} and die "problem making new session/process group: $!\n");
+            open(STDIN,  '<', '/dev/null')
+                or die "Can't read /dev/null: $!\n";
+            open(STDOUT, '>&', $write_pipe_fh)
+                or die "Can't dup STDOUT to PIPE: $!\n";
+            open(STDERR, '>&', \*STDOUT)
+                or die "Can't dup STDERR to STDOUT: $!\n";
+            close($write_pipe_fh);
+            STDOUT->autoflush(1);
+            STDERR->autoflush(1);
+            # dup() sets $! as ioctl() is done in perl, so reset ERRNO
+            $! = 0;
+            &{$worker_sub}();
+            1;
+        };
+        # "exit" would run END blocks and destructors of the parent (terminal
+        # cleanup!), this process must never get there: POSIX _exit
+        if(!$ok){
+            chomp(my $err = $@ // '');
+            print STDERR "$err\n";
+            POSIX::_exit(255);
         }
-
-        POSIX::setsid() != -1
-            or (!$!{EPERM} and die "problem making new session/process group: $!\n");
-        open(STDOUT, '>&', $write_pipe_fh)
-            or die "Can't dup STDOUT to PIPE: $!\n";
-        *STDOUT->autoflush();
-        *STDERR->autoflush();
-        open(STDERR, '>&STDOUT')
-            or die "Can't dup STDERR to STDOUT: $!\n";
-        open(STDIN,  '</dev/null')
-            or die "Can't read /dev/null: $!\n";
-        # dup() sets $! as ioctl() is done in perl, so reset ERRNO
-        $! = 0;
-        &{$worker_sub}();
-    };
-    if($@){
-        # there are cases that we get here, mostly signals and/or die/eval
-        # caches (not the case here), also, "exit" handles END blocks, which
-        # can do nasty stuff. As we really don't want this worker process to
-        # continue, we use POSIX _exit
-        chomp(my $err = $@);
-        print "[ERROR] problem setting up forked process for running the perl program: $err\n";
-        POSIX::_exit(1);
+        POSIX::_exit(0);
     }
-    POSIX::_exit(0);
+
+    close($write_pipe_fh);
+    log::info("worker $c_pid forked, getting output");
+    my $buf = "";
+    my $why = "";
+    my $deadline = $timeout ? Time::HiRes::time() + $timeout : 0;
+    my ($kill_at, $giveup_at) = (0, 0);
+    my $rin = '';
+    vec($rin, fileno($read_pipe_fh), 1) = 1;
+    while(1){
+        my $n = select(my $rout = $rin, undef, undef, 0.2);
+        if(($n // 0) > 0){
+            my $got = sysread($read_pipe_fh, $buf, 65536, length($buf));
+            next if !defined $got and $!{EINTR};
+            last unless $got; # EOF or error
+        }
+        my $now = Time::HiRes::time();
+        if(!$why){
+            if(aborted()){
+                $why = "interrupted by user";
+            } elsif($deadline and $now >= $deadline){
+                $why = "timeout after ${timeout}s";
+            }
+            if($why){
+                log::info("stopping $c_pid: $why");
+                kill('TERM', -$c_pid, $c_pid);
+                $kill_at = $now + 2;
+            }
+        } elsif($kill_at and $now >= $kill_at){
+            kill('KILL', -$c_pid, $c_pid);
+            $kill_at   = 0;
+            $giveup_at = $now + 2;
+        } elsif($giveup_at and $now >= $giveup_at){
+            last; # something still holds the pipe, stop waiting for EOF
+        }
+    }
+    close($read_pipe_fh);
+    kill('KILL', -$c_pid, $c_pid) if $why;
+    my $r = waitpid($c_pid, 0);
+    my ($exit, $sig) = $r == $c_pid ? ($? >> 8, $? & 127) : (0, 0);
+    log::info("$c_pid exited: $exit, signal: $sig".($why?", $why":""));
+    return wantarray ? ($buf, $exit, $sig, $why) : $buf;
 }
 
 1;

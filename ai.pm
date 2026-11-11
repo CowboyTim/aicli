@@ -14,9 +14,34 @@ BEGIN {
 }
 
 # Variables/Handles
-our ($api_key, $AI_ENDPOINT_URL, $SESSION_MODEL, $provider_name, $v1_prefix);
+our ($api_key, $AI_ENDPOINT_URL, $SESSION_MODEL, $provider_name);
 our ($AI_SESSION_DIR, $HISTORY_FILE, $PROMPT_FILE, $STATUS_FILE, $BASE_DIR, $AI_PROMPT_TEMPLATE, $AI_PROMPT_TEMPLATE_FILE, $AI_SESSION, $SESSIONS_DIR, $AI_PROVIDER, $AI_URL);
 our $cmds;
+our @MODELS;
+our $BUSY = 0;      # a completion/tool turn is running: ctrl-C aborts the turn only
+our $MAIN_PID = $$;
+
+our %PROVIDERS = (
+    'cerebras' => {
+        url => 'https://api.cerebras.ai',
+        key_prefix => 'csk-',
+    },
+    'openrouter' => {
+        url => 'https://openrouter.ai/api',
+        key_prefix => 'sk-or-',
+    },
+    'nvidia' => {
+        url => 'https://integrate.api.nvidia.com',
+        key_prefix => 'nvapi-',
+    },
+    'lemonade' => {
+        url   => 'http://localhost:8000',
+        local => 1, # no API key needed
+    },
+);
+
+# tool processes never get to see the API key
+push @utils::CHILD_INIT, sub {$api_key = undef};
 
 sub chat_setup {
     my ($base_dir) = @_;
@@ -50,502 +75,552 @@ sub chat_setup {
         // "$FindBin::Bin/ai/$AI_PROMPT_TEMPLATE";
     $AI_SESSION = $::ORIG_ENV{AI_SESSION}
         // $::ORIG_ENV{AI_PROMPT_DEFAULT};
-    if (!$AI_SESSION) {
-        # Generate a UUID for default session
-        eval {utils::load_cpan("Data::UUID")};
-        if ($@) {
-            log::error("Please install Data::UUID module to generate UUIDs");
-            exit 1;
-        }
-        my $ug = Data::UUID->new();
-        $AI_SESSION = "session-" . $ug->create_str();
+    $AI_SESSION = "session-".new_session_id()
+        unless length($AI_SESSION // '');
+    if(!valid_session_name($AI_SESSION)){
+        log::error("Invalid session name '$AI_SESSION' (use letters, digits, '.', '_' and '-')");
+        exit 1;
     }
-    $AI_SESSION_DIR = "$SESSIONS_DIR/$AI_SESSION";
-    -d $AI_SESSION_DIR
-        or mkdir $AI_SESSION_DIR
-        or die "Failed to create $AI_SESSION_DIR: $!\n";
-
-    $BASE_DIR       = $base_dir;
-
-    # Get model for this session
-    $HISTORY_FILE = "$AI_SESSION_DIR/history";
-    $PROMPT_FILE  = "$AI_SESSION_DIR/prompt";
-    $STATUS_FILE  = "$AI_SESSION_DIR/chat";
-    my $model_file = "$AI_SESSION_DIR/model";
-    if(open(my $mfh, '<', $model_file)){
-        $SESSION_MODEL = <$mfh>;
-        $SESSION_MODEL ||= $::ORIG_ENV{AI_MODEL};
-        $SESSION_MODEL =~ s/^['"]//;
-        $SESSION_MODEL =~ s/['"]$//;
-        $SESSION_MODEL =~ s/\s+$//;
-        $SESSION_MODEL =~ s/^\s+//;
-        chomp $SESSION_MODEL;
-        close $mfh;
-    }
-    $SESSION_MODEL ||= $::ORIG_ENV{AI_MODEL};
-
-    my %PROVIDERS = (
-        'cerebras' => {
-            url => 'https://api.cerebras.ai',
-            key_prefix => 'csk-',
-        },
-        'openrouter' => {
-            url => 'https://openrouter.ai/api',
-            key_prefix => 'sk-or-',
-        },
-        'nvidia' => {
-            url => 'https://integrate.api.nvidia.com',
-            key_prefix => 'nvapi-gkX-',
-        },
-        'lemonade' => {
-            url => 'http://localhost:8000/v1',
-        },
-    );
-
     $provider_name = lc($::ORIG_ENV{AI_PROVIDER} // '');
     $api_key = $::ORIG_ENV{AI_API_KEY};
 
-    # Check for local llama.cpp server
     if ($::ORIG_ENV{AI_LOCAL_SERVER}) {
+        # any OpenAI compatible server, e.g. llama.cpp or lemonade
         $AI_ENDPOINT_URL = $::ORIG_ENV{AI_LOCAL_SERVER};
-        $AI_PROVIDER = $provider_name;
+        $AI_PROVIDER = $provider_name || 'local';
     } else {
-        if (!$api_key) {
-            log::error("Please set AI_API_KEY environment variable or set $BASE_DIR/config");
-            exit 1;
-        }
-        # Detect provider by key prefix or use configured provider
+        # Detect provider by key prefix
         my $detected_provider;
-        if (defined $api_key && length($api_key)) {
-            for my $name (keys %PROVIDERS) {
+        if (length($api_key // '')) {
+            for my $name (sort keys %PROVIDERS) {
                 next unless $PROVIDERS{$name}{key_prefix};
-                if ($api_key =~ m/^$PROVIDERS{$name}{key_prefix}/) {
+                if (index($api_key, $PROVIDERS{$name}{key_prefix}) == 0) {
                     $detected_provider = $name;
                     last;
                 }
             }
         }
 
-        # Use detected provider or fall back to configured provider
+        # The configured provider wins, else what the key tells
         if ($provider_name and exists $PROVIDERS{$provider_name}) {
-            $AI_ENDPOINT_URL = $PROVIDERS{$provider_name}{url};
             $AI_PROVIDER = $provider_name;
         } elsif ($detected_provider) {
-            $AI_ENDPOINT_URL = $PROVIDERS{$detected_provider}{url};
             $AI_PROVIDER = $detected_provider;
+        } elsif (!length($api_key // '')) {
+            log::error("Please set AI_API_KEY environment variable or set $BASE_DIR/config");
+            exit 1;
         } else {
             log::error("Unable to detect provider from API key. Set AI_PROVIDER environment variable");
-            log::error("Supported providers: ".join(', ', keys %PROVIDERS));
+            log::error("Supported providers: ".join(', ', sort keys %PROVIDERS).", or set AI_LOCAL_SERVER");
             exit 1;
         }
-        if ($provider_name) {
-            $v1_prefix = $provider_name eq 'anthropic' ? '' : 'v1/';
-        } else {
-            $v1_prefix = 'v1/';
+        if (!length($api_key // '') and !$PROVIDERS{$AI_PROVIDER}{local}) {
+            log::error("Please set AI_API_KEY environment variable or set $BASE_DIR/config");
+            exit 1;
         }
+        $AI_ENDPOINT_URL = $PROVIDERS{$AI_PROVIDER}{url};
     }
 
-    # Normalize URL - ensure it doesn't end with / for some endpoints
+    # Normalize URL: no trailing / and no /v1, that is added per endpoint
     $AI_ENDPOINT_URL =~ s|/+$||;
+    $AI_ENDPOINT_URL =~ s|/v1$||;
 
     # AI_RAW point for e.g. non-jinja
     $AI_URL = "$AI_ENDPOINT_URL/v1/chat/completions";
     $AI_URL = "$AI_ENDPOINT_URL/v1/completions" if $::ORIG_ENV{AI_RAW};
 
     init_session($AI_SESSION);
+    use_session($AI_SESSION);
     return;
 }
 
-our $t_rx;
+sub new_session_id {
+    my $id = eval {
+        utils::load_cpan("Data::UUID");
+        Data::UUID->new()->create_str();
+    };
+    return $id if $id;
+    # no Data::UUID: time + pid + random is unique enough for a directory name
+    return sprintf("%08X-%04X-%04X-%04X-%06X%06X", time(), $$ & 0xffff,
+        map {int(rand($_))} 0x10000, 0x10000, 0x1000000, 0x1000000);
+}
+
+sub valid_session_name {
+    my ($name) = @_;
+    return 0 unless defined $name;
+    return 0 unless $name =~ m/^[A-Za-z0-9_][A-Za-z0-9_.\-]*$/;
+    return 1;
+}
+
+# point all per-session globals to a session
+sub use_session {
+    my ($session) = @_;
+    $AI_SESSION     = $session;
+    $AI_SESSION_DIR = "$SESSIONS_DIR/$AI_SESSION";
+    $HISTORY_FILE   = "$AI_SESSION_DIR/history";
+    $PROMPT_FILE    = "$AI_SESSION_DIR/prompt";
+    $STATUS_FILE    = "$AI_SESSION_DIR/chat";
+    $SESSION_MODEL  = read_session_model() || $::ORIG_ENV{AI_MODEL};
+    return;
+}
+
+sub clean_model_name {
+    my ($m) = @_;
+    $m //= '';
+    $m =~ s/^\s+//;
+    $m =~ s/\s+$//;
+    $m =~ s/^['"]//;
+    $m =~ s/['"]$//;
+    return $m;
+}
+
+sub read_session_model {
+    open(my $mfh, '<', "$AI_SESSION_DIR/model")
+        or return '';
+    my $m = <$mfh>;
+    close $mfh;
+    return clean_model_name($m);
+}
+
+sub slurp {
+    my ($file) = @_;
+    open(my $fh, '<', $file)
+        or return;
+    local $/;
+    my $data = <$fh>;
+    close($fh);
+    return $data // '';
+}
+
+sub spew {
+    my ($file, $data) = @_;
+    my $tmp = "$file.tmp";
+    open(my $fh, '>', $tmp)
+        or die "Failed to write to $tmp: $!\n";
+    print {$fh} $data;
+    close($fh)
+        or die "Failed to close $tmp: $!\n";
+    rename($tmp, $file)
+        or die "Failed to rename $tmp to $file: $!\n";
+    return;
+}
+
+# raw bytes (terminal, files, tool output) -> text, as JSON wants it
+sub to_text {
+    my ($s) = @_;
+    $s //= '';
+    utf8::decode($s) unless utf8::is_utf8($s);
+    return $s;
+}
+
+# text -> bytes for the terminal, files and tools
+sub to_bytes {
+    my ($s) = @_;
+    $s //= '';
+    utf8::encode($s) if utf8::is_utf8($s);
+    return $s;
+}
+
+#------------------------------------------------------------------------------
+# chat state: one JSON message per line in the session "chat" file
+
+sub load_messages {
+    my ($file) = @_;
+    $file //= $STATUS_FILE;
+    open(my $fh, '<', $file)
+        or die "Failed to read $file: $!\n";
+    my @msgs = map {JSON::XS::decode_json($_)} grep {m/\S/} <$fh>;
+    close $fh;
+    return @msgs;
+}
+
+sub append_messages {
+    my (@msgs) = @_;
+    return unless @msgs;
+    open(my $fh, '>>', $STATUS_FILE)
+        or die "Failed to write to $STATUS_FILE: $!\n";
+    print {$fh} $::JSON->encode($_)."\n" for @msgs;
+    close $fh
+        or die "Failed to close $STATUS_FILE: $!\n";
+    return;
+}
+
+sub write_messages {
+    my (@msgs) = @_;
+    spew($STATUS_FILE, join('', map {$::JSON->encode($_)."\n"} @msgs));
+    return;
+}
+
+#------------------------------------------------------------------------------
+# LLM response handling: find the tool calls, run them, return the results
+
+sub strip_thinking {
+    my ($msg) = @_;
+    $msg //= '';
+    $msg =~ s/<think>.*?<\/think>[ \t]*\n?//sg;
+    return $msg;
+}
+
+# Parse one tool call at pos($$msg_r), which is just after the "///TOOL_hex"
+# header line. The arguments are each closed by their own sentinel line, the
+# sentinels come from the header, or from the tool definition when the model
+# messed up the header.
+sub parse_tool_args {
+    my ($msg_r, $t, $declared) = @_;
+    my @canonical = @{$t->{sentinels}};
+    my @declared  = grep {length} split m/\+/, $declared // '';
+    my $start = pos($$msg_r);
+    SENTINELS:
+    foreach my $sentinels (@declared == @canonical ? (\@declared, \@canonical) : (\@canonical)){
+        pos($$msg_r) = $start;
+        my @t_args;
+        foreach my $s (@$sentinels){
+            $$msg_r =~ m/\G(.*?)^\Q$s\E(?:\[\d*\])?[ \t]*(?:\n|\z)/msgc
+                or next SENTINELS;
+            my $arg = $1;
+            $arg =~ s/\n\z//;
+            push @t_args, $arg;
+        }
+        # the closing tag is nice to have
+        $$msg_r =~ m/\G\s*\Q$t->{tag}\E[ \t]*(?:\n|\z)/gc;
+        return \@t_args;
+    }
+    pos($$msg_r) = $start;
+    return;
+}
+
 sub handle_llm_response {
     my ($resp, $printer_sub) = @_;
     return (0, 0, []) unless defined $resp and ref($resp) eq 'SCALAR' and length($$resp // "");
-    log::info("handling>>".(${$resp //= \""})."<<");
+    log::info("handling>>$$resp<<");
     $printer_sub //= sub {
         my ($r) = @_;
         print $r;
     };
 
-    my $pos = 0;
     my $newturns = 0;
-
     my @rt;
-    my $msg_no_think = "";
-    if($$resp =~ s/^\n<think>.*?^<\/think>\n$//msgr){
-        $$resp =~ s/^\n<think>.*?^<\/think>\n$//msg;
-        $msg_no_think = $$resp;
-    }
-    Encode::_utf8_off($msg_no_think);
-    log::info("MSG THINK STRIPPED>>$msg_no_think<<");
-    $t_rx //= tools::rx();
-    log::info("TOOL RX: $t_rx");
-    while($msg_no_think =~ m/$t_rx/msgo){
-        my $tool_entry = $1;
-        log::info("TOOL MATCH: $tool_entry");
-        my @t_args;
-        @t_args = map {substr($msg_no_think, $-[$_], $+[$_] - $-[$_])} grep {defined $-[$_] and $+[$_]} 2 .. @--1 if @- >= 3;
-        $tool_entry =~ m{^///((.*?)_[a-fA-F0-9]+)}gms;
-        my $tool   = $1;
-        my $tool_k = lc $2;
-        log::info("TOOL:$tool, K:$tool_k, A:".join(' ', @t_args));
-        next unless exists $tools::TOOLS->{$tool_k};
-        substr($msg_no_think, 0, pos($msg_no_think)) = '';
+    # tools work with bytes, and never run from within a thinking block
+    my $msg = to_bytes(strip_thinking($$resp));
+    log::info("MSG THINK STRIPPED>>$msg<<");
+    my $t_rx = tools::rx();
+    while($msg =~ m/$t_rx/mg){
+        my ($tool, $declared) = ($1, $2);
+        my $tool_k = lc($tool =~ s/_[0-9a-fA-F]+$//r);
+        my $t = $tools::TOOLS->{$tool_k}
+            or next;
+        my $t_args = parse_tool_args(\$msg, $t, $declared);
+        log::info("TOOL:$tool, K:$tool_k, A:".join(' ', @{$t_args // ['<malformed>']}));
 
         &{$printer_sub}("${colors::yellow_color1}\[TOOL $tool\(...))\]${colors::reset_color}\n");
-        my ($result, $had_error) = execute_tool($tool_k, $tool, \@t_args);
+        my ($result, $had_error);
+        if(utils::aborted()){
+            ($result, $had_error) = ("", "[ERROR] not executed, interrupted by user");
+        } elsif(!$t_args){
+            ($result, $had_error) = ("", "[ERROR] malformed tool call for '$tool', nothing was executed. Expected syntax:\n$t->{syntax}");
+        } else {
+            ($result, $had_error) = execute_tool($tool_k, $tool, $t_args);
+        }
         my $tool_response = "";
         if(!$had_error){
             $tool_response = "[$tool RESULT_d170\n$result\nRESULT_d170]";
         } else {
-            $result //= "";
             $tool_response = "[$tool ERROR_9a78\n$had_error\nERROR_9a78]";
         }
         &{$printer_sub}("${colors::green_color}$tool_response${colors::reset_color}\n");
-        push @rt, {role => 'user', content => $tool_response};
-        $pos = pos($msg_no_think);  # Update position for next iteration
+        push @rt, {role => 'user', content => to_text($tool_response)};
         $newturns = 1;
     }
-    log::info("MSG>>$msg_no_think<< POS: ".(pos($msg_no_think)//0));
 
-    return $newturns, $pos, \@rt;
-}
-
-our $TOOLS = [];
-sub chat_completion {
-    my ($input) = @_;
-    log::info("User input: $input");
-
-    # Get current messages, add user message
-    open(my $fh_read, '<', $STATUS_FILE)
-        or die "Failed to read $STATUS_FILE: $!\n";
-    my @jstr = do {map {chomp; JSON::XS::decode_json($_)} <$fh_read>};
-    close $fh_read;
-    push @jstr, {
-        role    => 'user',
-        content => $input,
-    };
-    my $req = do {
-        no strict 'refs';
-        my $w = $::ORIG_ENV{AI_RAW}?"raw":"req";
-        &{"provider::${AI_PROVIDER}::${w}"}(@jstr)
-    };
-    @jstr = ();
-    $req = $::JSON->encode($req);
-    log::info($req);
-    log::info("Requesting completion from AI API $AI_ENDPOINT_URL with ".($api_key//'<no api key>'));
-
-    CHAT_LOOP:
-    return unless $::LOOP;
-    # Variable to hold the assembled assistant message
-    my $newturns = 0;
-    my $thinking = 0;
-    my $was_thinking = 0;
-    my $resp = '';
-    my $rbuf = '';
-    utils::http("post", $AI_URL, $req, $api_key, sub {
-        my ($ch, $raw) = @_;
-        $raw //= $ch; # WWW::Curl::Easy: <data>, <user_ref>, Net::Curl::Easy: <handle>, <data>
-        log::info("GOT STREAM ".do {local $_=$raw;chomp;chomp;$_});
-        my $sz = length($raw);
-        $rbuf .= $raw;
-        $raw = undef;
-
-        *STDOUT->autoflush();
-        *STDERR->autoflush();
-        local $| = 1;
-        # Parse Server-Sent Events (SSE) stream
-        while($rbuf =~ s/(.*?)\n\n//ms){
-            return 0 unless $::LOOP;
-            my $event = $1 // "";
-            next unless $event =~ s/^data:\s*//;
-            if($event eq '[DONE]'){
-                print "\n";
-                last
-            }
-            eval {
-                my $decoded = JSON::XS->new->utf8->decode($event);
-                my $msg_entry = $decoded->{choices}[0] // {};
-                my $reasoning_content = $msg_entry->{delta}{reasoning_content};
-                if(length($reasoning_content//"")){
-                    Encode::_utf8_off($reasoning_content);
-                    print "${colors::yellow_color1}$reasoning_content${colors::reset_color}";
-                }
-                my $delta = $msg_entry->{delta}{content}
-                         // $msg_entry->{message}{content}
-                         // $msg_entry->{text};
-                if(length($delta//"")){
-                    log::info("STREAM $delta");
-                    Encode::_utf8_off($delta);
-                    $resp .= $delta;
-                    if($resp =~ m/(<think>).*?(?:(<\/think>)|$)/s){
-                        $thinking = ($1 and !$2) ? 1 : 0;
-                    }
-                    if($was_thinking){
-                        if($thinking){
-                            print ${colors::yellow_color1}.$delta.${colors::reset_color};
-                        } else {
-                            print ${colors::yellow_color1}.$delta.${colors::reset_color};
-                            $was_thinking = 0;
-                        }
-                    } else {
-                        if($thinking){
-                            print ${colors::yellow_color1}.$delta.${colors::reset_color};
-                            $was_thinking = 1;
-                        } else {
-                            print ${colors::green_color}.$delta.${colors::reset_color};
-                            $was_thinking = 0;
-                        }
-                    }
-                }
-            };
-            if($@){
-                log::info("Failed to decode SSE event: $event, error: $@");
-                last;
-            }
-        }
-        return $sz;
-    }) // do {
-        log::info("GOT ERROR RESPONSE REMAINING >>$rbuf<<");
-        my $decoded = eval {length($rbuf) and $_ = JSON::XS->new->utf8->decode($rbuf) and $rbuf = ""; $_};
-        my $emsg = "ERROR: ".($@//"");
-        if($decoded and $decoded->{error}){
-            $emsg .= "$decoded->{error}{code}: $decoded->{error}{message}";
-            if($decoded->{error}{metadata}){
-                $emsg .= ", limit: $decoded->{error}{metadata}{headers}{'X-RateLimit-Limit'}";
-                $emsg .= ", remaining: $decoded->{error}{metadata}{headers}{'X-RateLimit-Remaining'}";
-                $emsg .= ", reset: ".POSIX::strftime("%F %T", gmtime($decoded->{error}{metadata}{headers}{'X-RateLimit-Reset'} =~ s/^(.*)?...$/$1/gr));
-            }
-        }
-        log::error(${colors::red_color}.$emsg.${colors::reset_color});
-        return;
-    };
-
-    log::info("GOT RESPONSE REMAINING >>$rbuf<<");
-    if(length($rbuf)){
-        eval {
-            my $decoded = JSON::XS->new->utf8->decode($rbuf);
-            log::error(${colors::red_color}.($decoded->{error}//"ERROR").${colors::reset_color});
-        };
-        if($@){
-            log::error(${colors::red_color}.$rbuf.${colors::reset_color});
-        }
-        $rbuf = undef;
-    }
-
-    # save in history
-    push @jstr, {role => 'assistant', content => $resp};
-
-    # handle tools
-    my ($t, $p, $r) = handle_llm_response(\$resp);
-    $newturns ||= $t;
-    push @jstr, @{$r//[]};
-
-    # save updated messages to status file
-    open(my $sfh_final, '>>', $STATUS_FILE)
-         or die "Failed to write to $STATUS_FILE: $!\n";
-    print {$sfh_final} $::JSON->encode($_)."\n" for @jstr;
-    close $sfh_final
-         or die "Failed to close $STATUS_FILE: $!\n";
-
-    goto CHAT_LOOP if $newturns;
-    return;
+    return $newturns, ($newturns ? undef : 0), \@rt;
 }
 
 sub execute_tool {
     my ($k, $tool, $t_args) = @_;
-    return "", "[ERROR] Unknown tool '$tool'" unless exists $tools::TOOLS->{$k};
-    my $tn = lc("tools::$tool");
-    my $ret =
-    eval {
-        # TODO: use Safe Eval AND fork() ?
-        no strict 'refs';
-        return &{$tn}($t_args);
-    };
+    my $t  = $tools::TOOLS->{$k};
+    my $fn = $t && tools->can(lc $t->{tag});
+    return "", "[ERROR] Unknown tool '$tool'" unless $fn;
+    my $ret = eval {&{$fn}($t_args)};
     if($@){
         chomp(my $err = $@);
-        return "", "[ERROR] problem running tool '$tool': $err";
+        return "", truncate_output("[ERROR] problem running tool '$tool': $err");
     }
-    return $ret, undef;
+    return truncate_output($ret // ""), undef;
 }
 
-sub list_models {
-    my $model_path = $provider_name eq 'anthropic' ? 'models' : 'v1/chat/models';
-    my $response = http("get", $model_path);
-    if (!$response) {
-        log::error("Failed to fetch models");
-        return;
-    }
-    my $resp = JSON::XS::decode_json($response);
+# keep the context window alive: cut the middle out of huge tool outputs
+sub truncate_output {
+    my ($out) = @_;
+    my $max = $::ORIG_ENV{AI_TOOL_MAX_OUTPUT} // 65536;
+    return $out if !$max or length($out) <= $max;
+    my $half = int($max / 2);
+    my $cut  = length($out) - 2 * $half;
+    return substr($out, 0, $half)."\n[... $cut bytes truncated ...]\n".substr($out, -$half);
+}
 
-    # Handle different response formats
-    my @models;
-    if (ref($resp) eq 'HASH' and exists $resp->{data}) {
-        @models = @{$resp->{data}};
-    } elsif (ref($resp) eq 'ARRAY') {
-        @models = @$resp;
+#------------------------------------------------------------------------------
+# streaming: SSE parsing, thinking/answer separation
+
+# Returns a stream state: feed it raw HTTP chunks with $st->{feed}->($raw), it
+# calls $emit->($kind, $text) with $kind 'think' or 'text' for whatever needs
+# showing, and collects the answer in $st->{content}.
+sub new_stream {
+    my ($emit) = @_;
+    my $st = {
+        rbuf      => '', # unparsed raw bytes
+        content   => '', # the assistant answer, <think> blocks included
+        reasoning => '', # reasoning sent out-of-band by the API
+        pending   => '', # possible start of a <think> tag, not shown yet
+        in_think  => 0,
+        done      => 0,
+        events    => 0,
+        error     => undef,
+        usage     => undef,
+    };
+    my $content = sub {
+        my ($delta) = @_;
+        $st->{content} .= $delta;
+        $st->{pending} .= $delta;
+        while(length($st->{pending})){
+            my $tag = $st->{in_think} ? '</think>' : '<think>';
+            my $i = index($st->{pending}, $tag);
+            if($i >= 0){
+                &{$emit}($st->{in_think} ? 'think' : 'text', substr($st->{pending}, 0, $i));
+                substr($st->{pending}, 0, $i + length($tag)) = '';
+                $st->{in_think} = !$st->{in_think};
+                next;
+            }
+            # a tag can be split over deltas: hold back what may be its start
+            my $hold = 0;
+            for my $l (reverse 1 .. length($tag) - 1){
+                next if $l > length($st->{pending});
+                if(substr($st->{pending}, -$l) eq substr($tag, 0, $l)){
+                    $hold = $l;
+                    last;
+                }
+            }
+            my $show = substr($st->{pending}, 0, length($st->{pending}) - $hold);
+            &{$emit}($st->{in_think} ? 'think' : 'text', $show);
+            $st->{pending} = $hold ? substr($st->{pending}, -$hold) : '';
+            last;
+        }
+    };
+    $st->{event} = sub {
+        my ($decoded) = @_;
+        return unless ref($decoded) eq 'HASH';
+        $st->{events}++;
+        $st->{usage} = $decoded->{usage} if ref($decoded->{usage}) eq 'HASH';
+        if(my $e = $decoded->{error}){
+            $st->{error} = $decoded;
+            return;
+        }
+        my $msg_entry = ref($decoded->{choices}) eq 'ARRAY' ? ($decoded->{choices}[0] // {}) : {};
+        my $d = $msg_entry->{delta} // $msg_entry->{message} // {};
+        my $reasoning = $d->{reasoning_content} // $d->{reasoning};
+        if(defined $reasoning and !ref($reasoning) and length($reasoning)){
+            $st->{reasoning} .= $reasoning;
+            &{$emit}('think', $reasoning);
+        }
+        my $delta = $d->{content} // $msg_entry->{text};
+        if(defined $delta and !ref($delta) and length($delta)){
+            &{$content}($delta);
+        }
+    };
+    $st->{feed} = sub {
+        my ($raw) = @_;
+        $st->{rbuf} .= $raw;
+        $st->{rbuf} =~ s/\r\n/\n/g;
+        # Server-Sent Events: blocks separated by an empty line
+        while($st->{rbuf} =~ s/\A(.*?)\n\n//s){
+            my $data = join("\n", map {m/^data:[ \t]?(.*)$/ ? $1 : ()} split m/\n/, $1);
+            next unless length($data);
+            if($data =~ m/^\[DONE\]\s*$/){
+                $st->{done} = 1;
+                next;
+            }
+            my $decoded = eval {JSON::XS->new->utf8->decode($data)};
+            if($@){
+                log::info("Failed to decode SSE event: $data, error: $@");
+                next;
+            }
+            &{$st->{event}}($decoded);
+        }
+    };
+    $st->{finish} = sub {
+        # what is left is a non streamed (error) reply, or nothing
+        if($st->{rbuf} =~ m/\S/){
+            my $decoded = eval {JSON::XS->new->utf8->decode($st->{rbuf})};
+            if(ref($decoded) eq 'HASH'){
+                $st->{rbuf} = '';
+                &{$st->{event}}($decoded);
+            }
+        }
+        if(length($st->{pending})){
+            &{$emit}($st->{in_think} ? 'think' : 'text', $st->{pending});
+            $st->{pending} = '';
+        }
+    };
+    return $st;
+}
+
+# Shows thinking and answer in their own color while they stream in
+sub new_printer {
+    my ($out) = @_;
+    $out //= sub {print $_[0]};
+    my $show_thinking = ($::ORIG_ENV{AI_SHOW_THINKING} // 1) ? 1 : 0;
+    my ($last, $ends_nl) = ('', 1);
+    my $p = {};
+    $p->{emit} = sub {
+        my ($kind, $text) = @_;
+        return unless length($text // '');
+        return if $kind eq 'think' and !$show_thinking;
+        if($last ne $kind){
+            # thinking and answer each start on a line of their own, without
+            # the empty lines models put in between
+            $text =~ s/\A\n+//;
+            return unless length($text);
+            &{$out}("\n") unless $ends_nl;
+        }
+        my $color = $kind eq 'think' ? $colors::yellow_color1 : $colors::green_color;
+        &{$out}($color.to_bytes($text).$colors::reset_color);
+        $last    = $kind;
+        $ends_nl = $text =~ m/\n\z/ ? 1 : 0;
+    };
+    $p->{finish} = sub {
+        &{$out}("\n") unless $ends_nl;
+        ($last, $ends_nl) = ('', 1);
+    };
+    return $p;
+}
+
+sub format_api_error {
+    my ($decoded, $fallback) = @_;
+    my $emsg = "ERROR: ";
+    my $e = ref($decoded) eq 'HASH' ? $decoded->{error} : undef;
+    if(ref($e) eq 'HASH'){
+        $emsg .= join(": ", grep {defined and length} $e->{code}, $e->{message} // $e->{type});
+        if(ref($e->{metadata}) eq 'HASH' and ref($e->{metadata}{headers}) eq 'HASH'){
+            my $h = $e->{metadata}{headers};
+            $emsg .= ", limit: $h->{'X-RateLimit-Limit'}"
+                if defined $h->{'X-RateLimit-Limit'};
+            $emsg .= ", remaining: $h->{'X-RateLimit-Remaining'}"
+                if defined $h->{'X-RateLimit-Remaining'};
+            $emsg .= ", reset: ".POSIX::strftime("%F %T", gmtime(($h->{'X-RateLimit-Reset'} // 0) =~ s/^(.*)?...$/$1/gr))
+                if defined $h->{'X-RateLimit-Reset'};
+        }
+    } elsif(defined $e and length($e)){
+        $emsg .= ref($e) ? $::JSON->encode($e) : $e;
     } else {
-        log::error("Failed to parse models response");
-        return;
+        $emsg .= $fallback // "unknown error";
     }
+    return $emsg;
+}
 
-    foreach my $model (@models) {
-        my $id = ref($model) eq 'HASH' ? $model->{id} : $model;
-        print "$id\n";
+# One request to the LLM with the given messages, streamed to the terminal.
+# Returns ($content, $error): $content is what the assistant said so far (can
+# be partial on error), $error is undef on success.
+sub request_completion {
+    my ($msgs) = @_;
+    my $req = do {
+        my $w   = $::ORIG_ENV{AI_RAW} ? "raw" : "req";
+        my $fn  = "provider::$AI_PROVIDER"->can($w) // provider->can($w);
+        &{$fn}(@$msgs);
+    };
+    return ('', "ERROR: no raw prompt format known for model '".($SESSION_MODEL // '')."' (AI_RAW)")
+        unless $req;
+    $req = $::JSON->encode($req);
+    log::info($req);
+    log::info("Requesting completion from AI API $AI_URL with ".(length($api_key // '') ? 'an' : 'no')." api key");
+
+    STDOUT->autoflush(1);
+    STDERR->autoflush(1);
+    my $printer = new_printer();
+    my $st = new_stream($printer->{emit});
+    my $r = utils::http("post", $AI_URL, $req, $api_key, sub {
+        my ($ch, $raw) = @_;
+        $raw //= $ch; # WWW::Curl::Easy: <data>, <user_ref>, Net::Curl::Easy: <handle>, <data>
+        log::info("GOT STREAM ".do {local $_ = $raw; chomp; chomp; $_});
+        return 0 if utils::aborted(); # stops the transfer
+        &{$st->{feed}}($raw);
+        return length($raw);
+    });
+    &{$st->{finish}}();
+    &{$printer->{finish}}();
+
+    return ($st->{content}, "interrupted") if utils::aborted();
+    if($st->{error}){
+        return ($st->{content}, format_api_error($st->{error}));
+    }
+    if(!defined $r){
+        log::info("GOT ERROR RESPONSE REMAINING >>$st->{rbuf}<<");
+        my $fallback = join(": ", grep {length} $utils::http_error // '', $st->{rbuf} =~ s/\s+\z//r);
+        return ($st->{content}, format_api_error(undef, $fallback));
+    }
+    if(!$st->{events} and $st->{rbuf} =~ m/\S/){
+        return ($st->{content}, "ERROR: unexpected reply: $st->{rbuf}");
+    }
+    return ($st->{content}, undef);
+}
+
+# The agent loop: send the conversation, show the answer, run the tools the
+# model asked for, send the results back, until the model has nothing left to
+# run. Every step is appended to the chat file, each request is built from it.
+sub chat_completion {
+    my ($input) = @_;
+    log::info("User input: $input");
+    append_messages({role => 'user', content => to_text($input)});
+
+    my $max_turns = $::ORIG_ENV{AI_MAX_TURNS} // 50;
+    my $turn = 0;
+    while(1){
+        last if utils::aborted();
+        if($max_turns and ++$turn > $max_turns){
+            log::error("${colors::red_color}stopped after $max_turns tool turns (AI_MAX_TURNS)${colors::reset_color}");
+            last;
+        }
+        my @msgs = load_messages();
+        my ($resp, $err) = request_completion(\@msgs);
+
+        # what is kept: the answer without the thinking
+        my $answer = strip_thinking($resp);
+        $answer =~ s/\A\s+//;
+        append_messages({role => 'assistant', content => $answer})
+            if length($answer);
+        if(defined $err){
+            if(utils::aborted()){
+                print "${colors::red_color}[interrupted]${colors::reset_color}\n";
+            } else {
+                log::error(${colors::red_color}.$err.${colors::reset_color});
+            }
+            last;
+        }
+        last unless length($answer);
+
+        # handle tools
+        my ($newturns, undef, $r) = handle_llm_response(\$answer);
+        append_messages(@{$r // []});
+        last unless $newturns;
     }
     return;
 }
 
-sub setup_commands {
-    $cmds //= {
-    '/exit'  => \&exitshell,
-    '/quit'  => \&exitshell,
-    '/clear' => sub {
-        open(my $fh, '>', $STATUS_FILE)
-            or die "Failed to write to $STATUS_FILE: $!\n";
-        print {$fh} $::JSON->encode({ role => 'system', content => '' })."\n";
-        close $fh
-            or die "Failed to close $STATUS_FILE: $!\n";
-        return 0;
-    },
-    '/history' => sub {
-        print do {open(my $_hfh, '<', $HISTORY_FILE) or die "Failed to read $HISTORY_FILE: $!\n"; local $/; <$_hfh>};
-        return 0;
-    },
-    '/debug' => sub {
-        $::DEBUG = 1;
-        return 0;
-    },
-    '/nodebug' => sub {
-        $::DEBUG = 0;
-        return 0;
-    },
-    '/tools' => sub {
-        print "Available tools:\n";
-        foreach my $name (sort keys %$tools::TOOLS) {
-            my $info = $tools::TOOLS->{$name};
-            print "  /$name: " . $info->{description} . "\n";
-            if (my $usage = $info->{usage}) {
-                print "    Usage: $usage\n";
-            }
-        }
-        return 0;
-    },
-    '/system' => sub {
-        my ($line) = @_;
-        $line =~ s|^/system||;
-        open(my $sfh, '>>', $STATUS_FILE)
-            or die "Failed to write to $STATUS_FILE: $!\n";
-        print {$sfh} $::JSON->encode({ role => 'system', content => $line })."\n";
-        close $sfh
-            or die "Failed to close $STATUS_FILE: $!\n";
-        return 0;
-    },
-    '/files' => sub {
-        my ($line) = @_;
-        my $dir_rx = $line;
-        $dir_rx =~ s|^/files||;
-        $dir_rx =~ s| +$||;
-        $dir_rx =~ s|^\s+||;
-        $dir_rx = qr/$dir_rx/;
-        my $dir = Cwd::cwd();
-        if(opendir(my $dh, $dir)){
-            my $ignore_list = do {
-                local $/;
-                open(my $_ifh, '<', '.aiignore') or return '';
-                <$_ifh>;
-            };
-            while (my $file = readdir($dh)) {
-                next if $file =~ m/^\./;
-                next unless -f $file;
-                next if $file !~ m/$dir_rx/;
-                next if grep {$file eq $_} map {glob($_)} split m/\n/, $ignore_list;
-                my $data = do {
-                    my $_ffh;
-                    local $/;
-                    open($_ffh, '<', $file) and <$_ffh>;
-                };
-                next unless length($data//"");
-                $data = '```'."\n".$data."\n".'```'."\n";
-                open(my $sfh, '>>', $STATUS_FILE)
-                    or next;
-                print {$sfh} $::JSON->encode({role => 'user', content => $data})."\n";
-                close $sfh;
-                print "${colors::green_color}✓${colors::reset_color} added $file to chat\n";
-            }
-            closedir $dh;
-        }
-        return 0;
-    },
-    '/chdir' => sub {
-        my ($line) = @_;
-        $line =~ s|^/chdir||;
-        $line =~ s| +$||;
-        $line =~ s|^\s+||;
-        if(chdir($line)){
-            return 0;
-        } else {
-            print "Failed to change directory to $line: $!\n";
-            return 0;
-        }
-    },
-    '/ls' => sub {
-        my $dir = Cwd::cwd();
-        if(opendir(my $dh, $dir)){
-            while (my $file = readdir($dh)) {
-                next if $file =~ m/^\./;
-                print "$file\n";
-            }
-            closedir $dh;
-        }
-        return 0;
-    },
-    '/pwd' => sub {
-        print Cwd::cwd()."\n";
-        return 0;
-    },
-    '/session' => {
-        'list'   => sub { 0 },
-        'create' => sub { 0 },
-        'delete' => {},
-        'rename' => {},
-        'switch' => {},
-    },
-    '/model'   => {},
-    };
+#------------------------------------------------------------------------------
+# sessions, models, prompts
 
-    # add models
-    my $response = eval {utils::http("get", $::ORIG_ENV{AI_LOCAL_SERVER}?"$AI_ENDPOINT_URL/v1/models":"$AI_ENDPOINT_URL/v1/chat/models")};
-    my $resp;
-    if ($response) {
-        $resp = eval {JSON::XS::decode_json($response)};
+# system prompt of a session: its prompt file, plus what the template generates
+# (the tools section for e.g. "coder")
+sub system_prompt {
+    my ($session_dir) = @_;
+    $session_dir //= $AI_SESSION_DIR;
+    my $prompt   = slurp("$session_dir/prompt") // '';
+    my $template = slurp("$session_dir/template") // $AI_PROMPT_TEMPLATE // 'default';
+    $template =~ s/\s+//g;
+    if($template =~ m/^\w+$/ and UNIVERSAL::can("prompt::${template}", "prompt")){
+        log::info("PROMPT check for 'prompt::${template}'");
+        no strict "refs";
+        $prompt .= &{"prompt::${template}::prompt"}() // "";
     }
-    my @models;
-    if (defined $resp and ref($resp) eq 'HASH' and exists $resp->{data}) {
-        @models = @{$resp->{data}};
-    } elsif (defined $resp and ref($resp) eq 'ARRAY') {
-        push @models, $_ for @$resp;
-    }
-    $cmds->{'/model'} = {map {$_->{id}, sub {switch_model($_->{id})}} @models};
-
-    # add prompts
-    my @all_prompts = glob("$FindBin::Bin/ai/*");
-    $cmds->{'/prompt'} = {map {($_ =~ s/.*\///r, sub {switch_prompt($_)})} @all_prompts};
-
-    # add available sessions
-    refresh_session_completions();
-}
-
-sub refresh_session_completions {
-    my $available_sessions = get_sessions();
-    my $session_cmds = {
-        'list'   => sub { 0 },
-        'create' => sub { 0 },
-        'delete' => {map {($_, sub { 0 })} @$available_sessions},
-        'rename' => {map {($_, sub { 0 })} @$available_sessions},
-        'switch' => {map {($_, sub {switch_session($_)})} @$available_sessions},
-        map {($_, sub {switch_session($_)})} @$available_sessions,
-    };
-    $cmds->{'/session'} = $session_cmds;
+    return $prompt;
 }
 
 sub init_session {
@@ -555,42 +630,29 @@ sub init_session {
 
     my $p_file = "$session_dir/prompt";
     my $s_file = "$session_dir/chat";
+    my $clear  = $::ORIG_ENV{AI_CLEAR} // 0;
 
-    log::info("checking setup: AI_CLEAR=".($ENV{AI_CLEAR}//0).", $p_file, $s_file, $AI_PROMPT_TEMPLATE_FILE");
-    if(!-s $p_file or ($::ORIG_ENV{AI_CLEAR}//0)){
-        my $prompt = "";
-        if(open(my $fh, '<', $AI_PROMPT_TEMPLATE_FILE)){
+    log::info("checking setup: AI_CLEAR=$clear, $p_file, $s_file, $AI_PROMPT_TEMPLATE_FILE");
+    if(!-s $p_file or $clear){
+        my $prompt = slurp($AI_PROMPT_TEMPLATE_FILE);
+        if(defined $prompt){
             log::info("using/updating $AI_PROMPT_TEMPLATE_FILE for prompt");
-            local $/;
-            $prompt = <$fh>;
-            close($fh);
         } else {
             log::info("no prompt file $AI_PROMPT_TEMPLATE_FILE, clearing $p_file");
         }
-        open(my $pfh, '>', $p_file)
-            or die "Failed to write to $p_file: $!\n";
-        print {$pfh} $prompt;
-        close $pfh
-            or die "Failed to close $p_file: $!\n";
+        spew($p_file, $prompt // "");
+        spew("$session_dir/template", "$AI_PROMPT_TEMPLATE\n");
     }
-    if(!-s $s_file or ($::ORIG_ENV{AI_CLEAR}//0)){
-        my $prompt;
-        if(open(my $fh, '<', $p_file)){
-            local $/;
-            $prompt = <$fh>;
-            close($fh);
-        }
-        if(UNIVERSAL::can("prompt::${AI_PROMPT_TEMPLATE}","prompt")){
-            log::info("PROMPT check for 'prompt::${AI_PROMPT_TEMPLATE}'");
-            no strict "refs";
-            $prompt .= &{"prompt::${AI_PROMPT_TEMPLATE}::prompt"}() // "";
-        }
-        open(my $fh, '>', $s_file)
-            or die "Failed to write to $s_file: $!\n";
-        print {$fh} $::JSON->encode({role => 'system', content => ($prompt // "")})."\n";
-        close $fh
-            or die "Failed to close $s_file: $!\n";
+    if(!-s $s_file or $clear){
+        spew($s_file, $::JSON->encode({role => 'system', content => to_text(system_prompt($session_dir))})."\n");
     }
+    return;
+}
+
+# forget the conversation, keep the system prompt
+sub reset_chat {
+    write_messages({role => 'system', content => to_text(system_prompt())});
+    return;
 }
 
 sub get_sessions {
@@ -610,16 +672,9 @@ sub list_sessions {
 
 sub switch_session {
     my ($new_session) = @_;
-    chomp $new_session;
-    $new_session =~ s/^\s*//g;
-    $new_session =~ s/\s*$//g;
-    if(-d "$SESSIONS_DIR/$new_session"){
-        $ENV{AI_SESSION} = $new_session;
-        $AI_SESSION = $new_session;
-        $AI_SESSION_DIR = "$SESSIONS_DIR/$AI_SESSION";
-        $HISTORY_FILE = "$AI_SESSION_DIR/history";
-        $PROMPT_FILE  = "$AI_SESSION_DIR/prompt";
-        $STATUS_FILE  = "$AI_SESSION_DIR/chat";
+    $new_session = utils::trim($new_session // '');
+    if(valid_session_name($new_session) and -d "$SESSIONS_DIR/$new_session"){
+        use_session($new_session);
         print "Switched to session: $new_session\n";
     } else {
         print "Session '$new_session' does not exist.\n";
@@ -628,7 +683,11 @@ sub switch_session {
 
 sub create_session {
     my ($name) = @_;
-    $name =~ s/^\s+//; $name =~ s/\s+$//;
+    $name = utils::trim($name // '');
+    if (!valid_session_name($name)) {
+        print "Invalid session name '$name' (use letters, digits, '.', '_' and '-').\n";
+        return;
+    }
     if (-d "$SESSIONS_DIR/$name") {
         print "Session '$name' already exists.\n";
         return;
@@ -641,8 +700,8 @@ sub create_session {
 
 sub delete_session {
     my ($name) = @_;
-    $name =~ s/^\s+//; $name =~ s/\s+$//;
-    if (!-d "$SESSIONS_DIR/$name") {
+    $name = utils::trim($name // '');
+    if (!valid_session_name($name) or !-d "$SESSIONS_DIR/$name") {
         print "Session '$name' does not exist.\n";
         return;
     }
@@ -658,10 +717,14 @@ sub delete_session {
 
 sub rename_session {
     my ($old, $new) = @_;
-    $old =~ s/^\s+//; $old =~ s/\s+$//;
-    $new =~ s/^\s+//; $new =~ s/\s+$//;
-    if (!-d "$SESSIONS_DIR/$old") {
+    $old = utils::trim($old // '');
+    $new = utils::trim($new // '');
+    if (!valid_session_name($old) or !-d "$SESSIONS_DIR/$old") {
         print "Session '$old' does not exist.\n";
+        return;
+    }
+    if (!valid_session_name($new)) {
+        print "Invalid session name '$new' (use letters, digits, '.', '_' and '-').\n";
         return;
     }
     if (-d "$SESSIONS_DIR/$new") {
@@ -669,14 +732,7 @@ sub rename_session {
         return;
     }
     if (rename("$SESSIONS_DIR/$old", "$SESSIONS_DIR/$new")) {
-        if ($old eq $AI_SESSION) {
-            $ENV{AI_SESSION} = $new;
-            $AI_SESSION = $new;
-            $AI_SESSION_DIR = "$SESSIONS_DIR/$AI_SESSION";
-            $HISTORY_FILE = "$AI_SESSION_DIR/history";
-            $PROMPT_FILE  = "$AI_SESSION_DIR/prompt";
-            $STATUS_FILE  = "$AI_SESSION_DIR/chat";
-        }
+        use_session($new) if $old eq $AI_SESSION;
         print "Renamed session '$old' to '$new'.\n";
         refresh_session_completions();
     } else {
@@ -686,54 +742,307 @@ sub rename_session {
 
 sub switch_model {
     my ($new_model) = @_;
-    $new_model ||= $::ORIG_ENV{AI_MODEL};
-    $new_model =~ s/^['"]//;
-    $new_model =~ s/['"]$//;
-    $new_model =~ s/\s+$//;
-    $new_model =~ s/^\s+//;
-    my $model_file = "$AI_SESSION_DIR/model";
-    my $tmp_model_file = "$model_file.tmp";
-    if(open(my $fh, '>', $tmp_model_file)){
-        print {$fh} $new_model;
-        close($fh) and do {
-            if(rename($tmp_model_file, $model_file)){
-                print "Switched model to '$new_model'.\n";
-                $SESSION_MODEL = $new_model;
-            } else {
-                print "Failed to switch model: $!\n";
-            }
-            print "switch: $new_model\n";
-        };
+    $new_model = clean_model_name($new_model) || clean_model_name($::ORIG_ENV{AI_MODEL});
+    if(!length($new_model)){
+        print "No model given.\n";
+        return;
+    }
+    if(!eval {spew("$AI_SESSION_DIR/model", $new_model); 1}){
+        print "Failed to switch model: $@";
+        return;
+    }
+    $SESSION_MODEL = $new_model;
+    print "Switched model to '$new_model'.\n";
+}
+
+# the model list of the API, undef when it can't be fetched
+sub fetch_models {
+    my $response = eval {utils::http("get", "$AI_ENDPOINT_URL/v1/models", undef, $api_key)};
+    return unless $response;
+    my $resp = eval {JSON::XS::decode_json($response)};
+    my @models;
+    if (ref($resp) eq 'HASH' and ref($resp->{data}) eq 'ARRAY') {
+        @models = @{$resp->{data}};
+    } elsif (ref($resp) eq 'ARRAY') {
+        @models = @$resp;
     } else {
-        print "Failed to write to $tmp_model_file: $!\n";
+        return;
+    }
+    return [grep {defined and length} map {ref($_) eq 'HASH' ? $_->{id} : $_} @models];
+}
+
+sub list_models {
+    my $models = fetch_models();
+    if(!$models){
+        log::error("Failed to fetch models".($utils::http_error ? ": $utils::http_error" : ""));
+        print "Current model: ".($SESSION_MODEL || '<server default>')."\n";
+        return;
+    }
+    @MODELS = @$models;
+    $cmds->{'/model'} = {map {($_, sub {0})} @MODELS} if $cmds;
+    foreach my $id (@MODELS) {
+        if ($id eq ($SESSION_MODEL // '')) {
+            print "${colors::green_color}* $id${colors::reset_color}\n";
+        } else {
+            print "  $id\n";
+        }
+    }
+    return;
+}
+
+sub prompt_templates {
+    return [sort map {s/.*\///r} grep {-f $_} glob("$FindBin::Bin/ai/*")];
+}
+
+sub list_prompts {
+    my $current = slurp($PROMPT_FILE) // '';
+    foreach my $name (@{prompt_templates()}) {
+        my $data = slurp("$FindBin::Bin/ai/$name") // next;
+        if ($current eq $data) {
+            print "${colors::green_color}* $name${colors::reset_color}\n";
+        } else {
+            print "  $name\n";
+        }
     }
 }
 
+# use another prompt template for this session, the conversation is kept
 sub switch_prompt {
     my ($new_prompt) = @_;
-    my $prompt_file = "$AI_SESSION_DIR/prompt";
-    my $tmp_prompt_file = "$prompt_file.tmp";
-    my $template = "";
-    if(open(my $ofh, "$FindBin::Bin/ai/$new_prompt")){
-        local $/;
-        $template = <$ofh>;
-        close($ofh);
-    } else {
-        print "Failed to read prompt template: $!\n";
+    $new_prompt = utils::trim($new_prompt // '') =~ s/.*\///r;
+    my $template = $new_prompt =~ m/^[\w.\-]+$/ ? slurp("$FindBin::Bin/ai/$new_prompt") : undef;
+    if(!defined $template){
+        print "Failed to read prompt template '$new_prompt'.\n";
         return;
     }
-    if(open(my $fh, '>', $tmp_prompt_file)){
-        print {$fh} $template;
-        close($fh) and do {
-            if(rename($tmp_prompt_file, $prompt_file)){
-                print "Switched system prompt.\n";
-            } else {
-                print "Failed to switch prompt: $!\n";
-            }
-        };
-    } else {
-        print "Failed to write to $tmp_prompt_file: $!\n";
+    if(!eval {
+        spew($PROMPT_FILE, $template);
+        spew("$AI_SESSION_DIR/template", "$new_prompt\n");
+        my @msgs = load_messages();
+        shift @msgs if @msgs and ($msgs[0]{role} // '') eq 'system';
+        write_messages({role => 'system', content => to_text(system_prompt())}, @msgs);
+        1;
+    }){
+        print "Failed to switch prompt: $@";
+        return;
     }
+    print "Switched system prompt.\n";
+}
+
+# add the files of the current directory that match a regex to the chat
+sub add_files {
+    my ($rx) = @_;
+    my $dir_rx = eval {qr/$rx/};
+    if(!$dir_rx){
+        print "Bad pattern '$rx': $@";
+        return;
+    }
+    my @ignore = map {glob($_)} grep {length and !m/^#/} map {utils::trim($_)}
+        split m/\n/, slurp('.aiignore') // '';
+    opendir(my $dh, Cwd::cwd())
+        or return;
+    foreach my $file (sort readdir($dh)) {
+        next if $file =~ m/^\./;
+        next unless -f $file;
+        next if $file !~ m/$dir_rx/;
+        next if grep {$file eq $_} @ignore;
+        my $data = slurp($file);
+        next unless length($data // "");
+        $data = "$file:\n".'```'."\n".$data."\n".'```'."\n";
+        append_messages({role => 'user', content => to_text($data)});
+        print "${colors::green_color}✓${colors::reset_color} added $file to chat\n";
+    }
+    closedir $dh;
+    return;
+}
+
+#------------------------------------------------------------------------------
+# slash commands: the one table that drives execution, /help and completion
+#   run:      sub($args) returns true to leave the chat
+#   complete: sub() returns the completion (sub)tree, default none
+
+our @COMMANDS;
+@COMMANDS = (
+    '/exit'  => {
+        help => 'leave the chat',
+        run  => sub {1},
+    },
+    '/quit'  => {
+        help => 'leave the chat',
+        run  => sub {1},
+    },
+    '/help' => {
+        help => 'show this list',
+        run  => sub {
+            my %c = @COMMANDS;
+            printf "  %-34s %s\n", $c{$_}{usage} // $_, $c{$_}{help} for grep {!ref} @COMMANDS;
+            return 0;
+        },
+    },
+    '/clear' => {
+        help => 'forget the conversation, keep the system prompt',
+        run  => sub {reset_chat(); 0},
+    },
+    '/history' => {
+        help => 'show the input history',
+        run  => sub {print slurp($HISTORY_FILE) // ''; 0},
+    },
+    '/debug' => {
+        help => 'enable debug logging',
+        run  => sub {$::DEBUG = 1; 0},
+    },
+    '/nodebug' => {
+        help => 'disable debug logging',
+        run  => sub {$::DEBUG = 0; 0},
+    },
+    '/tools' => {
+        help => 'list the tools the model can call',
+        run  => sub {
+            print "Available tools:\n";
+            foreach my $name (sort keys %$tools::TOOLS) {
+                print "  $name: $tools::TOOLS->{$name}{description}\n";
+            }
+            return 0;
+        },
+    },
+    '/system' => {
+        usage => '/system <text>',
+        help  => 'add a system message to the conversation',
+        run   => sub {
+            my ($args) = @_;
+            if(length($args)){
+                append_messages({role => 'system', content => to_text($args)});
+            } else {
+                print "Usage: /system <text>\n";
+            }
+            return 0;
+        },
+    },
+    '/files' => {
+        usage => '/files [regex]',
+        help  => 'add matching files of the current directory to the chat',
+        run   => sub {add_files($_[0]); 0},
+    },
+    '/chdir' => {
+        usage => '/chdir <dir>',
+        help  => 'change the working directory (also /cd)',
+        run   => sub {
+            my ($args) = @_;
+            chdir(length($args) ? $args : ($::ORIG_ENV{HOME} // '/'))
+                or print "Failed to change directory to $args: $!\n";
+            return 0;
+        },
+    },
+    '/ls' => {
+        help => 'list the working directory',
+        run  => sub {
+            if(opendir(my $dh, Cwd::cwd())){
+                print "$_\n" for sort grep {!m/^\./} readdir($dh);
+                closedir $dh;
+            }
+            return 0;
+        },
+    },
+    '/pwd' => {
+        help => 'print the working directory',
+        run  => sub {print Cwd::cwd()."\n"; 0},
+    },
+    '/session' => {
+        usage => '/session [list|create|delete|rename|switch] [name]',
+        help  => 'manage sessions, "/session <name>" switches',
+        run   => sub {
+            my ($args) = @_;
+            my ($sub, $rest) = split m/\s+/, $args, 2;
+            $sub  //= '';
+            $rest //= '';
+            if ($sub eq '' or ($sub eq 'list' and $rest eq '')) {
+                list_sessions();
+            } elsif ($sub eq 'create' and length($rest)) {
+                create_session($rest);
+            } elsif ($sub eq 'delete' and length($rest)) {
+                delete_session($rest);
+            } elsif ($sub eq 'rename' and $rest =~ m/^(\S+)\s+(\S+)$/) {
+                rename_session($1, $2);
+            } elsif ($sub eq 'switch' and length($rest)) {
+                switch_session($rest);
+            } elsif ($sub =~ m/^(?:create|delete|rename|switch)$/) {
+                print "Usage: /session $sub <name>".($sub eq 'rename' ? ' <new name>' : '')."\n";
+            } else {
+                switch_session($args);
+            }
+            return 0;
+        },
+        complete => sub {
+            my $s = get_sessions();
+            return {
+                'list'   => sub {0},
+                'create' => sub {0},
+                'delete' => {map {($_, sub {0})} @$s},
+                'rename' => {map {($_, sub {0})} @$s},
+                'switch' => {map {($_, sub {0})} @$s},
+                map {($_, sub {0})} @$s,
+            };
+        },
+    },
+    '/model' => {
+        usage => '/model [name]',
+        help  => 'list the models, or set the model of this session',
+        run   => sub {
+            my ($args) = @_;
+            length($args) ? switch_model($args) : list_models();
+            return 0;
+        },
+        complete => sub {return +{map {($_, sub {0})} @MODELS}},
+    },
+    '/prompt' => {
+        usage => '/prompt [name]',
+        help  => 'list the prompt templates, or switch the system prompt',
+        run   => sub {
+            my ($args) = @_;
+            length($args) ? switch_prompt($args) : list_prompts();
+            return 0;
+        },
+        complete => sub {return +{map {($_, sub {0})} @{prompt_templates()}}},
+    },
+);
+our %COMMANDS = (@COMMANDS, '/cd' => {@COMMANDS}->{'/chdir'});
+
+# Runs a "/command": returns undef when $line is not one (it is chat then),
+# 1 when the chat should end, 0 otherwise. A command is never sent to the LLM.
+sub handle_command {
+    my ($line) = @_;
+    return unless defined $line and $line =~ m{^/};
+    log::info("Command: $line");
+    my ($name, $args) = $line =~ m{^(/\S*)\s*(.*?)\s*$}s;
+    my $c = $COMMANDS{$name};
+    if (!$c) {
+        print "Unknown command: $name (try /help)\n";
+        return 0;
+    }
+    my $r = eval {&{$c->{run}}($args)};
+    if ($@) {
+        print "${colors::red_color}$name failed: $@${colors::reset_color}";
+        return 0;
+    }
+    return $r ? 1 : 0;
+}
+
+# build the completion tree out of the command table
+sub setup_commands {
+    if (!@MODELS and $AI_ENDPOINT_URL) {
+        @MODELS = @{fetch_models() // []};
+    }
+    $cmds = {map {
+        my $c = $COMMANDS{$_};
+        ($_ => $c->{complete} ? &{$c->{complete}}() : $c->{run})
+    } keys %COMMANDS};
+    return;
+}
+
+sub refresh_session_completions {
+    return unless $cmds;
+    $cmds->{'/session'} = &{$COMMANDS{'/session'}{complete}}();
+    return;
 }
 
 sub chat_word_completions_cli {
@@ -745,7 +1054,7 @@ sub chat_word_completions_cli {
     foreach my $w (@wrd) {
         my @rcs = ();
         return '' if defined $cfg and ref($cfg) ne 'HASH';
-        foreach my $k (sort %$cfg) {
+        foreach my $k (sort keys %$cfg) {
             push @rcs, $k if !index($k, $w) or $k eq $w;
         }
         if(@rcs == 1 and exists $cfg->{$rcs[0]}){
@@ -821,6 +1130,11 @@ sub setup_readline {
         return;
     };
     $SIG{INT} = $SIG{TERM} = sub {
+        # ctrl-C while the LLM or a tool is busy: stop that turn, stay in the chat
+        if($BUSY and ($_[0] // '') eq 'INT'){
+            $::ABORT = 1;
+            return;
+        }
         $term->write_history($HISTORY_FILE);
         $term->clear_message();
         $term->crlf();
@@ -871,8 +1185,11 @@ sub get_chat_prompt {
     return $ps1;
 }
 
+# Reads what the user wants: returns the (multi-line) chat text, or undef when
+# the chat is over. Slash commands are executed here, they never come out.
 sub input_terminal {
-    $::T = setup_readline();
+    my ($term) = @_;
+    $::T = $term // setup_readline();
     return sub {
         my $buf = '';
         my $mlm = 0;
@@ -905,10 +1222,12 @@ sub input_terminal {
             goto READ_AGAIN;
         }
         if($line !~ m/^$/ms and !length($buf) and !$mlm){
-            my $r_val = handle_command($line);
-            if(($r_val//0) == 1){
+            if($line =~ m{^/}){
+                $::T->addhistory($line);
                 $::T->write_history($HISTORY_FILE);
-                return;
+                my $r_val = handle_command($line);
+                return if ($r_val // 0) == 1;
+                goto READ_AGAIN;
             }
             $buf .= "$line\n";
             $mlm = 0;
@@ -929,7 +1248,8 @@ sub input_stdin {
         my $line = <STDIN>;
         return unless defined $line;
         if ($line =~ m|^/|) {
-            handle_command($line);
+            chomp $line;
+            return if (handle_command($line) // 0) == 1;
             return "";
         }
         return $line;
@@ -941,20 +1261,26 @@ sub chat_loop {
     my $input_cli_sub = -t STDIN ? input_terminal() : input_stdin();
     while($::LOOP){
         log::info("Waiting for user input...");
+        $::ABORT = 0;
         my $chat_request = &{$input_cli_sub}();
         last unless $::LOOP;
         unless(defined $chat_request){
-            print "\n";
+            print "\n" if -t STDIN;
             last;
         }
         next if $chat_request =~ m/^\s*$/;
-        chat_completion($chat_request);
+        {
+            local $BUSY = 1;
+            eval {chat_completion($chat_request); 1}
+                or log::error(${colors::red_color}.($@ =~ s/\s+\z//r).${colors::reset_color});
+        }
     }
     return;
 }
 
 sub cleanup_chat {
     return unless $::T;
+    return unless $$ == $MAIN_PID; # never from a forked tool process
     log::info("cleanup terminal");
     $::T->write_history($HISTORY_FILE);
     $::T->clear_message();
@@ -969,221 +1295,6 @@ sub cleanup_chat {
 
 END {
     ai::cleanup_chat();
-}
-
-sub handle_command {
-    my ($line) = @_;
-    log::info("Command: $line");
-    if ($line =~ m|^/system|) {
-        $line =~ s|^/system||;
-        open(my $sfh, '>>', $STATUS_FILE)
-            or die "Failed to write to $STATUS_FILE: $!\n";
-        print {$sfh} $::JSON->encode({ role => 'system', content => $line })."\n";
-        close $sfh
-            or die "Failed to close $STATUS_FILE: $!\n";
-        return 0;
-    }
-    if ($line =~ m|^/exit| or $line =~ m|^/quit|) {
-        return 1;
-    }
-    if ($line =~ m|^/clear|) {
-        my $prompt = -f $PROMPT_FILE ? do {
-            open(my $fh, '<', $PROMPT_FILE)
-                or die "Failed to read $PROMPT_FILE: $!\n";
-            local $/; <$fh>
-        }:'';
-        open(my $fh, '>', $STATUS_FILE)
-            or die "Failed to write to $STATUS_FILE: $!\n";
-        print {$fh} $::JSON->encode({ role => 'system', content => ($prompt // "") })."\n";
-        close $fh
-            or die "Failed to close $STATUS_FILE: $!\n";
-        return 0;
-    }
-    if ($line =~ m|^/history|) {
-        print do {open(my $_hfh, '<', $HISTORY_FILE) or die "Failed to read $HISTORY_FILE: $!\n"; local $/; <$_hfh>};
-        return 0;
-    }
-    if ($line =~ m|^/debug|) {
-        $::DEBUG = 1;
-        return 0;
-    }
-    if ($line =~ m|^/nodebug|) {
-        $::DEBUG = 0;
-        return 0;
-    }
-    if ($line =~ m|^/tools$|) {
-        print "Available tools:\n";
-        foreach my $name (sort keys %$tools::TOOLS) {
-            my $info = $tools::TOOLS->{$name};
-            print "  /$name: " . $info->{description} . "\n";
-            if (my $usage = $info->{usage}) {
-                print "    Usage: $usage\n";
-            }
-        }
-        return 0;
-    }
-    if ($line =~ m|^/help|) {
-        print join(", ", sort keys %$cmds)."\n";
-        return 0;
-    }
-    if ($line =~ m|^/chdir|) {
-        $line =~ s|^/chdir||;
-        $line =~ s| +$||;
-        $line =~ s|^\s+||;
-        if(chdir($line)){
-            return 0;
-        } else {
-            print "Failed to change directory to $line: $!\n";
-            return 0;
-        }
-    }
-    if ($line =~ m|^/ls|) {
-        my $dir = Cwd::cwd();
-        if(opendir(my $dh, $dir)){
-            while (my $file = readdir($dh)) {
-                next if $file =~ m/^\./;
-                print "$file\n";
-            }
-            closedir $dh;
-        }
-        return 0;
-    }
-    if ($line =~ m|^/pwd|) {
-        print Cwd::cwd()."\n";
-        return 0;
-    }
-    if ($line =~ m|^/session|) {
-        if ($line =~ m|^/session\s+create\s+(.*)$|) {
-            create_session($1);
-        } elsif ($line =~ m|^/session\s+delete\s+(.*)$|) {
-            delete_session($1);
-        } elsif ($line =~ m|^/session\s+rename\s+(\S+)\s+(\S+)$|) {
-            rename_session($1, $2);
-        } elsif ($line =~ m|^/session\s+list\s*$|) {
-            list_sessions();
-        } elsif ($line =~ m|^/session\s+switch\s+(.*)$|) {
-            switch_session($1);
-        } elsif ($line =~ m|^/session\s+(.*)$| and length($1//"")) {
-            switch_session($1);
-        } elsif ($line =~ m|^/session\s*$|) {
-            list_sessions();
-        }
-        return 0;
-    }
-    if ($line =~ m|^/model|) {
-        my $model_file = "$AI_SESSION_DIR/model";
-        my $current_model;
-        if(open(my $fh, '<', $model_file)){
-            $current_model = <$fh>;
-            $current_model ||= $::ORIG_ENV{AI_MODEL};
-            $current_model =~ s/^['"]//;
-            $current_model =~ s/['"]$//;
-            $current_model =~ s/\s+$//;
-            $current_model =~ s/^\s+//;
-            chomp $current_model;
-            close $fh;
-        }
-        if($line =~ m|^/model\s+(.*)$| and length($1//"")){
-            switch_model($1);
-        } elsif ($line =~ m|^/model\s*$|){
-            # Show available models from the API
-            my $response = utils::http("get", $::ORIG_ENV{AI_LOCAL_SERVER}?"$AI_ENDPOINT_URL/v1/models":"$AI_ENDPOINT_URL/v1/chat/models");
-            log::info("Response: $response");
-            my $resp = JSON::XS::decode_json($response);
-            my @models;
-            if (defined $resp and ref($resp) eq 'HASH' and exists $resp->{data}) {
-                @models = @{$resp->{data}};
-            } elsif (defined $resp and ref($resp) eq 'ARRAY') {
-                foreach my $model (@$resp) {
-                    push @models, $model;
-                }
-            } else {
-                log::error("Failed to parse models response");
-            }
-            foreach my $model (@models) {
-                if ($model->{id} eq $current_model) {
-                    print "${colors::green_color}* $model->{id}${colors::reset_color}\n";
-                } else {
-                    print "  $model->{id}\n";
-                }
-            }
-        }
-        return 0;
-    }
-    if ($line =~ m|^/prompt|) {
-        if($line =~ m|^/prompt\s+(.*)$| and length($1//"")){
-            switch_prompt($1);
-        } elsif($line =~ m|^/prompt\s*$|){
-            # show available prompts from the prompts directory
-            # if the prompt file exists in the session, show that as well
-            my $prompt_dir = $FindBin::Bin.'/ai';
-            my @prompts = glob("$prompt_dir/*");
-            my $current_prompt = '';
-            if(open(my $fh, '<', $PROMPT_FILE)){
-                local $/;
-                $current_prompt = <$fh>;
-            }
-            foreach my $prompt (@prompts) {
-                next if $prompt =~ m/^\.\.?$/;
-                my $prompt_name = $prompt;
-                $prompt_name =~ s/.*\///;
-                my $prompt_data;
-                if(open(my $fh, '<', $prompt)){
-                    local $/;
-                    $prompt_data = <$fh>;
-                } else {
-                    next;
-                }
-                if ($current_prompt eq $prompt_data) {
-                    print "${colors::green_color}* $prompt_name${colors::reset_color}\n";
-                } else {
-                    print "  $prompt_name\n";
-                }
-            }
-        }
-        return 0;
-    }
-    if ($line =~ m|^/files|) {
-        # slurp the directory and add the contents of the files to the chat
-        my $dir_rx = $line;
-        $dir_rx =~ s|^/files||;
-        $dir_rx =~ s| +$||;
-        $dir_rx =~ s|^\s+||;
-        $dir_rx = qr/$dir_rx/;
-        my $dir = Cwd::cwd();
-        if(opendir(my $dh, $dir)){
-            my $ignore_list = do {
-                local $/;
-                open(my $_ifh, '<', '.aiignore') or return '';
-                <$_ifh>;
-            };
-            while (my $file = readdir($dh)) {
-                next if $file =~ m/^\./;
-                next unless -f $file;
-                next if $file !~ m/$dir_rx/;
-                next if grep {$file eq $_} map {glob($_)} split m/\n/, $ignore_list;
-                my $data = do {
-                    my $_ffh;
-                    local $/;
-                    open($_ffh, '<', $file) and <$_ffh>;
-                };
-                next unless length($data//"");
-                $data = '```'."\n".$data."\n".'```'."\n";
-                open(my $sfh, '>>', $STATUS_FILE)
-                    or next;
-                print {$sfh} $::JSON->encode({role => 'user', content => $data})."\n";
-                close $sfh;
-                print "${colors::green_color}✓${colors::reset_color} added $file to chat\n";
-            }
-            closedir $dh;
-        }
-        return 0;
-    }
-    if ($line =~ m|^/|) {
-        print "Unknown command: $line\n";
-        return 0;
-    }
-    return;
 }
 
 package model;
@@ -1291,6 +1402,15 @@ use base qw(provider);
 *raw = *provider::raw;
 
 
+package provider::local;
+
+use strict; use warnings;
+use base qw(provider);
+
+*req = *provider::req;
+*raw = *provider::raw;
+
+
 package prompt;
 
 package prompt::default;
@@ -1304,8 +1424,11 @@ package prompt::coder;
 
 sub prompt {
     my $list = "\n\n**TOOLS**\n\n";
+    $list .= "You can run tools. To call a tool, write its block exactly as shown below, starting at the\n";
+    $list .= "beginning of a line and outside of your thinking. You may call several tools in one answer,\n";
+    $list .= "they run in order. Then stop: the results are sent to you in the next message.\n";
     $list .= "\n\nTOOLS SYNTAX, for tool 'TOOL':\n\n";
-    $list .= "```\n///TOOL_{HEX}+{T1}+{T2}\n{{path}}\n{T1}[<size of substituted T2>]\n{{content}}\n{T2}[<size of substituted T2>\nTOOL_{HEX}\n```\nWhere {{path}}, {{content}} is substituted by the LLM\n";
+    $list .= "```\n///TOOL_{HEX}+{T1}+{T2}\n{{path}}\n{T1}[<size of substituted {{path}}>]\n{{content}}\n{T2}[<size of substituted {{content}}>]\nTOOL_{HEX}\n```\nWhere {{path}}, {{content}} is substituted by the LLM\n";
     $list .= "TOOL results: [<TOOL_{HEX}> RESULT_d170\n{{result}}\nRESULT_d170]\n";
     $list .= "TOOL errors: [<TOOL_{HEX}> ERROR_9a78\n{{error}}\nERROR_9a78]\n";
     $list .= "\n\nLIST OF TOOLS:\n\n";
@@ -1313,7 +1436,8 @@ sub prompt {
         "name: $_\n".
         "tool: ```\n$tools::TOOLS->{$_}{syntax}\n```\n".
         "description: $tools::TOOLS->{$_}{description}\n".
-        "properties:\n"._kv_print($tools::TOOLS->{$_}{properties}, 1)
+        "properties:\n"._kv_print($tools::TOOLS->{$_}{properties}, 1).
+        ($tools::TOOLS->{$_}{example} ? "example: ```\n$tools::TOOLS->{$_}{example}```\n" : "")
     } sort keys %{$tools::TOOLS});
     $list .= "\n";
     log::info("TOOLS SECTION>>$list<<");
@@ -1402,108 +1526,137 @@ EOb
     },
     };
 
-    my @all_t_rx;
-    foreach my $t (sort values %{$tools::TOOLS//{}}){
-        my $t_rx = $t->{syntax};
-        $t_rx =~ s/\{\{.*?\}\}/(.*?)/msg;
-        $t_rx =~ s/\+/\\+/msg;
-        $t_rx =~ s/\n/\\n/msg;
-        $t_rx =~ s/\[LENGTH\(.*?\)\]/\(?:\\[(?:\\d+)\\]\)\?/msg;
-        push @all_t_rx, "(?:$t_rx)";
+    # derive from the syntax: the tag (BASH_7c48, also the name of the sub that
+    # implements the tool) and the sentinels that close each argument
+    my @tags;
+    foreach my $t (values %{$tools::TOOLS}){
+        my ($header) = split m/\n/, $t->{syntax};
+        my ($tag, @sentinels) = split m/\+/, $header =~ s/^\/\/\///r;
+        $t->{tag}       = $tag;
+        $t->{sentinels} = \@sentinels;
+        push @tags, quotemeta($tag);
     }
-    $TOOLS_RX = '('.join('|', @all_t_rx).')';
+    # a tool call starts with its header line: $1 the tag, $2 the sentinels
+    $TOOLS_RX = '^[ \t]*///('.join('|', sort @tags).')((?:\+\w+)*)[ \t]*\n';
 }
 
 sub rx {
     $TOOLS_RX;
 }
 
+# Run a worker in a fork, give back its output. Dies with the reason and the
+# output so far when it did not end well.
+sub _run {
+    my ($worker_sub) = @_;
+    my $timeout = $::ORIG_ENV{AI_TOOL_TIMEOUT} // 120;
+    my ($out, $exit, $sig, $why) = utils::fork_run($worker_sub, timeout => $timeout);
+    return $out unless $why or $sig or $exit;
+    $out =~ s/\n\z//;
+    die "$why, output: $out\n" if $why;
+    die "killed by signal $sig, output: $out\n" if $sig;
+    die "exit code: $exit, output: $out\n";
+}
+
+# bash: the script goes to a temp file, a forked child exec()s bash on it
 sub bash_7c48 {
     my ($t_args) = @_;
-    # dump args to a temp file and execute with bash, capture output
     utils::load_cpan("File::Temp");
-    my ($fh, $fn) = File::Temp::tempfile();
-    print {$fh} $t_args->[0];
+    my ($fh, $fn) = File::Temp::tempfile("aicli_bash_XXXXXXXX", TMPDIR => 1);
+    print {$fh} $t_args->[0] // '';
     if(!close($fh)){
         my $err = $!;
         unlink $fn;
-        return "[ERROR] failed to write to temp file: $err";
+        die "failed to write to temp file: $err\n";
     }
-    local $ENV{PATH}    = $ENV{PATH}     || $::ORIG_ENV{PATH};
-    local $ENV{HOME}    = $ENV{HOME}     || $::ORIG_ENV{HOME};
-    local $ENV{LOGNAME} = $ENV{LOGNAME}  || $::ORIG_ENV{LOGNAME};
-    local $ENV{TMPDIR}  = "/tmp";
-    local $ENV{LANG}    = "en_US.UTF-8";
-    local $!;
-    if(open(my $fh, "bash <$fn 2>&1|")){
-        local $/;
-        my $result = <$fh>;
-        close($fh);
-        my ($err, $errno) = ($?, $!);
-        unlink $fn;
-        return "[ERROR] errno: $errno, exit code: ".($err >> 8).", signal: ".($err & 127).", output: $result" if $err or $errno;
-        return $result;
-    }
-    return "[ERROR] problem running: $!";
+    my $out = eval {_run(sub {exec {'bash'} 'bash', $fn or die "cannot exec bash: $!\n"})};
+    my $err = $@;
+    unlink $fn;
+    die $err if $err;
+    return $out;
 }
 
+# code of the LLM gets its own package, and none of our lexicals
+sub _eval_perl {
+    package aicli::tool;
+    no strict;
+    no warnings;
+    eval $_[0];
+    die $@ if $@;
+    return;
+}
+
+# perl: eval in a forked child. Full "freedom" by default: it is a sub-process,
+# and dockerized. With AI_PERL_SAFE the code runs in a Safe compartment: "1"
+# for the default opcode set plus :base_io (print, but no open), or a list of
+# extra opcodes/tags to permit.
 sub perl_d8d2 {
     my ($t_args) = @_;
-    return "[ERROR] need an actual perl program, size=0" unless length($t_args//"");
-    local $ENV{PATH}    = $ENV{PATH}     || $::ORIG_ENV{PATH};
-    local $ENV{HOME}    = $ENV{HOME}     || $::ORIG_ENV{HOME};
-    local $ENV{LOGNAME} = $ENV{LOGNAME}  || $::ORIG_ENV{LOGNAME};
-    local $ENV{TMPDIR}  = "/tmp";
-    local $ENV{LANG}    = "en_US.UTF-8";
-    return utils::daemon(sub {
-        # full "freedom", sub-process anyways, and dockerized!
-        no strict;
-        no warnings;
-        eval $t_args->[0];
-        die $@ if $@
+    my $code = $t_args->[0];
+    die "need an actual perl program, size=0\n" unless length($code // "");
+    my $safe = $::ORIG_ENV{AI_PERL_SAFE};
+    utils::load_cpan("Safe") if $safe;
+    return _run(sub {
+        if($safe){
+            my $cpt = Safe->new();
+            # the default opcode set, and I/O on the handles that are open
+            $cpt->permit(':base_io');
+            $cpt->permit(grep {length} split m/[\s,]+/, $safe) if $safe ne '1';
+            $cpt->share_from('main', ['*STDOUT', '*STDERR']);
+            $cpt->reval($code);
+            die $@ if $@;
+            return;
+        }
+        # exit() must not run the END blocks of the chat: _exit instead
+        no warnings 'once';
+        *CORE::GLOBAL::exit = sub {
+            STDOUT->flush();
+            STDERR->flush();
+            POSIX::_exit($_[0] // 0);
+        };
+        _eval_perl($code);
     });
 }
 
 sub read_c5a3 {
     my ($t_args) = @_;
-    my $file = utils::trim($t_args->[0]);
-    if (open(my $fh, '<', $file)) {
-        local $/;
-        my $content = <$fh>;
-        close($fh);
-        return $content // "";
-    }
-    return "[ERROR] file not found: $file: $!";
+    my $file = utils::trim($t_args->[0] // '');
+    die "is a directory: $file\n" if -d $file;
+    open(my $fh, '<', $file)
+        or die "cannot read $file: $!\n";
+    local $/;
+    my $content = <$fh>;
+    close($fh);
+    return $content // "";
 }
 
 sub write_edf5 {
     my ($t_args) = @_;
-    my $path = utils::trim($t_args->[0]);
+    my $path = utils::trim($t_args->[0] // '');
     log::info("WRITE: $path");
     open(my $fh, '>', $path)
-        or die "Cannot write to $path: $!";
-    print {$fh} $t_args->[1];
-    if(!close($fh)){
-        return "[ERROR] problem running tool 'write' for $path: $!";
-    }
+        or die "Cannot write to $path: $!\n";
+    print {$fh} $t_args->[1] // '';
+    close($fh)
+        or die "problem running tool 'write' for $path: $!\n";
     return "[OK] written to $path";
 }
 
+# grep: a forked child exec()s grep, no shell involved
 sub grep_6629 {
     my ($t_args) = @_;
-    my $path = $t_args->[0];
+    my $path    = utils::trim($t_args->[0] // '');
     my $pattern = $t_args->[1];
-    return "[ERROR] not enough properties" unless length($path//"") and length($pattern//"");
-    local $ENV{PATH} = $ENV{PATH} || $::ORIG_ENV{PATH};
-    local $!;
-    open(my $fh, "-|", "grep", $pattern, $path)
-        or return "[ERROR] cannot run grep: $!";
-    local $/;
-    my $result = <$fh>;
-    close($fh);
-    my ($err, $errno) = ($?, $!);
-    return "[ERROR] errno: $errno, exit code: ".($err >> 8).", signal: ".($err & 127).", output: $result" if $err or $errno;
-    return $result // "";
+    die "not enough properties\n" unless length($path) and length($pattern // "");
+    my $timeout = $::ORIG_ENV{AI_TOOL_TIMEOUT} // 120;
+    my ($out, $exit, $sig, $why) = utils::fork_run(sub {
+        exec {'grep'} 'grep', '-rn', '-e', $pattern, '--', $path
+            or die "cannot exec grep: $!\n";
+    }, timeout => $timeout);
+    die "$why, output: $out\n" if $why;
+    die "killed by signal $sig, output: $out\n" if $sig;
+    return "" if $exit == 1; # no match
+    die "exit code: $exit, output: $out\n" if $exit;
+    return $out;
 }
 
 

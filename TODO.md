@@ -161,13 +161,27 @@ This file outlines potential improvements and features for the AI coding agent (
     - Optimize session file I/O for large histories.
     - Consider using a lightweight database for session storage.
 
+## Open, found while fixing the agent loop
+- Tool confirmation / allow-list before a tool runs (today: the container is the sandbox).
+- An edit/patch tool, so the model does not rewrite whole files.
+- Retry with backoff on API errors and rate limits.
+- `ai.pl` drops privileges to a fixed uid/gid 1000, the `UID` passed by `aicli.sh` is not used.
+- Every start without `AI_SESSION` creates a new `session-<uuid>` directory, they are never cleaned up.
+- Providers named in older docs but not implemented: OpenAI, Groq, Anthropic, Bedrock.
+- Readline history is read once at start, not per session on `/session switch`.
+
 ## Completed Items (Reference)
 - [x] Basic interactive shell with history
-- [x] Multi-provider support (Cerebras, OpenRouter, etc.)
-- [x] Built-in tools: bash, grep, file operations
+- [x] Multi-provider support (Cerebras, OpenRouter, NVIDIA, Lemonade, local servers)
+- [x] Built-in tools: bash, perl, grep, file operations
 - [x] Session persistence per chat context
-- [ ] Dockerized deployment
-
----
-*Last updated: $(date)*
+- [x] Dockerized deployment
 - [x] Project analyzed and documentation added to AGENTS.md
+- [x] Agent loop: tool results go back to the model until it is done (`AI_MAX_TURNS`)
+- [x] Thinking shown while streaming (`reasoning_content`, `reasoning`, `<think>`), not kept in the history
+- [x] SSE parsing: events split over chunks, CRLF, comments, non-streamed replies, error events
+- [x] Tools run in a fork (`utils::fork_run`): exec for bash/grep, eval or `Safe` for perl, timeout, clean environment
+- [x] Ctrl-C stops the running turn (request or tool) instead of the chat
+- [x] Slash commands from one table (execution, `/help`, completion), never sent to the model
+- [x] HTTP through curl multi + `select()`, errors never kill the chat
+- [x] Tests: agent loop with a scripted LLM, end-to-end against a fake server, commands, tools

@@ -429,26 +429,76 @@ RESULT_d170]${colors::reset_color}\n",
     local $/;
     my $v = <$ifh>;
     close($ifh);
-    my $ofn ="$FindBin::Bin/../t/resources/resp_01.out";
-    open(my $ofh, '<', $ofn) or die "Error opening $ofn: $!\n";
-    local $/;
-    my $o = <$ofh>;
-    close($ofh);
+    # the model forgot the 2nd sentinel in the WRITE header: the sentinels of
+    # the tool definition are used then. BASH is stubbed, the script would
+    # scan the whole filesystem.
     my $tmpdir = File::Temp::tempdir('tool_XXXXXX', DIR => $btmpdir, CLEANUP => 1);
     make_path($tmpdir);
     chdir($tmpdir) or die $!;
-    mkdir(".git");
     print "# in $tmpdir\n";
+    my @bash_args;
+    no warnings 'redefine';
+    local *tools::bash_7c48 = sub {push @bash_args, @{$_[0]}; return "stubbed"};
     my @oklist;
     my ($n, $p, $r) = ai::handle_llm_response(\$v, sub {push @oklist, $_[0]});
     is($n, 1, 'tools: 1');
     is($p, undef, 'pos: undef');
     is_deeply($r, [{
-        'content' => '',
+        'content' => '[WRITE_edf5 RESULT_d170
+[OK] written to find_biggest_with_mount.pl
+RESULT_d170]',
         'role' => 'user',
-    }], 'r: 0') or print Dumper($r);
-    is_deeply(\@oklist, [
-    ], "print ok printer") or print Dumper(\@oklist);
+    },{
+        'content' => '[BASH_7c48 RESULT_d170
+stubbed
+RESULT_d170]',
+        'role' => 'user',
+    }], 'r: write + bash') or print Dumper($r);
+    is(scalar(@oklist), 4, "2 tools announced and answered");
+    is_deeply(\@bash_args, ["perl find_biggest_with_mount.pl 20"], "bash got the script");
+    my $written = do {open(my $wfh, '<', "find_biggest_with_mount.pl") or die $!; local $/; <$wfh>};
+    like($written, qr{\A#!/usr/bin/env perl\n}, "written file starts as sent");
+    like($written, qr{\S\n?\z}, "written file has content till the end");
+    unlike($written, qr/EO_ecde|WRITE_edf5/, "no sentinel leaked into the file");
+    chdir("/");
+    rmtree($tmpdir);
+}
+
+# a tool call that cannot be parsed is reported back, not silently dropped
+{
+    my $v = "///WRITE_edf5+EO_d068+EO_ecde\nfile.txt\nno sentinels at all\n";
+    my @oklist;
+    my ($n, $p, $r) = ai::handle_llm_response(\$v, sub {push @oklist, $_[0]});
+    is($n, 1, 'malformed: needs a new turn');
+    is(scalar(@$r), 1, 'malformed: one answer');
+    like($r->[0]{content}, qr/\A\[WRITE_edf5 ERROR_9a78\n\[ERROR\] malformed tool call.*ERROR_9a78\]\z/s, 'malformed: error for the model');
+}
+
+# tool calls in a thinking block, in running text, or of unknown tools: ignored
+{
+    my $v = "<think>\nmaybe\n///BASH_7c48+EO_dfd7\necho no\nEO_dfd7\nBASH_7c48\n</think>\n"
+           ."I could use ///BASH_7c48+EO_dfd7 here.\n///NOPE_1234+EO_1\nx\nEO_1\nNOPE_1234\n";
+    my @oklist;
+    my ($n, $p, $r) = ai::handle_llm_response(\$v, sub {push @oklist, $_[0]});
+    is($n, 0, 'ignored: no new turn');
+    is($p, 0, 'ignored: pos 0');
+    is_deeply($r, [], 'ignored: no results');
+    is_deeply(\@oklist, [], 'ignored: nothing printed');
+}
+
+# several tools in one answer run in order, non-ASCII survives
+{
+    my $tmpdir = File::Temp::tempdir('tool_XXXXXX', DIR => $btmpdir, CLEANUP => 1);
+    chdir($tmpdir) or die $!;
+    my $v = "Ok:\n///WRITE_edf5+EO_d068+EO_ecde\nu.txt\nEO_d068[5]\ncaf\x{e9} \x{263a}\nEO_ecde[6]\nWRITE_edf5\n"
+           ."then\n///READ_c5a3+EO_d0f1\nu.txt\nEO_d0f1\nREAD_c5a3\n"
+           ."///READ_c5a3+EO_d0f1\nmissing.txt\nEO_d0f1\nREAD_c5a3\n";
+    my ($n, $p, $r) = ai::handle_llm_response(\$v, sub {});
+    is($n, 1, 'multi: new turn');
+    is(scalar(@$r), 3, 'multi: 3 results');
+    is($r->[1]{content}, "[READ_c5a3 RESULT_d170\ncaf\x{e9} \x{263a}\nRESULT_d170]", 'multi: read back as text');
+    is(-s "u.txt", 9, 'multi: file is UTF-8 encoded');
+    like($r->[2]{content}, qr/\A\[READ_c5a3 ERROR_9a78\n\[ERROR\] problem running tool 'READ_c5a3': cannot read missing.txt: /, 'multi: error wrapper');
     chdir("/");
     rmtree($tmpdir);
 }
