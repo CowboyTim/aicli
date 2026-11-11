@@ -89,18 +89,21 @@ sub aborted {
     return $::ABORT ? 1 : 0;
 }
 
-# Drive one transfer. No threads: with Net::Curl::Multi the transfer is driven
-# from a select() loop, so an abort is noticed while the server is still
-# silent. Without it (WWW::Curl) this falls back to a blocking perform().
-# Dies on any transfer error.
+# Drive one transfer. No threads: the transfer is driven with the curl multi
+# interface from a select() loop, so an abort is noticed while the server is
+# still silent. Works with Net::Curl::Multi and WWW::Curl::Multi, without
+# either it falls back to a blocking perform(). Dies on any transfer error.
 sub _perform {
     my ($ch) = @_;
-    my $multi = eval {Net::Curl::Multi->new()};
+    my $net   = Net::Curl::Multi->can('new') ? 1 : 0;
+    my $multi = eval {($net ? 'Net::Curl::Multi' : 'WWW::Curl::Multi')->new()};
     if(!$multi){
         my $rc = $ch->perform();
         die $ch->strerror($rc)."\n" if $rc;
         return;
     }
+    # WWW::Curl::Multi identifies a finished transfer by its private value
+    $ch->setopt(curl::CURLOPT_PRIVATE(), 1) unless $net;
     $multi->add_handle($ch);
     my $attached = 1;
     my $ok = eval {
@@ -108,14 +111,31 @@ sub _perform {
         while($running){
             die "interrupted\n" if aborted();
             my ($rin, $win, $ein) = $multi->fdset();
-            my $t = $multi->timeout();
+            if(!$net){
+                # lists of file descriptors here, select() wants bit vectors
+                foreach my $set ($rin, $win, $ein){
+                    my $v = '';
+                    vec($v, $_, 1) = 1 for @{$set // []};
+                    $set = $v;
+                }
+            }
+            my $t = $net ? $multi->timeout() : -1;
             $t = ($t < 0 or $t > 250) ? 0.25 : $t/1000;
             select($rin, $win, $ein, $t);
             $running = $multi->perform();
-            while(my ($msg, $easy, $result) = $multi->info_read()){
-                $multi->remove_handle($easy);
-                $attached = 0;
-                die "$result\n" if $result+0;
+            if($net){
+                while(my ($msg, $easy, $result) = $multi->info_read()){
+                    $multi->remove_handle($easy);
+                    $attached = 0;
+                    die "$result\n" if $result+0;
+                }
+            } else {
+                while(my ($id, $rc) = $multi->info_read()){
+                    last unless $id;
+                    $multi->remove_handle($ch);
+                    $attached = 0;
+                    die $ch->strerror($rc)."\n" if $rc;
+                }
             }
         }
         1;
@@ -143,6 +163,7 @@ BEGIN {
     eval {
         utils::load_cpan("WWW::Curl::Easy");
         *AUTOLOAD = *WWW::Curl::Easy::AUTOLOAD;
+        utils::load_cpan("WWW::Curl::Multi");
     };
     our @ISA = qw(Net::Curl::Easy WWW::Curl::Easy);
     foreach my $k (keys %Net::Curl::Easy::){

@@ -16,7 +16,7 @@ These are requirements, not suggestions.
 - **Fork only when needed**: to run something that must be isolated from the
   chat process (model-written code, external programs). Don't fork for
   concurrency that I/O multiplexing can do.
-- **Prefer async I/O**: curl multi (`Net::Curl::Multi`) for HTTP and
+- **Prefer async I/O**: curl multi (`Net::Curl::Multi` or `WWW::Curl::Multi`) for HTTP and
   `select()` on file handles for everything that waits. A wait must be a
   `select()` with a timeout in a loop that also checks `$::ABORT`, never a
   blocking read or a `sleep`, so ctrl-C and timeouts keep working.
