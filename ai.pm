@@ -1925,6 +1925,92 @@ EOb
         },
         required => ["path", "regex"],
     },
+    lines => {
+        description => "read a file with line numbers, all of it or a range of lines like 10-40. Use this before 'edit'",
+        syntax => "///LINES_7b06+EO_3fd1+EO_88ce\n{{path}}\nEO_3fd1[LENGTH({{path}})]\n{{range}}\nEO_88ce[LENGTH({{range}})]\nLINES_7b06",
+        properties  => {
+            "path"  => {type => "string", description => "The path to the file"},
+            "range" => {type => "string", description => "first-last line number, a single line number, or empty for the whole file"},
+        },
+        required => ["path", "range"],
+    },
+    replace => {
+        description => "replace a piece of text in a file. The old text must be in the file exactly once, with the same whitespace: include enough lines to make it unique",
+        syntax => "///REPLACE_91c4+EO_5a0e+EO_c2b7+EO_f61d\n{{path}}\nEO_5a0e[LENGTH({{path}})]\n{{old}}\nEO_c2b7[LENGTH({{old}})]\n{{new}}\nEO_f61d[LENGTH({{new}})]\nREPLACE_91c4",
+        properties  => {
+            "path" => {type => "string", description => "The path to the file"},
+            "old"  => {type => "string", description => "The exact text to replace"},
+            "new"  => {type => "string", description => "The text to put there, empty to remove the old text"},
+        },
+        required => ["path", "old", "new"],
+        example => <<EOb
+///REPLACE_91c4+EO_5a0e+EO_c2b7+EO_f61d
+perl_program.pl
+EO_5a0e
+print "Hello, World!\\n";
+EO_c2b7
+print "Hello, Perl!\\n";
+EO_f61d
+REPLACE_91c4
+EOb
+    },
+    edit => {
+        description => "edit a file with an ed script. Commands, one per line: Na (append after line N), Ni (insert before line N), N,Mc (change lines N to M), each followed by the new lines and a line with only a dot; N,Md (delete); N,Ms/regex/replacement/g (substitute). An address is a line number, \$ for the last line, or /regex/ for the first matching line. Line numbers are those after the previous commands: edit from the bottom of the file to the top. Nothing is written when a command fails",
+        syntax => "///EDIT_b3e1+EO_0c7a+EO_d95f\n{{path}}\nEO_0c7a[LENGTH({{path}})]\n{{script}}\nEO_d95f[LENGTH({{script}})]\nEDIT_b3e1",
+        properties  => {
+            "path"   => {type => "string", description => "The path to the file"},
+            "script" => {type => "string", description => "The ed commands"},
+        },
+        required => ["path", "script"],
+        example => <<EOb
+///EDIT_b3e1+EO_0c7a+EO_d95f
+perl_program.pl
+EO_0c7a
+12,14c
+my \$name = shift // "World";
+print "Hello, \$name!\\n";
+.
+3d
+1a
+use strict;
+.
+EO_d95f
+EDIT_b3e1
+EOb
+    },
+    delete => {
+        description => "delete a file or an empty directory",
+        syntax => "///DELETE_5d2a+EO_e410\n{{path}}\nEO_e410[LENGTH({{path}})]\nDELETE_5d2a",
+        properties  => {
+            "path" => {type => "string", description => "The path to delete"},
+        },
+        required => ["path"],
+    },
+    move => {
+        description => "move or rename a file or directory, the destination must not exist",
+        syntax => "///MOVE_c7f0+EO_1b9d+EO_7e23\n{{from}}\nEO_1b9d[LENGTH({{from}})]\n{{to}}\nEO_7e23[LENGTH({{to}})]\nMOVE_c7f0",
+        properties  => {
+            "from" => {type => "string", description => "The current path"},
+            "to"   => {type => "string", description => "The new path"},
+        },
+        required => ["from", "to"],
+    },
+    mkdir => {
+        description => "create a directory, with its parents",
+        syntax => "///MKDIR_2e9b+EO_ab54\n{{path}}\nEO_ab54[LENGTH({{path}})]\nMKDIR_2e9b",
+        properties  => {
+            "path" => {type => "string", description => "The directory to create"},
+        },
+        required => ["path"],
+    },
+    list => {
+        description => "list a directory: type (d, f, l), size and name of every entry",
+        syntax => "///LIST_a41d+EO_6c08\n{{path}}\nEO_6c08[LENGTH({{path}})]\nLIST_a41d",
+        properties  => {
+            "path" => {type => "string", description => "The directory, . for the current one"},
+        },
+        required => ["path"],
+    },
     };
 
     # derive from the syntax: the tag (BASH_7c48, also the name of the sub that
@@ -2020,14 +2106,7 @@ sub perl_d8d2 {
 
 sub read_c5a3 {
     my ($t_args) = @_;
-    my $file = utils::trim($t_args->[0] // '');
-    die "is a directory: $file\n" if -d $file;
-    open(my $fh, '<', $file)
-        or die "cannot read $file: $!\n";
-    local $/;
-    my $content = <$fh>;
-    close($fh);
-    return $content // "";
+    return _slurp(utils::trim($t_args->[0] // ''));
 }
 
 sub write_edf5 {
@@ -2040,6 +2119,225 @@ sub write_edf5 {
     close($fh)
         or die "problem running tool 'write' for $path: $!\n";
     return "[OK] written to $path";
+}
+
+# The file tools below are plain perl, in the chat process: no fork, no shell.
+
+sub _slurp {
+    my ($file) = @_;
+    die "is a directory: $file\n" if -d $file;
+    open(my $fh, '<', $file)
+        or die "cannot read $file: $!\n";
+    local $/;
+    my $content = <$fh>;
+    close($fh);
+    return $content // "";
+}
+
+# write through a temp file and rename: all of it or nothing, mode kept
+sub _spew {
+    my ($file, $content) = @_;
+    my $tmp  = "$file.aicli.$$";
+    my $mode = (stat($file))[2];
+    open(my $fh, '>', $tmp)
+        or die "cannot write $tmp: $!\n";
+    print {$fh} $content;
+    if(!close($fh)){
+        my $err = $!;
+        unlink $tmp;
+        die "cannot write $tmp: $err\n";
+    }
+    chmod($mode & 07777, $tmp) if defined $mode;
+    if(!rename($tmp, $file)){
+        my $err = $!;
+        unlink $tmp;
+        die "cannot replace $file: $err\n";
+    }
+    return;
+}
+
+sub lines_7b06 {
+    my ($t_args) = @_;
+    my $file  = utils::trim($t_args->[0] // '');
+    my $range = utils::trim($t_args->[1] // '');
+    my @lines = split m/\n/, _slurp($file), -1;
+    pop @lines if @lines and $lines[-1] eq '';
+    my ($from, $to) = (1, scalar(@lines));
+    if($range =~ m/^(\d+)\s*(?:[-,]\s*(\d+|\$)?)?$/){
+        $from = $1;
+        $to   = (defined $2 and $2 ne '$') ? $2 : ($range =~ m/[-,]/ ? scalar(@lines) : $1);
+    } elsif(length($range)){
+        die "bad range '$range', use first-last\n";
+    }
+    $from = 1 if $from < 1;
+    $to = @lines if $to > @lines;
+    die "no such lines, $file has ".scalar(@lines)." lines\n" if $from > $to and @lines;
+    return join('', map {"$_\t$lines[$_ - 1]\n"} $from .. $to);
+}
+
+sub replace_91c4 {
+    my ($t_args) = @_;
+    my $file = utils::trim($t_args->[0] // '');
+    my ($old, $new) = ($t_args->[1] // '', $t_args->[2] // '');
+    die "the old text is empty\n" unless length($old);
+    my $content = _slurp($file);
+    my $count = () = $content =~ m/\Q$old\E/g;
+    die "the old text is not in $file, mind the exact whitespace\n" unless $count;
+    die "the old text is $count times in $file, add lines around it to make it unique\n" if $count > 1;
+    my $at = index($content, $old);
+    substr($content, $at, length($old)) = $new;
+    _spew($file, $content);
+    return "[OK] replaced in $file at line ".(1 + (substr($content, 0, $at) =~ tr/\n//));
+}
+
+# address of an ed command -> line number
+sub _ed_addr {
+    my ($addr, $lines, $after) = @_;
+    return scalar(@$lines) if $addr eq '$';
+    return $addr + 0 if $addr =~ m/^\d+$/;
+    my ($re) = $addr =~ m{^/(.*)/$}s;
+    my $rx = eval {qr/$re/}
+        or die "bad regex in address $addr\n";
+    foreach my $i (($after // 0) .. $#$lines){
+        return $i + 1 if $lines->[$i] =~ $rx;
+    }
+    die "no line matches $addr\n";
+}
+
+# apply an ed script (a, i, c, d, s) to a text, returns the new text
+sub ed_apply {
+    my ($text, $script) = @_;
+    my @lines = split m/\n/, $text, -1;
+    my $eol = (@lines and $lines[-1] eq '') ? 1 : 0;
+    pop @lines if $eol;
+    $eol = 1 unless length($text);
+    my @cmds = split m/\n/, $script // '', -1;
+    my $n = 0;
+    my $addr_rx = qr{\d+|\$|/(?:[^/\\]|\\.)*/};
+    while(@cmds){
+        my $c = shift @cmds;
+        next if $c =~ m/^\s*$/ or $c =~ m/^\s*[wq]\s*$/;
+        $n++;
+        my ($a1, $a2, $op, $rest) = $c =~ m{^\s*(?:($addr_rx)(?:,($addr_rx))?)?\s*([acdis])(.*)$}s
+            or die "command $n: cannot parse '$c'\n";
+        eval {
+            die "needs a line address\n" unless defined $a1;
+            my $from = _ed_addr($a1, \@lines);
+            my $to   = defined $a2 ? _ed_addr($a2, \@lines, $from) : $from;
+            die "line $from is after line $to\n" if $from > $to;
+            die "no line $to, the file has ".scalar(@lines)." lines\n" if $to > @lines;
+            die "no line 0\n" if $from < 1 and $op ne 'a';
+            if($op =~ m/[aic]/){
+                die "text follows on the next lines, not after the command\n" if $rest =~ m/\S/;
+                my @t;
+                my $closed = 0;
+                while(@cmds){
+                    my $l = shift @cmds;
+                    $closed = 1, last if $l eq '.';
+                    push @t, $l;
+                }
+                die "the text is not closed by a line with only a dot\n" unless $closed;
+                splice(@lines, $from, 0, @t)                    if $op eq 'a';
+                splice(@lines, $from - 1, 0, @t)                if $op eq 'i';
+                splice(@lines, $from - 1, $to - $from + 1, @t)  if $op eq 'c';
+            } elsif($op eq 'd'){
+                die "nothing may follow d\n" if $rest =~ m/\S/;
+                splice(@lines, $from - 1, $to - $from + 1);
+            } else {
+                my $d = quotemeta(substr($rest, 0, 1));
+                my ($re, $repl, $flags) = $rest =~ m/^$d((?:[^\\]|\\.)*?)$d((?:[^\\]|\\.)*?)(?:$d([gi]*))?\s*$/s
+                    or die "use s/regex/replacement/\n";
+                my $rx = eval {($flags // '') =~ m/i/ ? qr/$re/i : qr/$re/}
+                    or die "bad regex /$re/\n";
+                $repl =~ s/\\($d)/$1/g;
+                my $sub = sub {
+                    my @g = map {substr($_[0], $-[$_], $+[$_] - $-[$_])} grep {defined $-[$_]} 0 .. $#-;
+                    # \1 or $1: group, &: the match, \& and \\: literal
+                    return $repl =~ s{\\([\\&])|\\(\d)|\$(\d)|(&)}{
+                        defined $1 ? $1 : defined $4 ? $g[0] : ($g[$2 // $3] // '')
+                    }ger;
+                };
+                my $hits = 0;
+                foreach my $l (@lines[$from - 1 .. $to - 1]){
+                    $hits += ($flags // '') =~ m/g/
+                        ? ($l =~ s/$rx/$sub->($l)/ge)
+                        : ($l =~ s/$rx/$sub->($l)/e);
+                }
+                die "no match for /$re/ in line".($from == $to ? " $from" : "s $from-$to")."\n" unless $hits;
+            }
+            1;
+        } or die "command $n ($c): $@";
+    }
+    die "no commands\n" unless $n;
+    return join("\n", @lines).(($eol and @lines) ? "\n" : "");
+}
+
+sub edit_b3e1 {
+    my ($t_args) = @_;
+    my $file = utils::trim($t_args->[0] // '');
+    my $old  = _slurp($file);
+    my $new  = ed_apply($old, $t_args->[1]);
+    return "[OK] no change in $file" if $new eq $old;
+    _spew($file, $new);
+    return "[OK] edited $file: ".($old =~ tr/\n//)." -> ".($new =~ tr/\n//)." lines";
+}
+
+sub delete_5d2a {
+    my ($t_args) = @_;
+    my $path = utils::trim($t_args->[0] // '');
+    die "no path\n" unless length($path);
+    if(-d $path and !-l $path){
+        rmdir($path)
+            or die "cannot remove directory $path: $!\n";
+        return "[OK] removed directory $path";
+    }
+    die "no such file: $path\n" unless -e $path or -l $path;
+    unlink($path)
+        or die "cannot delete $path: $!\n";
+    return "[OK] deleted $path";
+}
+
+sub move_c7f0 {
+    my ($t_args) = @_;
+    my $from = utils::trim($t_args->[0] // '');
+    my $to   = utils::trim($t_args->[1] // '');
+    die "need two paths\n" unless length($from) and length($to);
+    die "no such file: $from\n" unless -e $from or -l $from;
+    $to = "$to/".($from =~ s{.*/}{}r) if -d $to;
+    die "$to exists already\n" if -e $to or -l $to;
+    if(!rename($from, $to)){
+        # another filesystem
+        utils::load_cpan("File::Copy");
+        File::Copy::move($from, $to)
+            or die "cannot move $from to $to: $!\n";
+    }
+    return "[OK] moved $from to $to";
+}
+
+sub mkdir_2e9b {
+    my ($t_args) = @_;
+    my $path = utils::trim($t_args->[0] // '');
+    die "no path\n" unless length($path);
+    return "[OK] $path exists already" if -d $path;
+    utils::load_cpan("File::Path");
+    File::Path::make_path($path, {error => \my $err});
+    die "cannot create $path: ".join(", ", map {values %$_} @$err)."\n" if @$err;
+    return "[OK] created $path";
+}
+
+sub list_a41d {
+    my ($t_args) = @_;
+    my $path = utils::trim($t_args->[0] // '');
+    $path = '.' unless length($path);
+    opendir(my $dh, $path)
+        or die "cannot list $path: $!\n";
+    my @names = sort grep {$_ ne '.' and $_ ne '..'} readdir($dh);
+    closedir($dh);
+    return join('', map {
+        my $f = "$path/$_";
+        my $type = -l $f ? 'l' : -d _ ? 'd' : 'f';
+        sprintf("%s %10s %s%s\n", $type, $type eq 'd' ? '-' : (lstat($f))[7] // '?', $_, $type eq 'd' ? '/' : '');
+    } @names);
 }
 
 # grep: a forked child exec()s grep, no shell involved
