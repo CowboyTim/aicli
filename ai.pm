@@ -8,6 +8,7 @@ use Cwd ();
 use Encode ();
 use Errno;
 use JSON::XS ();
+use Time::HiRes ();
 
 BEGIN {
     $::JSON //= JSON::XS->new->utf8->allow_blessed->allow_unknown->allow_nonref->convert_blessed;
@@ -516,17 +517,77 @@ sub format_api_error {
     return $emsg;
 }
 
-# One request to the LLM with the given messages, streamed to the terminal.
-# Returns ($content, $error): $content is what the assistant said so far (can
-# be partial on error), $error is undef on success.
+# durations of rate limit headers: seconds ("12", "0.5"), go style ("6m0s",
+# "250ms"), or a point in time (epoch seconds or milliseconds)
+sub parse_duration {
+    my ($v) = @_;
+    return unless defined $v and length($v);
+    if($v =~ m/^\d+(?:\.\d+)?$/){
+        return $v / 1000 - time() if $v > 1e11; # epoch ms
+        return $v - time()        if $v > 1e9;  # epoch s
+        return $v + 0;
+    }
+    return unless $v =~ m/^(?:[\d.]+(?:ms|h|m|s))+$/;
+    my %f = (h => 3600, m => 60, s => 1, ms => 0.001);
+    my $d = 0;
+    $d += $1 * $f{$2} while $v =~ m/([\d.]+)(ms|h|m|s)/g;
+    return $d;
+}
+
+# how long the API wants us to wait after a rate limit, undef if it didn't say
+sub rate_limit_wait {
+    my ($headers, $decoded) = @_;
+    my $h = {%{$headers // {}}};
+    my $e = ref($decoded) eq 'HASH' ? $decoded->{error} : undef;
+    if(ref($e) eq 'HASH' and ref($e->{metadata}) eq 'HASH' and ref($e->{metadata}{headers}) eq 'HASH'){
+        $h->{lc $_} //= $e->{metadata}{headers}{$_} for keys %{$e->{metadata}{headers}};
+    }
+    my $ms = parse_duration($h->{'retry-after-ms'});
+    return $ms / 1000 if defined $ms;
+    my $ra = parse_duration($h->{'retry-after'});
+    return $ra if defined $ra;
+    my @w = sort {$a <=> $b} grep {defined and $_ > 0} map {parse_duration($h->{$_})} grep {m/^x-ratelimit-reset/} keys %$h;
+    return $w[0];
+}
+
+# What to make of a failed request: {code, retryable, wait, context}
+#   retryable: worth another try (rate limit, overload, network)
+#   wait:      seconds the API asked to wait
+#   context:   the conversation does not fit the context window of the model
+sub classify_error {
+    my ($code, $decoded, $text, $headers) = @_;
+    my $e     = ref($decoded) eq 'HASH' ? $decoded->{error} : undef;
+    my $ecode = ref($e) eq 'HASH' ? ($e->{code} // $e->{status} // '') : '';
+    $code = $ecode if (!$code or $code == 200) and !ref($ecode) and $ecode =~ m/^\d{3}$/;
+    my %i = (code => $code || 0);
+    my $msg = join(' ', grep {defined and !ref} $text, ref($e) eq 'HASH' ? @{$e}{qw(message type code)} : $e);
+    if($msg =~ m/context[ _](?:length|window|size)|maximum context|too many tokens|prompt is too long|exceeds? the (?:available )?context|reduce the length/i){
+        $i{context} = 1;
+        return \%i;
+    }
+    my $rate = ($i{code} == 429 or $msg =~ m/rate.?limit|too many requests/i) ? 1 : 0;
+    $i{retryable} = 1
+        if $rate
+        or !$i{code} # no HTTP status at all: refused, reset, timeout
+        or grep({$i{code} == $_} 408, 425, 500, 502, 503, 504, 529)
+        or $msg =~ m/overloaded|temporarily|try again/i;
+    $i{wait} = rate_limit_wait($headers, $decoded) if $rate;
+    return \%i;
+}
+
+# One request to the LLM with the given messages, streamed to the terminal
+# (not shown with quiet => 1).
+# Returns ($content, $error, $info): $content is what the assistant said so
+# far (can be partial on error), $error is undef on success, $info has the
+# token usage, timing and, on error, what classify_error() says.
 sub request_completion {
-    my ($msgs) = @_;
+    my ($msgs, %o) = @_;
     my $req = do {
         my $w   = $::ORIG_ENV{AI_RAW} ? "raw" : "req";
         my $fn  = "provider::$AI_PROVIDER"->can($w) // provider->can($w);
         &{$fn}(@$msgs);
     };
-    return ('', "ERROR: no raw prompt format known for model '".($SESSION_MODEL // '')."' (AI_RAW)")
+    return ('', "ERROR: no raw prompt format known for model '".($SESSION_MODEL // '')."' (AI_RAW)", {})
         unless $req;
     $req = $::JSON->encode($req);
     log::info($req);
@@ -534,8 +595,12 @@ sub request_completion {
 
     STDOUT->autoflush(1);
     STDERR->autoflush(1);
-    my $printer = new_printer();
-    my $st = new_stream($printer->{emit});
+    my $info = {t_start => Time::HiRes::time()};
+    my $printer = new_printer($o{quiet} ? sub {} : undef);
+    my $st = new_stream(sub {
+        $info->{t_first} //= Time::HiRes::time();
+        &{$printer->{emit}}(@_);
+    });
     my $r = utils::http("post", $AI_URL, $req, $api_key, sub {
         my ($ch, $raw) = @_;
         $raw //= $ch; # WWW::Curl::Easy: <data>, <user_ref>, Net::Curl::Easy: <handle>, <data>
@@ -546,20 +611,270 @@ sub request_completion {
     });
     &{$st->{finish}}();
     &{$printer->{finish}}();
+    $info->{t_end} = Time::HiRes::time();
+    $info->{usage} = $st->{usage};
 
-    return ($st->{content}, "interrupted") if utils::aborted();
+    return ($st->{content}, "interrupted", $info) if utils::aborted();
+    my $err;
     if($st->{error}){
-        return ($st->{content}, format_api_error($st->{error}));
-    }
-    if(!defined $r){
+        $err = format_api_error($st->{error});
+    } elsif(!defined $r){
         log::info("GOT ERROR RESPONSE REMAINING >>$st->{rbuf}<<");
-        my $fallback = join(": ", grep {length} $utils::http_error // '', $st->{rbuf} =~ s/\s+\z//r);
-        return ($st->{content}, format_api_error(undef, $fallback));
+        $err = format_api_error(undef, join(": ", grep {length} $utils::http_error // '', $st->{rbuf} =~ s/\s+\z//r));
+    } elsif(!$st->{events} and $st->{rbuf} =~ m/\S/){
+        return ($st->{content}, "ERROR: unexpected reply: $st->{rbuf}", $info);
     }
-    if(!$st->{events} and $st->{rbuf} =~ m/\S/){
-        return ($st->{content}, "ERROR: unexpected reply: $st->{rbuf}");
+    if(defined $err){
+        my $c = classify_error($utils::http_code, $st->{error}, $err, \%utils::http_headers);
+        $info->{$_} = $c->{$_} for keys %$c;
     }
-    return ($st->{content}, undef);
+    return ($st->{content}, $err, $info);
+}
+
+#------------------------------------------------------------------------------
+# token usage: counted per session, used for the context window and the budget
+
+sub load_usage {
+    my $u = eval {JSON::XS::decode_json(slurp("$AI_SESSION_DIR/usage") // '{}')};
+    return ref($u) eq 'HASH' ? $u : {};
+}
+
+sub save_usage {
+    my ($u) = @_;
+    spew("$AI_SESSION_DIR/usage", JSON::XS->new->utf8->canonical->encode($u)."\n");
+    return;
+}
+
+sub chars_of {
+    my $n = 0;
+    $n += length(to_bytes($_->{content})) for @_;
+    return $n;
+}
+
+# tokens of messages: an estimate from their size, calibrated with what the
+# API reported for this session so far
+sub estimate_tokens {
+    my (@msgs) = @_;
+    my $cpt = load_usage()->{chars_per_token} || 3.5;
+    return int(chars_of(@msgs) / $cpt) + 4 * @msgs;
+}
+
+# Account one request. Returns (prompt tokens, completion tokens, estimated?)
+sub record_usage {
+    my ($msgs, $resp, $info) = @_;
+    my $u  = load_usage();
+    my $us = ref($info->{usage}) eq 'HASH' ? $info->{usage} : {};
+    my ($in, $out, $est) = ($us->{prompt_tokens}, $us->{completion_tokens}, 0);
+    if(defined $in and $in =~ m/^\d+$/ and $in > 0){
+        $out //= ($us->{total_tokens} // $in) - $in;
+        # learn how big a token is for this model and this kind of text
+        if($in >= 50){
+            my $cpt = chars_of(@$msgs) / $in;
+            $cpt = 1.5 if $cpt < 1.5;
+            $cpt = 8   if $cpt > 8;
+            $u->{chars_per_token} = sprintf("%.2f", $cpt) + 0;
+        }
+    } else {
+        $est = 1;
+        $in  = estimate_tokens(@$msgs);
+        $out = int(length(to_bytes($resp)) / ($u->{chars_per_token} || 3.5));
+        $u->{estimated} = 1;
+    }
+    $u->{requests}++;
+    $u->{prompt_tokens}     += $in;
+    $u->{completion_tokens} += $out;
+    $u->{total_tokens}       = $u->{prompt_tokens} + $u->{completion_tokens};
+    $u->{last_prompt_tokens}     = $in;
+    $u->{last_completion_tokens} = $out;
+    save_usage($u);
+    return ($in, $out, $est);
+}
+
+sub usage_line {
+    my ($in, $out, $est, $info) = @_;
+    my $u = load_usage();
+    my $s = sprintf("tokens: %s%d in + %d out, session %d", $est ? '~' : '', $in, $out, $u->{total_tokens} // 0);
+    if(my $budget = $::ORIG_ENV{AI_TOKEN_BUDGET}){
+        $s .= sprintf(" of %d", $budget);
+    }
+    if(my $limit = context_limit()){
+        $s .= sprintf(" | context %d%% of %d", 100 * ($in + $out) / $limit, $limit);
+    }
+    if($info->{t_end} and $info->{t_start}){
+        $s .= sprintf(" | %.1fs", $info->{t_end} - $info->{t_start});
+        my $gen = $info->{t_end} - ($info->{t_first} // $info->{t_end});
+        $s .= sprintf(", %.1f tok/s", $out / $gen) if $out > 1 and $gen > 0.05;
+    }
+    return "[$s]";
+}
+
+# true (and says so) when the session used up AI_TOKEN_BUDGET
+sub over_budget {
+    my $budget = $::ORIG_ENV{AI_TOKEN_BUDGET}
+        or return 0;
+    my $used = load_usage()->{total_tokens} // 0;
+    return 0 if $used < $budget;
+    log::error("${colors::red_color}token budget used up: $used of $budget tokens (AI_TOKEN_BUDGET). '/usage reset' starts counting again${colors::reset_color}");
+    return 1;
+}
+
+#------------------------------------------------------------------------------
+# context management: keep the conversation within the context window
+
+our %MODEL_CONTEXT;  # model id => context size, from the model list of the API
+our $SERVER_CONTEXT; # context size of a local server (llama.cpp /props)
+
+# context window in tokens, 0 when unknown
+sub context_limit {
+    my $env = $::ORIG_ENV{AI_CONTEXT_TOKENS};
+    return $env + 0 if defined $env and $env =~ m/^\d+$/;
+    return $MODEL_CONTEXT{$SESSION_MODEL // ''} || $SERVER_CONTEXT || 0;
+}
+
+sub is_tool_result {
+    my ($m) = @_;
+    return (($m->{role} // '') eq 'user' and ($m->{content} // '') =~ m/\A\[\w+ (?:RESULT_d170|ERROR_9a78)\n/) ? 1 : 0;
+}
+
+# old tool output is the first thing that can go: keep the start and the end
+sub prune_tool_results {
+    my (@msgs) = @_;
+    my $changed = 0;
+    my @r = map {
+        my $m = $_;
+        if(is_tool_result($m) and length($m->{content}) > 600){
+            my $c = $m->{content};
+            my $cut = length($c) - 400;
+            $m = {%$m, content => substr($c, 0, 300)."\n[... $cut characters of old tool output removed to save context ...]\n".substr($c, -100)};
+            $changed++;
+        }
+        $m;
+    } @msgs;
+    return ($changed, @r);
+}
+
+# Make the conversation smaller. Old tool output is cut first. If that is not
+# enough the older part is replaced by a summary written by the model (or just
+# dropped: AI_CONTEXT_SUMMARY=0, or when the summary fails). The recent
+# messages stay as they are, removed messages go to the "chat.archive" file.
+# Returns true when the conversation was changed.
+sub compact_context {
+    my (%o) = @_; # summarize => 1: always summarize, quiet => 1
+    my @msgs   = load_messages();
+    my $before = estimate_tokens(@msgs);
+    my $limit  = context_limit();
+    my $target = int(($limit || $before) * 0.5); # where to end up
+    my $keep   = int($target * 0.5);             # recent messages, kept as they are
+    my @sys    = (@msgs and ($msgs[0]{role} // '') eq 'system') ? (shift @msgs) : ();
+    return 0 unless @msgs;
+
+    # the tail: the recent messages, starting at a user message if possible
+    my ($cut, $sum) = (scalar(@msgs), 0);
+    while($cut > 0){
+        my $t = estimate_tokens($msgs[$cut - 1]);
+        last if $cut < @msgs and $sum + $t > $keep;
+        $sum += $t;
+        $cut--;
+    }
+    $cut++ while $cut < $#msgs and ($msgs[$cut]{role} // '') ne 'user';
+    my @head = @msgs[0 .. $cut - 1];
+    my @tail = @msgs[$cut .. $#msgs];
+    my $say  = sub {
+        my ($how, @new) = @_;
+        return if $o{quiet};
+        print "${colors::cyan_color}[context: $how, ~$before -> ~".estimate_tokens(@new)." tokens]${colors::reset_color}\n";
+    };
+    my $archive = sub {
+        my (@gone) = @_;
+        return unless @gone;
+        open(my $fh, '>>', "$AI_SESSION_DIR/chat.archive")
+            or die "Failed to write to $AI_SESSION_DIR/chat.archive: $!\n";
+        print {$fh} $::JSON->encode($_)."\n" for @gone;
+        close($fh);
+    };
+
+    # 1. old tool output
+    my ($pruned, @phead) = prune_tool_results(@head);
+    if($pruned and !$o{summarize} and estimate_tokens(@sys, @phead, @tail) <= $target){
+        &{$archive}(@head);
+        write_messages(@sys, @phead, @tail);
+        &{$say}("old tool output removed from $pruned messages", @sys, @phead, @tail);
+        return 1;
+    }
+
+    # nothing old worth a summary: all that is left is big recent tool output
+    if(@head < 2 or estimate_tokens(@head) < $before * 0.1){
+        return 0 unless @tail > 2;
+        my ($n, @ptail) = prune_tool_results(@tail[0 .. $#tail - 2]);
+        return 0 unless $n;
+        &{$archive}(@tail[0 .. $#tail - 2]);
+        write_messages(@sys, @phead, @ptail, @tail[-2, -1]);
+        &{$say}("tool output removed from $n messages", @sys, @phead, @ptail, @tail[-2, -1]);
+        return 1;
+    }
+
+    # 2. a summary of the older part, written by the model
+    my $summary;
+    if(($::ORIG_ENV{AI_CONTEXT_SUMMARY} // 1) ne '0'){
+        print "${colors::cyan_color}[context: summarizing ".scalar(@head)." older messages...]${colors::reset_color}\n"
+            unless $o{quiet};
+        my $cpt = load_usage()->{chars_per_token} || 3.5;
+        my $max = int($target * $cpt);
+        my $per = int($max / @phead);
+        $per = 2000 if $per < 2000;
+        my $transcript = join("\n\n", map {
+            my $c = $_->{content} // '';
+            $c = substr($c, 0, $per - 200)."\n[...]\n".substr($c, -150) if length($c) > $per;
+            uc($_->{role} // 'user').":\n$c";
+        } @phead);
+        # the task is at the start, the state at the end: cut in the middle
+        $transcript = substr($transcript, 0, int($max / 2))."\n[...]\n".substr($transcript, -int($max / 2))
+            if length($transcript) > $max;
+        my @req = (
+            {role => 'system', content => "You compact conversations between a user and a coding agent so that the work can continue with less context."},
+            {role => 'user',   content => "$transcript\n\n---\nSummarize the conversation above: the goals of the user, the decisions, what was done (files, commands and their relevant results), the current state and what is left to do. Be specific, keep file names, identifiers and error messages. Only the summary, no preamble, no tool calls."},
+        );
+        my ($resp, $err, $info) = request_completion(\@req, quiet => 1);
+        return 0 if utils::aborted();
+        record_usage(\@req, $resp, $info) unless defined $err and !length($resp);
+        $summary = strip_thinking($resp) =~ s/\A\s+//r =~ s/\s+\z//r;
+        if(defined $err or !length($summary)){
+            log::error("${colors::red_color}summary failed".(defined $err ? ": $err" : "")."${colors::reset_color}");
+            $summary = undef;
+        }
+    }
+
+    # 3. or without one
+    my $note = defined $summary
+        ? "[Summary of the conversation so far, the older messages were removed to save context]\n$summary"
+        : "[The older messages of this conversation were removed to save context]";
+    my @new = (@sys, {role => 'user', content => $note}, @tail);
+    &{$archive}(@head);
+    write_messages(@new);
+    &{$say}((defined $summary ? "summarized" : "dropped")." ".scalar(@head)." older messages", @new);
+    return 1;
+}
+
+# before a request: compact when the conversation gets close to the limit
+sub manage_context {
+    my $limit = context_limit()
+        or return 0;
+    my $threshold = $::ORIG_ENV{AI_CONTEXT_THRESHOLD} // 0.8;
+    return 0 if estimate_tokens(load_messages()) <= $limit * $threshold;
+    return compact_context();
+}
+
+#------------------------------------------------------------------------------
+
+# seconds to wait before retry number $attempt: what the API asked for, else
+# exponential backoff with some jitter
+sub retry_delay {
+    my ($attempt, $asked) = @_;
+    return $asked + 0.1 if defined $asked and $asked >= 0;
+    my $base = $::ORIG_ENV{AI_RETRY_DELAY} // 2;
+    my $d = $base * 2 ** ($attempt - 1);
+    $d = 60 if $d > 60;
+    return $d * (0.75 + rand(0.5));
 }
 
 # The agent loop: send the conversation, show the answer, run the tools the
@@ -568,24 +883,56 @@ sub request_completion {
 sub chat_completion {
     my ($input) = @_;
     log::info("User input: $input");
+    return if over_budget();
     append_messages({role => 'user', content => to_text($input)});
 
     my $max_turns = $::ORIG_ENV{AI_MAX_TURNS} // 50;
+    my $retries   = $::ORIG_ENV{AI_RETRIES} // 4;
+    my $max_wait  = $::ORIG_ENV{AI_RETRY_MAX_WAIT} // 120;
     my $turn = 0;
+    my $compacted = 0; # after a "context too long" error, once per input
     while(1){
         last if utils::aborted();
         if($max_turns and ++$turn > $max_turns){
             log::error("${colors::red_color}stopped after $max_turns tool turns (AI_MAX_TURNS)${colors::reset_color}");
             last;
         }
-        my @msgs = load_messages();
-        my ($resp, $err) = request_completion(\@msgs);
+        last if $turn > 1 and over_budget();
+        manage_context();
+
+        my (@msgs, $resp, $err, $info);
+        my $attempt = 0;
+        while(1){
+            @msgs = load_messages();
+            ($resp, $err, $info) = request_completion(\@msgs);
+            last unless defined $err;
+            last if utils::aborted();
+            last if length(strip_thinking($resp) =~ s/\A\s+//r); # part of an answer: keep it
+            if($info->{context} and !$compacted++ and compact_context()){
+                next;
+            }
+            last unless $info->{retryable} and $attempt < $retries;
+            my $wait = retry_delay(++$attempt, $info->{wait});
+            if($wait > $max_wait){
+                $err .= sprintf(" (asked to wait %ds, more than AI_RETRY_MAX_WAIT=%d)", $wait, $max_wait);
+                last;
+            }
+            print "${colors::red_color}$err${colors::reset_color}\n";
+            printf "%s[retry %d of %d in %.1fs, ctrl-C to stop]%s\n", $colors::cyan_color, $attempt, $retries, $wait, $colors::reset_color;
+            utils::wait_abortable($wait)
+                or last;
+        }
 
         # what is kept: the answer without the thinking
         my $answer = strip_thinking($resp);
         $answer =~ s/\A\s+//;
         append_messages({role => 'assistant', content => $answer})
             if length($answer);
+        if(!defined $err or length($resp)){
+            my @u = record_usage(\@msgs, $resp, $info);
+            print "${colors::cyan_color}".usage_line(@u, $info)."${colors::reset_color}\n"
+                if ($::ORIG_ENV{AI_SHOW_USAGE} // 1);
+        }
         if(defined $err){
             if(utils::aborted()){
                 print "${colors::red_color}[interrupted]${colors::reset_color}\n";
@@ -768,7 +1115,22 @@ sub fetch_models {
     } else {
         return;
     }
+    foreach my $m (grep {ref($_) eq 'HASH' and defined $_->{id}} @models){
+        my $ctx = $m->{context_length} // $m->{context_window}
+               // (ref($m->{meta}) eq 'HASH' ? $m->{meta}{n_ctx} : undef);
+        $MODEL_CONTEXT{$m->{id}} = $ctx + 0 if defined $ctx and $ctx =~ m/^\d+$/ and $ctx > 0;
+    }
     return [grep {defined and length} map {ref($_) eq 'HASH' ? $_->{id} : $_} @models];
+}
+
+# context size a local llama.cpp server runs with
+sub fetch_server_context {
+    my $response = eval {utils::http("get", "$AI_ENDPOINT_URL/props", undef, $api_key)};
+    my $props = $response ? eval {JSON::XS::decode_json($response)} : undef;
+    return unless ref($props) eq 'HASH' and ref($props->{default_generation_settings}) eq 'HASH';
+    my $ctx = $props->{default_generation_settings}{n_ctx};
+    $SERVER_CONTEXT = $ctx + 0 if defined $ctx and $ctx =~ m/^\d+$/ and $ctx > 0;
+    return $SERVER_CONTEXT;
 }
 
 sub list_models {
@@ -994,6 +1356,40 @@ our @COMMANDS;
         },
         complete => sub {return +{map {($_, sub {0})} @MODELS}},
     },
+    '/usage' => {
+        usage => '/usage [reset]',
+        help  => 'token usage of this session, "reset" starts counting again',
+        run   => sub {
+            my ($args) = @_;
+            if($args eq 'reset'){
+                my $u = load_usage();
+                save_usage({map {($_ => $u->{$_})} grep {$_ eq 'chars_per_token'} keys %$u});
+                print "Usage of session '$AI_SESSION' reset.\n";
+                return 0;
+            }
+            my $u = load_usage();
+            my @msgs = load_messages();
+            my $limit = context_limit();
+            printf "requests:   %d\n", $u->{requests} // 0;
+            printf "tokens:     %s%d in + %d out = %d%s\n", $u->{estimated} ? '~' : '',
+                $u->{prompt_tokens} // 0, $u->{completion_tokens} // 0, $u->{total_tokens} // 0,
+                $::ORIG_ENV{AI_TOKEN_BUDGET} ? " of $::ORIG_ENV{AI_TOKEN_BUDGET} (AI_TOKEN_BUDGET)" : "";
+            printf "context:    ~%d tokens in %d messages%s\n", estimate_tokens(@msgs), scalar(@msgs),
+                $limit ? sprintf(", %d%% of %d", 100 * estimate_tokens(@msgs) / $limit, $limit) : ", window size unknown (AI_CONTEXT_TOKENS)";
+            return 0;
+        },
+        complete => sub {return +{reset => sub {0}}},
+    },
+    '/compact' => {
+        help => 'summarize the older messages to free context',
+        run  => sub {
+            local $BUSY = 1;
+            compact_context(summarize => 1)
+                or print "Nothing to compact.\n";
+            $::ABORT = 0;
+            return 0;
+        },
+    },
     '/prompt' => {
         usage => '/prompt [name]',
         help  => 'list the prompt templates, or switch the system prompt',
@@ -1031,6 +1427,8 @@ sub handle_command {
 sub setup_commands {
     if (!@MODELS and $AI_ENDPOINT_URL) {
         @MODELS = @{fetch_models() // []};
+        fetch_server_context()
+            if $::ORIG_ENV{AI_LOCAL_SERVER} and !defined $::ORIG_ENV{AI_CONTEXT_TOKENS};
     }
     $cmds = {map {
         my $c = $COMMANDS{$_};
@@ -1341,6 +1739,9 @@ sub req {
         stream       => $Types::Serialiser::true,
         messages     => \@jstr,
     };
+    # token usage in the last chunk of the stream
+    $req->{stream_options} = {include_usage => $Types::Serialiser::true}
+        if ($::ORIG_ENV{AI_USAGE} // 1);
 
     return $req;
 }

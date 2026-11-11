@@ -2,6 +2,8 @@ package utils;
 
 use strict; use warnings;
 
+use Time::HiRes ();
+
 sub load_cpan {
     my ($module) = @_;
     eval "require $module";
@@ -18,7 +20,7 @@ sub trim {
 
 our $curl_handle;
 our $response = \(my $buffer = "");
-our ($http_error, $http_code);
+our ($http_error, $http_code, %http_headers);
 sub http {
     my ($m, $full_url, $data, $api_key, $read_handle_sub) = @_;
     $data //= "";
@@ -54,6 +56,17 @@ sub http {
         $$response .= $chunk;
         return length($chunk);
     });
+    # response headers (lowercased names), the rate limits are in there
+    %http_headers = ();
+    eval {
+        $curl_handle->setopt(curl::CURLOPT_HEADERFUNCTION(), sub {
+            # WWW::Curl::Easy: <data>, <user_ref>, Net::Curl::Easy: <handle>, <data>
+            my $line = ref($_[0]) ? $_[1] : $_[0];
+            %http_headers = () if $line =~ m/^HTTP\//;
+            $http_headers{lc $1} = $2 if $line =~ m/^([^:\s]+):\s*(.*?)\s*$/;
+            return length($line);
+        });
+    };
     $curl_handle->setopt(curl::CURLOPT_URL(), $full_url);
     if(lc($m) eq "post"){
         $curl_handle->setopt(curl::CURLOPT_POST(), 1);
@@ -87,6 +100,19 @@ sub http {
 # true when the user asked to stop the current turn (ctrl-C while busy)
 sub aborted {
     return $::ABORT ? 1 : 0;
+}
+
+# Sleep, the async way: select() ticks that notice an abort.
+# Returns false when aborted.
+sub wait_abortable {
+    my ($seconds) = @_;
+    my $end = Time::HiRes::time() + ($seconds // 0);
+    while(1){
+        return 0 if aborted();
+        my $left = $end - Time::HiRes::time();
+        return 1 if $left <= 0;
+        select(undef, undef, undef, $left < 0.2 ? $left : 0.2);
+    }
 }
 
 # Drive one transfer. No threads: the transfer is driven with the curl multi

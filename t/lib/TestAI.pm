@@ -25,6 +25,8 @@ sub setup {
         AI_SESSION      => 'test',
         AI_PROMPT_TEMPLATE      => 'coder',
         AI_PROMPT_TEMPLATE_FILE => "$ROOT/ai/coder",
+        AI_RETRIES      => 0, # tests that want retries or the usage line ask for it
+        AI_SHOW_USAGE   => 0,
         %env,
     );
     $FindBin::Bin = $ROOT; # where ai.pm looks for the prompt templates
@@ -66,6 +68,20 @@ sub sse {
 sub content   { sse({choices => [{delta => {content => $_[0]}}]}) }
 sub reasoning { sse({choices => [{delta => {reasoning_content => $_[0]}}]}) }
 sub done      { sse('[DONE]') }
+sub usage     { sse({choices => [], usage => {prompt_tokens => $_[0], completion_tokens => $_[1], total_tokens => $_[0] + $_[1]}}) }
+
+# a failed request: fail($code, $json_body, header => value, ...)
+sub fail {
+    my ($code, $body, %headers) = @_;
+    return sub {
+        my ($cb) = @_;
+        $cb->(undef, $body) if defined $body;
+        $utils::http_code    = $code;
+        %utils::http_headers = %headers;
+        $utils::http_error   = $code ? "HTTP status $code" : "Couldn't connect to server";
+        return;
+    };
+}
 
 # replace utils::http by the script in @SCRIPT: an entry is a list of raw
 # chunks to stream, a sub($callback, $request), or undef for a failed request
@@ -78,10 +94,13 @@ sub mock_http {
         my $req = {method => $m, url => $url, data => $data, key => $key};
         push @REQUESTS, $req;
         $utils::http_error = undef;
+        $utils::http_code  = 200;
+        %utils::http_headers = ();
         die "the LLM script ran out at request ".scalar(@REQUESTS)."\n" unless @SCRIPT;
         my $step = shift @SCRIPT;
         if(!defined $step){
             $utils::http_error = "HTTP status 500";
+            $utils::http_code  = 500;
             return;
         }
         return $step->($cb, $req) if ref($step) eq 'CODE';

@@ -62,6 +62,32 @@ my ($Y, $G, $R) = ($colors::yellow_color1, $colors::green_color, $colors::reset_
     ai::handle_command("/clear");
 }
 
+# rate limit: the Retry-After header of the real response is honoured
+{
+    local $::ORIG_ENV{AI_RETRIES} = 2;
+    local $::ORIG_ENV{AI_RETRY_DELAY} = 30;
+    my $t0 = Time::HiRes::time();
+    my $out = TestAI::capture {ai::chat_completion("limited $tmp/limit")};
+    my $took = Time::HiRes::time() - $t0;
+    like($out, qr/ERROR: 429: rate limit of the fake.*\[retry 1 of 2 in 1\.1s/s, "rate limit: waits what the server says");
+    like($out, qr/The tool said: e2e-42/, "rate limit: then goes on");
+    ok($took >= 1 && $took < 10, "rate limit: took ".sprintf("%.1fs", $took));
+    is($utils::http_headers{'content-type'}, "text/event-stream", "response headers are read");
+    ai::handle_command("/clear");
+}
+
+# token usage as reported by the server, context size of the server
+{
+    TestAI::capture {ai::handle_command("/usage reset")};
+    local $::ORIG_ENV{AI_SHOW_USAGE} = 1;
+    my $out = TestAI::capture {ai::chat_completion("go")};
+    like($out, qr/\[tokens: 200 in \+ 7 out, session 207 \|.*\[tokens: 400 in \+ 7 out, session 614 \|/s, "usage: from the stream, per request");
+    is(ai::load_usage()->{total_tokens}, 614, "usage: counted");
+    is(ai::fetch_server_context(), 4096, "context size: from /props");
+    $ai::SERVER_CONTEXT = undef;
+    ai::handle_command("/clear");
+}
+
 # the same connection handle keeps working after errors and aborts
 {
     my $out = TestAI::capture {ai::chat_completion("go again")};

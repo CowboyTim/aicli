@@ -3,6 +3,7 @@ package FakeLLM;
 # What it answers depends on the last message of the conversation:
 #   "fail..."          HTTP 429 with a JSON error
 #   "slow..."          starts to think, then hangs
+#   "limited <file>"   HTTP 429 with Retry-After: 1 the first time, then fine
 #   a tool result      the final answer, quoting the result
 #   anything else      thinks, then calls the bash tool
 
@@ -71,6 +72,9 @@ sub serve {
     if($method eq 'GET' and $path eq '/v1/models'){
         return reply($c, 200, 'application/json', '{"object":"list","data":[{"id":"fake-1"},{"id":"fake-2"}]}');
     }
+    if($method eq 'GET' and $path eq '/props'){
+        return reply($c, 200, 'application/json', '{"default_generation_settings":{"n_ctx":4096}}');
+    }
     if($method ne 'POST' or $path ne '/v1/chat/completions'){
         return reply($c, 404, 'application/json', '{"error":{"message":"no such endpoint '.$path.'"}}');
     }
@@ -79,6 +83,14 @@ sub serve {
     my $last = $msgs->[-1]{content};
     if($last =~ m/^fail/){
         return reply($c, 429, 'application/json', '{"error":{"code":429,"message":"rate limit of the fake"}}');
+    }
+    if($last =~ m/^limited (\S+)/){
+        # rate limited, but only the first time this is asked
+        my $marker = "$1.seen";
+        if(!-e $marker){
+            open(my $fh, '>', $marker);
+            return reply($c, 429, 'application/json', '{"error":{"code":429,"message":"rate limit of the fake"}}', "Retry-After: 1");
+        }
     }
     print {$c} "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
     my @events;
@@ -94,6 +106,9 @@ sub serve {
         @events = ((map {sse({reasoning_content => $_})} "The user wants ", "a command."),
             map {sse({content => $_})} unpack("(a11)*", $call));
     }
+    push @events, "data: ".JSON::XS::encode_json({choices => [], usage => {
+        prompt_tokens => 100 * @$msgs, completion_tokens => 7, total_tokens => 100 * @$msgs + 7,
+    }})."\n\n" if $req->{stream_options} and $req->{stream_options}{include_usage};
     # send it in pieces that don't respect the event boundaries
     foreach my $piece (unpack("(a37)*", join('', @events, "data: [DONE]\n\n"))){
         print {$c} $piece;
@@ -103,8 +118,8 @@ sub serve {
 }
 
 sub reply {
-    my ($c, $code, $type, $body) = @_;
-    print {$c} "HTTP/1.1 $code X\r\nContent-Type: $type\r\nContent-Length: ".length($body)."\r\nConnection: close\r\n\r\n$body";
+    my ($c, $code, $type, $body, @headers) = @_;
+    print {$c} join("\r\n", "HTTP/1.1 $code X", "Content-Type: $type", "Content-Length: ".length($body), "Connection: close", @headers, "", $body);
     return;
 }
 
