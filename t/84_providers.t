@@ -165,4 +165,22 @@ sub setup_key {
     is(scalar(@p), 0, "tool call: a tag in the middle of a line is not a call");
 }
 
+# tool calls the server sends itself are logged, and put together by index
+{
+    setup_key('sk-proj-xyz');
+    my $logfile = "$TestAI::TMP/server-calls.log";
+    local $::DEBUG = 1;
+    local $::ORIG_ENV{AI_LOG} = $logfile;
+    my $st = ai::new_stream(sub {});
+    $st->{feed}->('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"list_a41d","arguments":"{\"pa"}}]}}]}'."\n\n");
+    $st->{feed}->('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"th\":\"/workdir\"}"}}]}}]}'."\n\n");
+    $st->{feed}->('data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}'."\n\n");
+    $st->{feed}->("data: [DONE]\n\n");
+    $st->{finish}->();
+    my $log = ai::slurp($logfile) // '';
+    like($log, qr/SERVER TOOL CALL DELTA: .*"call_1"/, "server calls: each delta logged");
+    like($log, qr/SERVER TOOL CALLS \(finish_reason tool_calls\): .*"arguments":"\{\\"path\\":\\"\/workdir\\"\}"/, "server calls: the arguments put together, finish reason logged");
+    is($st->{tool_calls}[0]{name}, 'list_a41d', "server calls: name kept");
+}
+
 done_testing();

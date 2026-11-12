@@ -660,6 +660,20 @@ sub new_stream {
         }
         my $msg_entry = ref($decoded->{choices}) eq 'ARRAY' ? ($decoded->{choices}[0] // {}) : {};
         my $d = $msg_entry->{delta} // $msg_entry->{message} // {};
+        # tool calls the server parsed itself (OpenAI style): logged, and put
+        # together by index, the arguments come in pieces
+        if(ref($d->{tool_calls}) eq 'ARRAY'){
+            for my $tc (@{$d->{tool_calls}}){
+                next unless ref($tc) eq 'HASH';
+                log::info("SERVER TOOL CALL DELTA: ".$::JSON->encode($tc));
+                my $e = $st->{tool_calls}[$tc->{index} // 0] //= {};
+                my $f = ref($tc->{function}) eq 'HASH' ? $tc->{function} : {};
+                $e->{id}   //= $tc->{id};
+                $e->{name} //= $f->{name};
+                $e->{arguments} .= $f->{arguments} // '';
+            }
+        }
+        $st->{finish_reason} = $msg_entry->{finish_reason} if defined $msg_entry->{finish_reason};
         my $reasoning = $d->{reasoning_content} // $d->{reasoning};
         if(defined $reasoning and !ref($reasoning) and length($reasoning)){
             $st->{reasoning} .= $reasoning;
@@ -691,6 +705,9 @@ sub new_stream {
         }
     };
     $st->{finish} = sub {
+        if(my @calls = grep {defined} @{$st->{tool_calls} // []}){
+            log::info("SERVER TOOL CALLS (finish_reason ".($st->{finish_reason} // "none")."): ".$::JSON->encode(\@calls));
+        }
         # what is left is a non streamed (error) reply, or nothing
         if($st->{rbuf} =~ m/\S/){
             my $decoded = eval {JSON::XS->new->utf8->decode($st->{rbuf})};
