@@ -154,4 +154,15 @@ sub setup_key {
     ok($m && ref($m) =~ m/^\Q$curl::FAMILY\E::Multi$/, "curl: the multi handle of the same family");
 }
 
+# a call without its /// header, inside a code fence, is run; a tag in prose is not a call
+{
+    setup_key('sk-proj-xyz');
+    my @c = ai::parse_tool_calls("I will list it.\n```\nLIST_a41d+EO_6c08\n/workdir\nEO_6c08[8]\nLIST_a41d\n```\n");
+    is(scalar(@c), 1, "tool call: a fenced call without /// is found");
+    is($c[0] && $c[0]{tool}, 'LIST_a41d', "tool call: the right tool");
+    is($c[0] && $c[0]{args}[0], '/workdir', "tool call: its argument");
+    my @p = ai::parse_tool_calls("the tag LIST_a41d+EO_6c08 is not a call here\n");
+    is(scalar(@p), 0, "tool call: a tag in the middle of a line is not a call");
+}
+
 done_testing();

@@ -3424,7 +3424,9 @@ EOb
         push @tags, quotemeta($tag);
     }
     # a tool call starts with its header line: $1 the tag, $2 the sentinels
-    $TOOLS_RX = '^[ \t]*///('.join('|', sort @tags).')((?:\+\w+)*)[ \t]*\n';
+    # the /// is optional, and so is a code fence before the header: a model that
+    # writes its call in a fence gets it run, not dropped
+    $TOOLS_RX = '^[ \t]*(?:`{3}[^\n]*\n[ \t]*)?(?:///)?('.join('|', sort @tags).')((?:\+\w+)*)[ \t]*\n';
 }
 
 sub rx {
