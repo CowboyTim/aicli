@@ -349,9 +349,9 @@ answer work at the same time, at most B<AI_MAX_AGENTS>.
 
 A sub-agent is neither a process nor a thread: its request is one more curl
 handle and its tools are forked children in the one select() loop of the
-program. What it thinks and does is not printed, the status line shows it,
-with the tokens it used. Its conversation is saved in the F<agents/> directory
-of the session. An agent keeps its own conversation within the context
+program. What it thinks is not printed. The status line shows what it does, with the
+tokens it used, and a line per start and tool call is printed (B<AI_AGENT_VIEW>).
+Its conversation is saved in the F<agents/> directory of the session. An agent keeps its own conversation within the context
 window: the output of older tool calls is cut, then its oldest steps are
 dropped, the task stays.
 
@@ -492,8 +492,8 @@ Manage the system prompt of the current session
 
 =head1 SUPPORTED PROVIDERS
 
-All providers are used through their OpenAI compatible streaming chat
-completions API.
+Most providers are used through their OpenAI compatible streaming chat
+completions API; Anthropic has its own Messages API, which is spoken directly.
 
 =over 8
 
@@ -509,6 +509,19 @@ providers (space separated).
 =item B<NVIDIA>
 
 API key prefix: C<nvapi->
+
+=item B<OpenAI>
+
+API key prefix: C<sk-> (the longer prefixes win, so C<sk-or-> is OpenRouter).
+The newer models get C<max_completion_tokens>; no C<top_k> or C<min_p>. The
+model is needed: set B<AI_MODEL>.
+
+=item B<Anthropic>
+
+API key prefix: C<sk-ant->. Default model C<claude-sonnet-5-5> (B<AI_MODEL>
+overrides it). B<AI_TOKENS> is the maximum answer length (default 8192, the
+API requires one). Tool calls are written in the text as with every provider;
+no extended thinking yet. No raw completion (B<AI_RAW>).
 
 =item B<Lemonade>
 
@@ -545,7 +558,7 @@ API key for accessing the AI API.
 
 =item B<AI_PROVIDER>
 
-The provider to use: cerebras, openrouter, nvidia, lemonade. If not specified
+The provider to use: cerebras, openrouter, nvidia, openai, anthropic, lemonade. If not specified
 it is auto-detected from the API key prefix.
 
 =item B<AI_LOCAL_SERVER>
@@ -600,6 +613,12 @@ no limit.
 =item B<AI_MAX_AGENTS>
 
 Number of sub-agents that work at the same time. Default: 4
+
+=item B<AI_AGENT_VIEW>
+
+Sub-agents show what they do as it happens: a line when one starts and one for
+each tool call, prefixed with its number. Set to 0 to hide these lines (their
+thinking is never shown). Default: 1
 
 =item B<AI_AGENT_MODEL>
 

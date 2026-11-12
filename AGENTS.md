@@ -80,8 +80,8 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   sub-agents, status line, retries, token usage, context management, file
   tools in Perl, web tools, workspace and kernel sandbox, `-c`/`-p`.
 - Everything has tests (`prove -I. t`), but against a scripted or fake LLM.
-  Not yet done by anyone: a session with a real model, the tests in the
-  Alpine image (`Net::Curl`), a real proxy and SearXNG instance, the
+  Not yet done by anyone: a session with a real model, the tests with
+  `Net::Curl` (the preferred module; the image has `WWW::Curl`), a real proxy and SearXNG instance, the
   privilege drop as root in docker with a user other than 1000.
 - What is open is in TODO.md ("Open, found while fixing the agent loop"),
   what is settled in its "Completed Items".
@@ -121,7 +121,7 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   (wide characters two, combining none), `_fit()` cuts by columns, emoji are
   `?`. Tests run with the unicode set (`TestAI::setup`).
 - **ai/** – prompt templates: `default` (chat), `coder` (adds the tools).
-- **aicli.sh**, **Dockerfile** – docker wrapper and Alpine image.
+- **aicli.sh**, **Dockerfile** – docker wrapper and the Debian slim image.
   **docker-bake.hcl** builds that image (`docker buildx bake`; `image-ci`
   adds the GitHub Actions cache). CI still uses `docker build`.
 - **t/** – tests, **TODO.md** – roadmap.
@@ -208,7 +208,8 @@ are done, then `{result}` / `{error}` are set. A sub-agent has its own message
 list (system prompt from `ai::subagent_prompt()`: session prompt + tools
 without `agent`), retries like the main loop, counts into the usage of the
 session, writes its transcript to `agents/` in the session directory, and
-shows up in the status line with its tokens (`agent::status`). It keeps its
+shows up in the status line with its tokens (`agent::status`), and each start and
+tool call is printed as one line (`ai::agent_view`, `AI_AGENT_VIEW`). It keeps its
 own messages within the context window (`agent::compact`, before every
 request and once after a "context too long" error): old tool output is
 pruned, then the oldest steps are dropped with a note; system prompt, task
@@ -339,9 +340,12 @@ with an answer, `one_shot()` makes the exit code of `-p` out of that.
 
 `%ai::PROVIDERS` (URL, key prefix) and a `provider::<name>` package with
 `req()` (chat request) and `raw()` (raw completion request). All are OpenAI
-compatible streaming APIs: cerebras, openrouter, nvidia, lemonade, and `local`
-for `AI_LOCAL_SERVER`. OpenAI, Groq, Anthropic and Bedrock are not
-implemented.
+compatible streaming APIs: cerebras, openrouter, nvidia, openai, lemonade, and `local`
+for `AI_LOCAL_SERVER`. `anthropic` is the Messages API: `provider::anthropic`
+has its own `req()` and `headers()` (the `x-api-key` header, see
+`provider_headers()`), and `ai::new_stream()` reads its events (`message_start`,
+`content_block_delta`, `message_delta` for the usage). Bedrock is not
+implemented (it needs AWS request signing and its own binary event stream).
 
 ## Tests
 
@@ -368,7 +372,7 @@ implemented.
 
 CI (`.github/workflows/tests.yml`) runs them twice on every push to `main`:
 with the Debian packages (`WWW::Curl`) and inside the image of the Dockerfile
-(Alpine, `Net::Curl`), there as a normal user.
+(Debian slim, `WWW::Curl`), there as a normal user.
 
 `TestAI::mock_http` scripts the main agent (`utils::http`),
 `TestAI::mock_agent_http` answers the sub-agents (`loop::http`).
@@ -376,7 +380,7 @@ with the Debian packages (`WWW::Curl`) and inside the image of the Dockerfile
 ## Known gaps
 
 See TODO.md. The proxies and the SearXNG search have only been tested with a
-mocked HTTP layer, never against a real proxy or instance. The bigger ones: `Net::Curl` is the preferred curl module but the
-tests have only run with `WWW::Curl` since the event loop exists; no tool
+mocked HTTP layer, never against a real proxy or instance. The bigger ones: `Net::Curl` is the preferred curl module, but the
+tests have only run with `WWW::Curl` since the event loop exists, the image included; no tool
 confirmation or allow-list (by choice);
 the privilege drop itself (as root) is not covered by a test, only the plan.

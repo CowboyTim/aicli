@@ -92,8 +92,8 @@ cd <repository-directory>
 ### Direct Installation
 1. Ensure you have Perl and required dependencies installed:
    ```bash
-   # On Alpine/Debian-based systems:
-   apk add perl perl-json perl-lwp-protocol-https perl-term-readline-gnu perl-json-xs perl-net-curl
+   # On Debian-based systems:
+   apt-get install perl libjson-xs-perl libnet-curl-perl libterm-readline-gnu-perl
    # or
    apt-get install perl libjson-perl libwww-perl libterm-readline-gnu-perl libjson-xs-perl libnet-curl-perl
    ```
@@ -156,7 +156,7 @@ Configuration is primarily done through environment variables:
 
 - `ai.pl` - Main application logic
 - `aicli.sh` - Docker wrapper script with volume/device forwarding
-- `Dockerfile` - Alpine-based container image build instructions
+- `Dockerfile` - Debian slim based container image build instructions
 - `ai/` - System prompt templates (coder, default)
 - `t/` - Test suite
 - `TODO.md` - Roadmap of planned enhancements

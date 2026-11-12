@@ -45,6 +45,14 @@ our %PROVIDERS = (
         url   => 'http://localhost:8000',
         local => 1, # no API key needed
     },
+    'openai' => {
+        url => 'https://api.openai.com',
+        key_prefix => 'sk-',
+    },
+    'anthropic' => {
+        url => 'https://api.anthropic.com', # its own message format, see provider::anthropic
+        key_prefix => 'sk-ant-',
+    },
 );
 
 # tool processes never get to see the API key
@@ -106,7 +114,8 @@ sub chat_setup {
         # Detect provider by key prefix
         my $detected_provider;
         if (length($api_key // '')) {
-            for my $name (sort keys %PROVIDERS) {
+            # the longest prefix first: 'sk-ant-' and 'sk-or-' before 'sk-'
+            for my $name (sort {length($PROVIDERS{$b}{key_prefix} // '') <=> length($PROVIDERS{$a}{key_prefix} // '') || $a cmp $b} keys %PROVIDERS) {
                 next unless $PROVIDERS{$name}{key_prefix};
                 if (index($api_key, $PROVIDERS{$name}{key_prefix}) == 0) {
                     $detected_provider = $name;
@@ -142,6 +151,7 @@ sub chat_setup {
     # AI_RAW point for e.g. non-jinja
     $AI_URL = "$AI_ENDPOINT_URL/v1/chat/completions";
     $AI_URL = "$AI_ENDPOINT_URL/v1/completions" if $::ORIG_ENV{AI_RAW};
+    $AI_URL = "$AI_ENDPOINT_URL/v1/messages" if $AI_PROVIDER eq 'anthropic';
 
     set_workspace($::ORIG_ENV{AI_WORKSPACE});
     tidy_sessions($AI_SESSION);
@@ -614,6 +624,34 @@ sub new_stream {
         my ($decoded) = @_;
         return unless ref($decoded) eq 'HASH';
         $st->{events}++;
+        # Anthropic Messages API events: the usage comes in two of them, as
+        # input and output tokens, kept in the shape of the other APIs
+        my $type = $decoded->{type} // '';
+        if($type eq 'message_start' or $type eq 'message_delta' or $type eq 'content_block_delta'
+            or $type eq 'message_stop' or $type eq 'content_block_start' or $type eq 'ping'){
+            my $u = ref($decoded->{message}) eq 'HASH' ? $decoded->{message}{usage} : $decoded->{usage};
+            if(ref($u) eq 'HASH'){
+                my $cached = $u->{cache_read_input_tokens} // 0;
+                $st->{anth_in}  = ($u->{input_tokens} // $st->{anth_in} // 0) + $cached + ($u->{cache_creation_input_tokens} // 0)
+                    if defined $u->{input_tokens};
+                $st->{anth_cached} = $cached if defined $u->{cache_read_input_tokens};
+                $st->{anth_out} = $u->{output_tokens} if defined $u->{output_tokens};
+                my ($in, $out) = ($st->{anth_in} // 0, $st->{anth_out} // 0);
+                $st->{usage} = {prompt_tokens => $in, completion_tokens => $out, total_tokens => $in + $out,
+                    prompt_tokens_details => {cached_tokens => $st->{anth_cached} // 0}};
+            }
+            if($type eq 'content_block_delta'){
+                my $d = $decoded->{delta} // {};
+                if(($d->{type} // '') eq 'thinking_delta' and defined $d->{thinking} and length $d->{thinking}){
+                    $st->{reasoning} .= $d->{thinking};
+                    &{$emit}('think', $d->{thinking});
+                } elsif(defined $d->{text} and length $d->{text}){
+                    &{$content}($d->{text});
+                }
+            }
+            $st->{done} = 1 if $type eq 'message_stop';
+            return;
+        }
         $st->{usage} = $decoded->{usage} if ref($decoded->{usage}) eq 'HASH';
         $st->{timings} = $decoded->{timings} if ref($decoded->{timings}) eq 'HASH';
         if(my $e = $decoded->{error}){
@@ -825,6 +863,18 @@ sub clip_lines {
 }
 
 # one line that says what a tool call is about: its first argument
+# what a sub-agent does, as it does it: one line above the status (AI_AGENT_VIEW=0 hides it)
+sub agent_view {
+    my ($who, $text) = @_;
+    return unless $::ORIG_ENV{AI_AGENT_VIEW} // 1;
+    $TUI->clear();
+    $text =~ s/\s+/ /g;
+    my $max = $TUI->width() - 2;
+    $text = substr($text, 0, $max - 1).'...' if $max > 4 and length($text) > $max;
+    print "${colors::blue_color3}\x{e2}\x{97}\x{8b} $who: $text${colors::reset_color}\n";
+    return;
+}
+
 sub tool_summary {
     my ($c) = @_;
     my @lines = grep {m/\S/} split m/\n/, ($c->{args} // [])->[0] // '';
@@ -1058,7 +1108,7 @@ sub request_completion {
         return 0 if utils::aborted(); # stops the transfer
         &{$st->{feed}}($raw);
         return length($raw);
-    });
+    }, provider_headers($api_key));
     $TUI->info(live => undef);
     $TUI->unset('model');
     &{$st->{finish}}();
@@ -1071,6 +1121,13 @@ sub request_completion {
     my ($err, $c) = completion_result($st, !defined $r, $utils::http_error, $utils::http_code, \%utils::http_headers);
     $info->{$_} = $c->{$_} for keys %$c;
     return ($st->{content}, $err, $info);
+}
+
+# headers of the API request for this provider, undef for the usual ones
+sub provider_headers {
+    my ($key) = @_;
+    my $fn = "provider::$AI_PROVIDER"->can("headers") // provider->can("headers");
+    return &{$fn}($key);
 }
 
 # the JSON body of a completion request for these messages, undef when the
@@ -1891,7 +1948,7 @@ sub switch_model {
 
 # the model list of the API, undef when it can't be fetched
 sub fetch_models {
-    my $response = eval {utils::http("get", "$AI_ENDPOINT_URL/v1/models", undef, $api_key)};
+    my $response = eval {utils::http("get", "$AI_ENDPOINT_URL/v1/models", undef, $api_key, undef, provider_headers($api_key))};
     return unless $response;
     my $resp = eval {JSON::XS::decode_json($response)};
     my @models;
@@ -2491,20 +2548,23 @@ sub get_chat_prompt {
     my ($f) = @_;
     # https://jafrog.com/2013/11/23/colors-in-terminal.html
     # https://ss64.com/bash/syntax-colors.html
-    my $prompt_term1  =
-            $::ORIG_ENV{AI_PS1}
+    # with the footer on, it shows the session and the model: the prompt is short
+    my $prompt_term1  = ($TUI and $TUI->bar())
+        ? ($::ORIG_ENV{AI_PS1}
+        //   $colors::reset_color.$colors::blue_color3.tui::glyph(q(arrow)).' '.$colors::reset_color)
+        : ($::ORIG_ENV{AI_PS1}
         //   $colors::reset_color
             .$colors::blue_color3
-            .'❲$AI_SESSION'.($SESSION_MODEL?'\[$SESSION_MODEL\]':'').'❳ ► '
-            .$colors::reset_color;
+            .tui::glyph(q(open)).'$AI_SESSION'.($SESSION_MODEL?'\[$SESSION_MODEL\]':'').tui::glyph(q(close)).' '.tui::glyph(q(arrow)).' '
+            .$colors::reset_color);
     my $prompt_term2  =
             $::ORIG_ENV{AI_PS2}
         //   $colors::reset_color
             .$colors::blue_color3
-            .'│ '
+            .tui::glyph(q(bar)).' '
             .$colors::reset_color;
-    my $ps1 = eval 'return "'.$prompt_term1.'"' || '► ';
-    my $ps2 = eval 'return "'.$prompt_term2.'"' || '│ ';
+    my $ps1 = eval 'return "'.$prompt_term1.'"' || tui::glyph(q(arrow)).' ';
+    my $ps2 = eval 'return "'.$prompt_term2.'"' || tui::glyph(q(bar)).' ';
     return $ps2 if $f;
     return $ps1;
 }
@@ -2721,6 +2781,7 @@ sub new {
 sub launch {
     my ($task) = @_;
     my $self = agent->new($task);
+    ai::agent_view("agent $self->{id}", "started: ".($task // ""));
     $ai::TUI->set("agent $self->{id}", sub {$self->status()});
     my $max = $::ORIG_ENV{AI_MAX_AGENTS} // 4;
     if($max and keys(%RUNNING) >= $max){
@@ -2887,6 +2948,7 @@ sub next_tool {
         }
         $self->{activity} = $c->{k};
         $self->{tools}++;
+        ai::agent_view("agent $self->{id}", ai::tool_summary($c));
         # in-process tools answer at once, forked ones later from the loop
         my ($in_call, $answered) = (1, 0);
         ai::execute_tool_async($c->{k}, $c->{tool}, $c->{args}, sub {
@@ -2958,6 +3020,12 @@ package provider;
 use strict; use warnings;
 
 *raw = *model::transform;
+
+# request headers for the API when they are not the usual ones (undef: use
+# the default, Authorization with the key)
+sub headers {
+    return;
+}
 
 sub req {
     my (@jstr) = @_;
@@ -3035,6 +3103,76 @@ use base qw(provider);
 *req = *provider::req;
 *raw = *provider::raw;
 
+
+package provider::openai;
+
+use strict; use warnings;
+use base qw(provider);
+
+*raw = *provider::raw;
+
+# the newer models want max_completion_tokens, take no top_k/min_p, and only
+# the default temperature and top_p unless AI_TEMPERATURE/AI_TOP_P say otherwise
+sub req {
+    my (@jstr) = @_;
+    my $req = provider::req(@jstr);
+    $req->{max_completion_tokens} = delete $req->{max_tokens};
+    delete $req->{$_} for qw(top_k min_p);
+    delete $req->{temperature} unless defined $::ORIG_ENV{AI_TEMPERATURE};
+    delete $req->{top_p} unless defined $::ORIG_ENV{AI_TOP_P};
+    return $req;
+}
+
+package provider::anthropic;
+
+use strict; use warnings;
+use base qw(provider);
+
+# Messages API: the system prompt is a field of its own, the answer streams as
+# content_block_delta events (see ai::new_stream). Its tools are not used:
+# the tool calls are written in the text, as with every other provider.
+sub headers {
+    my ($key) = @_;
+    return [
+        "Accept: application/json",
+        "Content-Type: application/json",
+        "User-Agent: AI Chat/0.1",
+        "x-api-key: $key",
+        "anthropic-version: 2023-06-01",
+    ];
+}
+
+sub req {
+    my (@msgs) = @_;
+    my (@system, @chat);
+    for my $m (@msgs) {
+        if($m->{role} eq 'system'){
+            push @system, $m->{content};
+            next;
+        }
+        # the API wants alternating roles: consecutive ones are joined
+        if(@chat and $chat[-1]{role} eq $m->{role}){
+            $chat[-1]{content} .= "\n\n".$m->{content};
+        } else {
+            push @chat, {role => $m->{role}, content => $m->{content}};
+        }
+    }
+    my $req = {
+        model       => $SESSION_MODEL || $::ORIG_ENV{AI_MODEL} || 'claude-sonnet-5-5',
+        max_tokens  => $::ORIG_ENV{AI_TOKENS} // 8192, # required by the API
+        temperature => $::ORIG_ENV{AI_TEMPERATURE} // 0.6,
+        top_k       => $::ORIG_ENV{AI_TOP_K} // 20,
+        stream      => $Types::Serialiser::true,
+        messages    => \@chat,
+    };
+    $req->{system} = join("\n\n", @system) if @system;
+    return $req;
+}
+
+# no raw completion for this API: build_request() gives its error
+sub raw {
+    return;
+}
 
 package provider::local;
 

@@ -10,7 +10,7 @@ use JSON::XS ();
 our $ROOT = "$FindBin::Bin/..";
 our $TMP;
 our $CAPTURES = 0;
-our @REQUESTS;   # what was "sent": {method, url, data, key}
+our @REQUESTS;   # what was "sent": {method, url, data, key, headers}
 our @SCRIPT;     # what the "LLM" answers, one entry per request
 
 # fresh base dir + session, ai.pm set up like ai.pl does
@@ -96,8 +96,8 @@ sub mock_http {
     @SCRIPT   = @_;
     no warnings 'redefine';
     *utils::http = sub {
-        my ($m, $url, $data, $key, $cb) = @_;
-        my $req = {method => $m, url => $url, data => $data, key => $key};
+        my ($m, $url, $data, $key, $cb, $headers) = @_;
+        my $req = {method => $m, url => $url, data => $data, key => $key, headers => $headers};
         push @REQUESTS, $req;
         $utils::http_error = undef;
         $utils::http_code  = 200;

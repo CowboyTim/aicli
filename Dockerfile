@@ -1,35 +1,23 @@
-FROM alpine
-# ai.pl dependencies
-RUN apk add --no-cache perl perl-json perl-lwp-protocol-https perl-term-readline-gnu perl-json-xs
-RUN apk add --no-cache perl-net-curl --repository=https://dl-cdn.alpinelinux.org/alpine/edge/testing
+FROM debian:trixie-slim
+ENV DEBIAN_FRONTEND=noninteractive
 
-# AI basic tool usage
-RUN apk add --no-cache bash
+# ai.pl dependencies: Perl, the JSON and readline modules, WWW::Curl for the HTTP
+# requests, and the CA certificates for the HTTPS APIs
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        perl libjson-xs-perl libwww-curl-perl libterm-readline-gnu-perl libdata-uuid-perl \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
-# some tools
-RUN apk add --no-cache ripgrep
-RUN apk add --no-cache busybox
-RUN apk add --no-cache grep
-RUN apk add --no-cache findutils
-RUN apk add --no-cache coreutils
-RUN apk add --no-cache git
-RUN apk add --no-cache openssh-client-common openssh-keygen openssh
-RUN apk add --no-cache openssl
-
-# dev stuff
-RUN apk add --no-cache lua lua5.3 luajit-dev luajit lua5.3-stdlib lua5.3-posix lua5.3-socket luarocks5.3 luarocks
-RUN apk add --no-cache python3 python3-dev
-RUN apk add --no-cache curl
-RUN apk add --no-cache socat
-RUN apk add --no-cache wget
-RUN apk add --no-cache perl-dev
-RUN apk add --no-cache gcc make gcc-avr libgcc build-base musl-dev clang
-RUN apk add --no-cache openssl-dev
-RUN apk add --no-cache nasm
-RUN apk add --no-cache diffutils patch
-
-# debug
-RUN apk add --no-cache strace
+# tools the model may use
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        bash ripgrep grep findutils coreutils diffutils patch \
+        git openssh-client openssl \
+        curl wget socat \
+        python3 python3-dev \
+        lua5.4 luarocks \
+        build-essential clang libssl-dev libperl-dev \
+        strace \
+    && rm -rf /var/lib/apt/lists/*
 
 # ai.pl
 COPY *.pm *.pl /

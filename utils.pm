@@ -26,7 +26,7 @@ our ($http_error, $http_code, %http_headers);
 # streamed to it. The request runs in the event loop (package loop), so
 # everything else that is in there keeps going.
 sub http {
-    my ($m, $full_url, $data, $api_key, $read_handle_sub) = @_;
+    my ($m, $full_url, $data, $api_key, $read_handle_sub, $headers) = @_;
     $data //= "";
     log::info("RSUB: ".((defined $read_handle_sub and ref($read_handle_sub) eq 'CODE')?1:0));
     log::info("URL: $full_url");
@@ -41,6 +41,7 @@ sub http {
         url     => $full_url,
         data    => $data,
         api_key => $api_key,
+        ($headers ? (headers => $headers) : ()),
         on_data => $read_handle_sub,
         on_done => sub {$done = 1},
     );
@@ -123,30 +124,43 @@ sub wait_abortable {
 }
 
 package curl;
+# The easy handles of one curl family: Net::Curl (preferred) or WWW::Curl.
+# The multi handle (utils::_multi) comes from the same family. When neither
+# loads, the start stops with the errors of both, not with a missing method
+# later on.
 
 use strict; use warnings;
 
+our $FAMILY; # 'Net::Curl' or 'WWW::Curl'
+our @LOAD_ERRORS;
+
 BEGIN {
-    die $@ if $@;
-    eval {
-        utils::load_cpan("Net::Curl");
-    };
-    eval {
-        utils::load_cpan("Net::Curl::Easy");
-        *AUTOLOAD = *Net::Curl::Easy::AUTOLOAD;
-        utils::load_cpan("Net::Curl::Multi");
-    };
-    eval {
-        utils::load_cpan("WWW::Curl::Easy");
-        *AUTOLOAD = *WWW::Curl::Easy::AUTOLOAD;
-        utils::load_cpan("WWW::Curl::Multi");
-    };
-    our @ISA = qw(Net::Curl::Easy WWW::Curl::Easy);
-    foreach my $k (keys %Net::Curl::Easy::){
-        next unless $k =~ /^CURL/; # Only grab curl constants/options
-        no strict 'refs';
-        *{"${k}"} = \&{"Net::Curl::Easy::${k}"};
+    for my $family (qw(Net::Curl WWW::Curl)) {
+        my $ok = eval {
+            utils::load_cpan("${family}::Easy");
+            utils::load_cpan("${family}::Multi");
+            1;
+        };
+        if($ok){
+            $FAMILY = $family;
+            last;
+        }
+        (my $err = $@ // 'unknown error') =~ s/\s+\z//;
+        push @LOAD_ERRORS, "$family: $err";
     }
+    die "no curl module can be loaded (".join("; ", @LOAD_ERRORS).")\n" unless $FAMILY;
+    no strict 'refs';
+    *AUTOLOAD = *{"${FAMILY}::Easy::AUTOLOAD"};
+    foreach my $k (keys %{"${FAMILY}::Easy::"}){
+        next unless $k =~ /^CURL/ and defined &{"${FAMILY}::Easy::${k}"}; # curl constants/options, the subs
+        *{"curl::${k}"} = \&{"${FAMILY}::Easy::${k}"};
+    }
+}
+
+# a new easy handle, of the family that loaded
+sub new {
+    my ($class, @args) = @_;
+    return "${FAMILY}::Easy"->new(@args);
 }
 
 
@@ -391,8 +405,9 @@ our $on_idle;           # called when run() returns
 
 sub _multi {
     return $multi if $multi;
-    $net   = Net::Curl::Multi->can('new') ? 1 : 0;
-    $multi = eval {($net ? 'Net::Curl::Multi' : 'WWW::Curl::Multi')->new()};
+    # the same family as the easy handles (curl::FAMILY)
+    $net   = $curl::FAMILY eq 'Net::Curl' ? 1 : 0;
+    $multi = eval {"${curl::FAMILY}::Multi"->new()};
     return $multi;
 }
 

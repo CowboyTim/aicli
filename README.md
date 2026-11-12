@@ -40,8 +40,8 @@ framework.
   summarized before the conversation outgrows the context window
 - **Text based tool protocol**: no function-calling API needed, so it works
   with any model, also on raw completion endpoints
-- **Providers**: Cerebras, OpenRouter, NVIDIA, Lemonade, and any OpenAI
-  compatible local server (llama.cpp, ...)
+- **Providers**: Cerebras, OpenRouter, NVIDIA, OpenAI, Anthropic, Lemonade, and
+  any OpenAI compatible local server (llama.cpp, ...)
 - **Sessions**: every conversation is a directory with its history, system
   prompt, model and usage; `-c` continues the last one of the current
   directory
@@ -76,8 +76,6 @@ mounted project keep their owner; it never runs as root.
 ### Direct
 
 ```bash
-# Alpine
-apk add perl perl-json-xs perl-net-curl perl-term-readline-gnu bash grep
 # Debian/Ubuntu
 apt-get install perl libjson-xs-perl libwww-curl-perl libterm-readline-gnu-perl
 
@@ -112,12 +110,12 @@ Without `-p`, piped stdin is read as one request per line.
 
 ### Perl modules
 
-| Module | Needed for | Alpine | Debian/Ubuntu |
-|--------|------------|--------|---------------|
-| `JSON::XS` | everything | `perl-json-xs` | `libjson-xs-perl` |
-| `Net::Curl` or `WWW::Curl` | HTTP, streaming | `perl-net-curl` | `libwww-curl-perl` |
-| `Term::ReadLine::Gnu` | interactive input | `perl-term-readline-gnu` | `libterm-readline-gnu-perl` |
-| `Data::UUID` | optional: session ids | `perl-data-uuid` | `libdata-uuid-perl` |
+| Module | Needed for | Debian/Ubuntu |
+|--------|------------|---------------|
+| `JSON::XS` | everything | `libjson-xs-perl` |
+| `Net::Curl` or `WWW::Curl` | HTTP, streaming | `libwww-curl-perl` or `libnet-curl-perl` |
+| `Term::ReadLine::Gnu` | interactive input | `libterm-readline-gnu-perl` |
+| `Data::UUID` | optional: session ids | `libdata-uuid-perl` |
 
 Everything else is core Perl (`Safe`, `POSIX`, `File::Temp`, `Time::HiRes`,
 `Getopt::Long`, `Pod::Usage`; `Test::More` for the tests). To build the XS
@@ -424,7 +422,7 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `AI_API_KEY` | API key | required, except for local servers |
-| `AI_PROVIDER` | `cerebras`, `openrouter`, `nvidia`, `lemonade` | detected from the key prefix |
+| `AI_PROVIDER` | `cerebras`, `openrouter`, `nvidia`, `openai`, `anthropic`, `lemonade` | detected from the key prefix |
 | `AI_LOCAL_SERVER` | URL of an OpenAI compatible server, instead of a provider | |
 | `AI_MODEL` | model for sessions without their own | provider-dependent |
 | `AI_SESSION` | session name | new `session-<uuid>` |
@@ -436,6 +434,7 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 | `AI_TEMPERATURE`, `AI_TOP_P`, `AI_TOP_K`, `AI_MIN_P` | sampling | 0.6, 0.95, 20, 0.0 |
 | `AI_MAX_TURNS` | max requests per input (tool loop), 0 = no limit | 50 |
 | `AI_MAX_AGENTS` | sub-agents working at the same time | 4 |
+| `AI_AGENT_VIEW` | 0: no line per sub-agent start and tool call | 1 |
 | `AI_AGENT_MODEL` | model for sub-agents | the session model |
 | `AI_RETRIES` | retries of a failed request | 4 |
 | `AI_RETRY_DELAY` | first backoff delay in seconds, doubles every retry | 2 |
@@ -501,8 +500,8 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 prove -I. t
 ```
 
-CI runs them on every push, with the Debian packages and inside the Alpine
-image. The LLM is scripted in the tests. `t/45_http_e2e.t` runs the real HTTP code
+CI runs them on every push, with the Debian packages and inside the Debian
+slim image. The LLM is scripted in the tests. `t/45_http_e2e.t` runs the real HTTP code
 against a small fake server (and `ai.pl` itself as a process), it is skipped
 without a curl module.
 

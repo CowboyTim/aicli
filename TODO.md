@@ -162,14 +162,13 @@ This file outlines potential improvements and features for the AI coding agent (
     - Consider using a lightweight database for session storage.
 
 ## Open, found while fixing the agent loop
-- Look at the first CI runs (`.github/workflows/tests.yml`): the Alpine job is the first time the tests run with `Net::Curl` since the event loop exists.
-- Sub-agents: a way to look at what one is doing while it runs.
+- Look at the first CI runs (`.github/workflows/tests.yml`): the image job is the first time the tests run with `Net::Curl` since the event loop exists.
 - More panes than the footer (files, tool output side by side) on top of `tui.pm`, if ever. The footer itself is done; no curses (no CPAN dependency).
 - Tool confirmation / allow-list: not wanted for now, the container is the sandbox.
 - Run the docker wrapper as a user other than 1000 once: the privilege drop now follows `UID`/`GID` (`AI_UID`, `AI_GID`, `AI_GROUPS`), only the plan is tested.
 - A native tool to find files by name (the model uses bash for that now).
 - Try `AI_PROXY`, `AI_WEB_PROXY` and the `search` tool against a real proxy and SearXNG instance: only tested with a mocked HTTP layer.
-- Providers named in older docs but not implemented: OpenAI, Groq, Anthropic, Bedrock.
+- Providers not implemented: Bedrock (needs AWS signing and a binary event stream).
 - The readline prompt (`ai.pm`, `prompt_term1`/`prompt_term2`) still uses `►`, `❲`, `❳` and `│` regardless of `AI_GLYPHS`; those are ambiguous-width too.
 - Footer checked in tmux 3.4 only; kitty and other terminals not run yet (the escapes are standard, the emoji and wide-character widths may differ per terminal).
 
@@ -209,7 +208,9 @@ This file outlines potential improvements and features for the AI coding agent (
 - [x] MEMORY.md merged into AGENTS.md ("Status"), work happens on `main`
 - [x] Ctrl-C with piped input stops the turn, not the program
 - [x] Sub-agents: context management of their own, tokens in the status line
+- [x] Sub-agents: a line per start and tool call while they run (`AI_AGENT_VIEW`)
+- [x] Image on Debian slim (was Alpine), the bake file, the curl shim names the real load error, the prompt is short with the footer
 - [x] `/session delete` of the current session, `/session reset`, `/session rename <new>`
 - [x] Sessions don't pile up: empty made-up sessions go at exit (and at the next start after a crash), `/session prune`, `AI_SESSION_KEEP_DAYS`, age and first message in `/session list`
-- [x] CI: the tests on Debian packages (WWW::Curl) and in the Alpine image (Net::Curl)
+- [x] CI: the tests on Debian packages (WWW::Curl) and in the Debian image (Net::Curl)
 - [x] The input history is per session, also after `/session switch`

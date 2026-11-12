@@ -101,7 +101,9 @@ my ($Y, $G, $R) = ($colors::yellow_color1, $colors::green_color, $colors::reset_
     my ($pb) = $msgs[4]{content} =~ m/B-done by (\d+)/;
     isnt($pa, $pb, "agents: each ran its own bash");
     ok($took >= 2 && $took < 3.7, "agents: 2 x 2s of work in ".sprintf("%.1fs", $took).", so side by side");
-    unlike($out, qr/on it|sleep 2/, "agents: their thinking and tool calls are not printed");
+    unlike($out, qr/on it/, "agents: their thinking is not printed");
+    like($out, qr/agent 1: started: sleep-task A/, "agents: live view, the start of each");
+    like($out, qr/agent 2: sleep 2; echo/, "agents: live view, their tool calls as they run");
     my @transcripts = glob("$tmp/aicli/sessions/test/agents/*.chat");
     is(scalar(@transcripts), 2, "agents: transcripts saved");
     ai::handle_command("/clear");

@@ -39,6 +39,10 @@ my %GLYPH = (
         up       => chr(0x2191),         # ↑
         down     => chr(0x2193),         # ↓
         sum      => chr(0x3a3),          # Σ
+        open     => chr(0x2772),         # ❲
+        close    => chr(0x2773),         # ❳
+        arrow    => chr(0x25ba),         # ►
+        bar      => chr(0x2502),         # │
     },
     ascii => {
         spinner  => [qw(| / - \\)],
@@ -47,6 +51,10 @@ my %GLYPH = (
         up       => 'in:',
         down     => 'out:',
         sum      => 'sum:',
+        open     => "[",
+        close    => "]",
+        arrow    => ">",
+        bar      => "|",
     },
 );
 my $TIOCGWINSZ = 0x5413;            # ask the terminal for its size (Linux)
