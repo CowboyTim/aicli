@@ -32,6 +32,7 @@ sub setup {
         AI_TOOL_DISPLAY => 'full', # and the same for the brief tool display,
         AI_PROMPT_DATE  => 'none', # the date and the project file in the prompt
         AI_PROJECT_FILE => '',
+        AI_GLYPHS       => "unicode", # the status glyphs, whatever the locale of the test run
         %env,
     );
     $FindBin::Bin = $ROOT; # where ai.pm looks for the prompt templates

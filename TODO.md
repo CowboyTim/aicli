@@ -170,6 +170,8 @@ This file outlines potential improvements and features for the AI coding agent (
 - A native tool to find files by name (the model uses bash for that now).
 - Try `AI_PROXY`, `AI_WEB_PROXY` and the `search` tool against a real proxy and SearXNG instance: only tested with a mocked HTTP layer.
 - Providers named in older docs but not implemented: OpenAI, Groq, Anthropic, Bedrock.
+- The readline prompt (`ai.pm`, `prompt_term1`/`prompt_term2`) still uses `►`, `❲`, `❳` and `│` regardless of `AI_GLYPHS`; those are ambiguous-width too.
+- Footer checked in tmux 3.4 only; kitty and other terminals not run yet (the escapes are standard, the emoji and wide-character widths may differ per terminal).
 
 ## Completed Items (Reference)
 - [x] Basic interactive shell with history
@@ -194,6 +196,7 @@ This file outlines potential improvements and features for the AI coding agent (
 - [x] Sub-agents as tool call, working side by side in the event loop
 - [x] Status line (`tui.pm`)
 - [x] Status footer: two lines at the bottom of the terminal (scroll region, VT100 only), speeds, tokens, context, cache per session; `AI_STATUS=line` for one line
+- [x] Footer and terminals: columns measured (not characters), emoji shown as `?`, ASCII glyph set for non-UTF-8 locales (`AI_GLYPHS`)
 - [x] Project instructions (AGENTS.md) and a coarse date in the system prompt, request prefix stays byte-stable
 - [x] Brief tool display, diffs for file changes, `/undo`
 - [x] `-c` continues the last session of the directory, `-p` runs one request and exits with a status

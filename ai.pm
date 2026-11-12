@@ -1049,7 +1049,7 @@ sub request_completion {
         return '' unless $info->{t_first};
         my $tokens = (length($st->{content}) + length($st->{reasoning})) / $cpt;
         my $took   = Time::HiRes::time() - $info->{t_first};
-        return sprintf("%s~%s%s", chr(0x2193), fmt_k($tokens), $took > 0.5 ? sprintf(" %.0f/s", $tokens / $took) : "");
+        return sprintf("%s~%s%s", tui::glyph(q(down)), fmt_k($tokens), $took > 0.5 ? sprintf(" %.0f/s", $tokens / $took) : "");
     }) if $TUI->bar();
     my $r = utils::http("post", $AI_URL, $req, $api_key, sub {
         my ($ch, $raw) = @_;
@@ -1239,9 +1239,9 @@ sub status_info {
     $TUI->info(model   => length($SESSION_MODEL // '') ? $SESSION_MODEL : undef);
     $TUI->info(context => $limit ? sprintf("ctx %d%% of %s", 100 * ($in + $out) / $limit, fmt_k($limit))
                         : $in    ? "ctx $est".fmt_k($in + $out) : undef);
-    $TUI->info(tokens  => $in ? sprintf("%s%s%s %s%s", chr(0x2191), $est, fmt_k($in), chr(0x2193), fmt_k($out)) : undef);
+    $TUI->info(tokens  => $in ? sprintf("%s%s%s %s%s", tui::glyph(q(up)), $est, fmt_k($in), tui::glyph(q(down)), fmt_k($out)) : undef);
     $TUI->info(total   => $u->{total_tokens}
-        ? chr(0x3a3)." $est".fmt_k($u->{total_tokens}).($::ORIG_ENV{AI_TOKEN_BUDGET} ? " of ".fmt_k($::ORIG_ENV{AI_TOKEN_BUDGET}) : "")
+        ? tui::glyph(q(sum))." $est".fmt_k($u->{total_tokens}).($::ORIG_ENV{AI_TOKEN_BUDGET} ? " of ".fmt_k($::ORIG_ENV{AI_TOKEN_BUDGET}) : "")
         : undef);
     if($last{info}){
         my ($pp, $tg) = speeds($last{out} // 0, $last{info});

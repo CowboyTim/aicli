@@ -204,4 +204,44 @@ sub fresh {
     $ai::TUI->close();
 }
 
+# widths: what a column is, and a footer that never gets wider than the terminal
+{
+    is(tui::_cols("abc"), 3, "columns: ascii is one each");
+    is(tui::_cols("\x{3042}\x{3044}"), 4, "columns: hiragana are two each");
+    is(tui::_cols("e\x{301}"), 1, "columns: a combining mark takes none");
+    is(tui::_cols("\x{1F600}"), 2, "columns: an emoji is two");
+    is(tui::_text("a\x{1F600}b\x{200D}c"), "a?bc", "text: emoji shown as ?, joiners dropped");
+
+    my $tui = fresh(width => 20);
+    $tui->set(work => "\x{3042}" x 30);
+    $tui->info(model => "\x{3044}" x 30);
+    my $line = $tui->line();
+    cmp_ok(tui::_cols($line), "<=", 19, "footer: activity line cut by columns, not characters");
+    like($line, qr/\x{2026}\z/, "footer: cut lines end with the ellipsis");
+    cmp_ok(tui::_cols($tui->info_line()), "<=", 19, "footer: info line cut by columns");
+
+    {
+        local $::ORIG_ENV{AI_GLYPHS} = "ascii";
+        is(tui::glyph("sep"), " | ", "ascii: separator");
+        my $t2 = fresh(width => 60);
+        $t2->info(tokens => tui::glyph("up")."200 ".tui::glyph("down")."7");
+        $t2->info(total => tui::glyph("sum")." 207");
+        $t2->set(work => "waiting");
+        my $all = $t2->line()." / ".$t2->info_line();
+        ok($all !~ m/[^\x00-\x7f]/, "ascii: nothing outside ASCII on the footer");
+        like($t2->info_line(), qr/in:200 out:7 \| sum: 207/, "ascii: arrows and sum as words");
+    }
+    {
+        local $::ORIG_ENV{AI_GLYPHS};
+        local $::ORIG_ENV{LC_ALL};
+        local $::ORIG_ENV{LC_CTYPE};
+        local $::ORIG_ENV{LANG} = "C";
+        ok(!tui::unicode_ok(), "glyphs: a C locale gets the ASCII set");
+        $::ORIG_ENV{LANG} = "en_US.UTF-8";
+        ok(tui::unicode_ok(), "glyphs: a UTF-8 locale gets the Unicode set");
+        $::ORIG_ENV{LC_ALL} = "C";
+        ok(!tui::unicode_ok(), "glyphs: LC_ALL wins over LANG");
+    }
+}
+
 done_testing();

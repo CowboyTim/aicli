@@ -26,10 +26,79 @@ use strict; use warnings;
 
 use Time::HiRes ();
 
-my @SPINNER = map {chr} 0x280B, 0x2819, 0x2839, 0x2838, 0x283C, 0x2834, 0x2826, 0x2827, 0x2807, 0x280F;
-my $SEP      = ' '.chr(0x2502).' '; # │
-my $ELLIPSIS = chr(0x2026);         # …
+# Glyphs. Terminals differ in how wide some characters are (East Asian
+# ambiguous ones like the box line and the arrows, emoji), so the footer
+# measures what it prints and only uses these where the locale is UTF-8.
+# Otherwise (or with AI_GLYPHS=ascii) the ASCII set is used. AI_GLYPHS=unicode
+# forces the other.
+my %GLYPH = (
+    unicode => {
+        spinner  => [map {chr} 0x280B, 0x2819, 0x2839, 0x2838, 0x283C, 0x2834, 0x2826, 0x2827, 0x2807, 0x280F],
+        sep      => ' '.chr(0x2502).' ', # │
+        ellipsis => chr(0x2026),         # …
+        up       => chr(0x2191),         # ↑
+        down     => chr(0x2193),         # ↓
+        sum      => chr(0x3a3),          # Σ
+    },
+    ascii => {
+        spinner  => [qw(| / - \\)],
+        sep      => ' | ',
+        ellipsis => '...',
+        up       => 'in:',
+        down     => 'out:',
+        sum      => 'sum:',
+    },
+);
 my $TIOCGWINSZ = 0x5413;            # ask the terminal for its size (Linux)
+
+# true when the characters of the glyph set above can be shown
+sub unicode_ok {
+    my $want = lc($::ORIG_ENV{AI_GLYPHS} // '');
+    return 1 if $want eq 'unicode';
+    return 0 if $want eq 'ascii';
+    my $env = %::ORIG_ENV ? \%::ORIG_ENV : \%ENV;
+    my $loc = $env->{LC_ALL} || $env->{LC_CTYPE} || $env->{LANG} || '';
+    return $loc =~ m/utf-?8/i ? 1 : 0;
+}
+
+# one glyph of the set: glyph('sep'), glyph('spinner') is a list of frames
+sub glyph {
+    my ($name) = @_;
+    my $set = $GLYPH{unicode_ok() ? 'unicode' : 'ascii'};
+    return $set->{$name};
+}
+
+# How many columns a character takes on the screen. Zero for combining marks
+# and joiners, two for the wide East Asian ranges and emoji, one otherwise.
+sub _cw {
+    my ($o) = @_;
+    return 0 if ($o >= 0x300 && $o <= 0x36F) || ($o >= 0x200B && $o <= 0x200F)
+        || ($o >= 0xFE00 && $o <= 0xFE0F) || ($o >= 0x20D0 && $o <= 0x20FF);
+    return 2 if _emoji($o) || ($o >= 0x1100 && $o <= 0x115F) || ($o >= 0x2E80 && $o <= 0x303E)
+        || ($o >= 0x3041 && $o <= 0x33FF) || ($o >= 0x3400 && $o <= 0x4DBF)
+        || ($o >= 0x4E00 && $o <= 0x9FFF) || ($o >= 0xA000 && $o <= 0xA4CF)
+        || ($o >= 0xAC00 && $o <= 0xD7A3) || ($o >= 0xF900 && $o <= 0xFAFF)
+        || ($o >= 0xFE30 && $o <= 0xFE4F) || ($o >= 0xFF00 && $o <= 0xFF60)
+        || ($o >= 0xFFE0 && $o <= 0xFFE6) || ($o >= 0x20000 && $o <= 0x3FFFD);
+    return 1;
+}
+
+# emoji and pictographs: their width differs between terminals (text or emoji
+# presentation, joiners), so the footer shows a '?' for them
+sub _emoji {
+    my ($o) = @_;
+    return ($o >= 0x1F000 && $o <= 0x1FAFF) || ($o >= 0x2600 && $o <= 0x27BF)
+        || ($o >= 0x2B00 && $o <= 0x2BFF) || ($o >= 0x231A && $o <= 0x231B)
+        || ($o >= 0x23E9 && $o <= 0x23FA);
+}
+
+# columns of a text (characters, no escapes)
+sub _cols {
+    my ($s) = @_;
+    my $n = 0;
+    $n += _cw(ord $_) for split //, $s;
+    return $n;
+}
 
 sub new {
     my ($class, %o) = @_;
@@ -139,20 +208,38 @@ sub _elapsed {
     return sprintf(" %dm%02ds", $s / 60, $s % 60);
 }
 
+# the text of an item or info piece, as the footer can show it: one line, no
+# zero-width characters, no emoji (they are a '?')
 sub _text {
     my ($t) = @_;
     $t = $t->() if ref($t) eq 'CODE';
     $t //= '';
     utf8::decode($t) unless utf8::is_utf8($t);
     $t =~ s/\s+/ /g;
+    $t = join('', map {
+        my $o = ord $_;
+        _cw($o) == 0 ? '' : _emoji($o) ? '?' : $_;
+    } split //, $t);
     return $t;
 }
 
+# cut a line to the columns there are (one less than the width, so the
+# terminal never wraps it), with an ellipsis when something was cut
 sub _fit {
     my ($self, $line) = @_;
     my $max = $self->width() - 1;
-    $line = substr($line, 0, $max - 1).$ELLIPSIS if $max > 1 and length($line) > $max;
-    return $line;
+    return $line if _cols($line) <= $max;
+    return substr($line, 0, $max) if $max <= 1;
+    my $ellipsis = glyph('ellipsis');
+    my $room = $max - _cols($ellipsis);
+    my ($cut, $w) = ('', 0);
+    for my $c (split //, $line) {
+        my $cw = _cw(ord $c);
+        last if $w + $cw > $room;
+        $cut .= $c;
+        $w += $cw;
+    }
+    return $cut.$ellipsis;
 }
 
 # the items as one line of text (characters, no escapes), cut to the width
@@ -163,13 +250,14 @@ sub line {
         my $i = $self->{items}{$_};
         _text($i->{text})._elapsed($now - $i->{since});
     } @{$self->{order}};
-    return $self->_fit($SPINNER[$self->{frame} % @SPINNER].' '.join($SEP, @parts));
+    my $frames = glyph('spinner');
+    return $self->_fit($frames->[$self->{frame} % @$frames].' '.join(glyph('sep'), @parts));
 }
 
 # the info as one line of text
 sub info_line {
     my ($self) = @_;
-    return $self->_fit(join($SEP, grep {length} map {_text($self->{info}{$_})} @{$self->{info_order}}));
+    return $self->_fit(join(glyph('sep'), grep {length} map {_text($self->{info}{$_})} @{$self->{info_order}}));
 }
 
 #------------------------------------------------------------------------------

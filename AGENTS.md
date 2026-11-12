@@ -115,7 +115,11 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   wiped by `clear()`. Both are animated by `tick()` from `$loop::on_tick`.
   `open()`/`close()`/`resize()` handle the footer; `set_screen_size` of
   readline is set to the rows above it (`ai::fit_readline()`). Only VT100
-  escapes, no curses. `ai::status_info()` fills the info pieces.
+  escapes, no curses. `ai::status_info()` fills the info pieces. Glyphs come
+  from `tui::glyph()` (unicode or ASCII set, by `AI_GLYPHS` or the locale),
+  never a literal `chr(0x...)` in the status: `_cols()` measures columns
+  (wide characters two, combining none), `_fit()` cuts by columns, emoji are
+  `?`. Tests run with the unicode set (`TestAI::setup`).
 - **ai/** – prompt templates: `default` (chat), `coder` (adds the tools).
 - **aicli.sh**, **Dockerfile** – docker wrapper and Alpine image.
 - **t/** – tests, **TODO.md** – roadmap.

@@ -649,6 +649,14 @@ Set to 1 to show the usage line after each answer, 0 to hide it. Default:
 shown, except while the footer is on (then it is shown only with 1), because
 the footer shows the same numbers.
 
+=item B<AI_GLYPHS>
+
+C<unicode> or C<ascii>: the characters of the status (spinner, separators,
+arrows, sum). The default follows the locale: a UTF-8 locale gets unicode,
+any other gets ASCII. The footer measures what it prints in columns (wide
+East Asian characters count two, combining marks none), and shows emoji as
+C<?>, because terminals disagree on how wide they are.
+
 =item B<AI_STATUS>
 
 C<bar> (default): a two-line footer at the bottom of the terminal. Line one

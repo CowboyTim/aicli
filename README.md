@@ -445,6 +445,7 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 | `AI_USAGE` | 0: don't ask the API for token usage | 1 |
 | `AI_SHOW_USAGE` | 1 shows the usage line after each answer, 0 hides it | shown, except while the footer is on |
 | `AI_STATUS` | `bar`: footer at the bottom; `line`: one line at the cursor; 0 switches the status off | `bar` |
+| `AI_GLYPHS` | `unicode` (spinner, `│`, `…`, `↑↓`, `Σ`) or `ascii` (`\|`, `...`, `in:`, `out:`, `sum:`); default from the locale: UTF-8 gets unicode | from the locale |
 | `AI_TOOL_DISPLAY` | `brief`: a line per tool call and the start of its result; `full`: everything | `brief` |
 | `AI_TOOL_LINES` | lines of a tool result shown with `brief` | 8 |
 | `AI_SHOW_DIFF` | 0: no diff after a file change | 1 |
