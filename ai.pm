@@ -1857,7 +1857,7 @@ sub wait {
 
 sub status {
     my ($self) = @_;
-    return "agent $self->{id}: $self->{activity}".($self->{turns} ? ", turn ".($self->{turns} + 1) : "");
+    return "agent $self->{id}: $self->{activity}".($self->{turns} ? ", turn $self->{turns}" : "");
 }
 
 sub start {

@@ -130,8 +130,8 @@ Enable debug mode.
 =head1 DESCRIPTION
 
 B<ai.pl> is an interactive chat with an LLM that can act: the model can run
-tools (bash, perl, read, write, grep) and gets the results back, in a loop,
-until it has an answer. Thinking of the model is shown while it streams in, in
+tools (file tools, bash, perl, grep, sub-agents) and gets the results back, in
+a loop, until it has an answer. Thinking of the model is shown while it streams in, in
 its own color.
 
 One turn works like this: the conversation of the session is sent to the
@@ -168,6 +168,32 @@ an error, so the model can try again.
 
 =over 8
 
+=item B<read>, B<lines>, B<write>
+
+Read a file (B<lines>: with line numbers, all or a range like C<10-40>), write
+or overwrite a file.
+
+=item B<replace>
+
+Replace a piece of text in a file. The old text must be in the file exactly
+once.
+
+=item B<edit>
+
+Apply an ed script to a file: C<Na>, C<Ni>, C<N,Mc> (followed by text and a
+line with only a dot), C<N,Md>, C<N,Ms/regex/replacement/g>. An address is a
+line number, C<$> or C</regex/>. As in ed, line numbers are those after the
+previous command. Nothing is written when a command fails.
+
+=item B<delete>, B<move>, B<mkdir>, B<list>
+
+Delete a file or an empty directory, move/rename (never overwrites), create a
+directory with its parents, list a directory.
+
+=item B<grep>
+
+A forked child exec()s C<grep -rn>, without a shell.
+
 =item B<bash>
 
 The script is written to a temp file, a forked child process exec()s bash on it.
@@ -177,21 +203,47 @@ The script is written to a temp file, a forked child process exec()s bash on it.
 The code is eval()ed in a forked child process. With B<AI_PERL_SAFE> it runs
 in a L<Safe> compartment instead.
 
-=item B<read>, B<write>
+=item B<agent>
 
-Read a file, write or overwrite a file.
-
-=item B<grep>
-
-A forked child exec()s C<grep -rn>, without a shell.
+Give a task to a sub-agent, see B<SUB-AGENTS>.
 
 =back
 
+The file tools are plain perl in the chat process, they start no process.
 Forked tool processes run in their own session with stdin from /dev/null,
 stdout and stderr captured, and a minimal environment: none of the B<AI_*>
 variables (so not the API key) are passed on. They are stopped at
 B<AI_TOOL_TIMEOUT> and on ctrl-C. There is no confirmation before a tool runs:
 use the docker wrapper (B<aicli.sh>) as the sandbox.
+
+=head1 SUB-AGENTS
+
+With the B<agent> tool the model hands a self-contained task to a sub-agent:
+a second conversation with the model, with the system prompt of the session
+and all tools except B<agent>, but nothing of the conversation so far. Its
+final answer is the result of the tool call. Several B<agent> calls in one
+answer work at the same time, at most B<AI_MAX_AGENTS>.
+
+A sub-agent is neither a process nor a thread: its request is one more curl
+handle and its tools are forked children in the one select() loop of the
+program. What it thinks and does is not printed, the status line shows it. Its
+conversation is saved in the F<agents/> directory of the session.
+
+=head1 RETRIES, USAGE, CONTEXT
+
+Failed requests are retried with exponential backoff when that can help (rate
+limit, overload, server and network errors); a rate limit waits as long as the
+API asks for. See B<AI_RETRIES>, B<AI_RETRY_DELAY>, B<AI_RETRY_MAX_WAIT>.
+
+The tokens of every request are counted per session and shown after each
+answer (B<AI_SHOW_USAGE>, B</usage>). B<AI_TOKEN_BUDGET> limits what a session
+may use.
+
+When the conversation gets close to the context window of the model
+(B<AI_CONTEXT_TOKENS>, B<AI_CONTEXT_THRESHOLD>), the output of old tool calls
+is cut, and if needed the older messages are replaced by a summary written by
+the model (B<AI_CONTEXT_SUMMARY>). Removed messages are kept in F<chat.archive>.
+B</compact> does this on demand.
 
 =head1 COMMANDS
 
@@ -222,6 +274,15 @@ Enable or disable debug mode.
 =item B</tools>
 
 List the tools the model can call.
+
+=item B</usage> [reset]
+
+Show the token usage and the context size of the session, C<reset> starts
+counting again.
+
+=item B</compact>
+
+Summarize the older messages now, to free context.
 
 =item B</system> <text>
 
@@ -372,6 +433,60 @@ servers without a chat template). Only known for qwen models.
 Maximum number of requests for one user input (tool loop). Default: 50, 0 for
 no limit.
 
+=item B<AI_MAX_AGENTS>
+
+Number of sub-agents that work at the same time. Default: 4
+
+=item B<AI_AGENT_MODEL>
+
+Model for the sub-agents. Default: the model of the session.
+
+=item B<AI_RETRIES>
+
+How often a failed request is tried again. Default: 4, 0 for never.
+
+=item B<AI_RETRY_DELAY>
+
+Seconds before the first retry, doubled for every further one (with jitter,
+at most 60). Default: 2
+
+=item B<AI_RETRY_MAX_WAIT>
+
+The longest wait in seconds that a rate limit may ask for, a longer one is an
+error. Default: 120
+
+=item B<AI_CONTEXT_TOKENS>
+
+Context window of the model in tokens, 0 for no context management. Default:
+what the API reports (model list, or F</props> of a llama.cpp server); when
+unknown, the conversation is compacted when the API refuses it as too long.
+
+=item B<AI_CONTEXT_THRESHOLD>
+
+Part of the context window that may be used before compacting. Default: 0.8
+
+=item B<AI_CONTEXT_SUMMARY>
+
+Set to 0 to drop old messages instead of having the model summarize them.
+
+=item B<AI_TOKEN_BUDGET>
+
+Maximum number of tokens (prompt + completion, all requests) a session may
+use. Default: no limit.
+
+=item B<AI_USAGE>
+
+Set to 0 to not ask the API for token usage (C<stream_options>), for servers
+that refuse it. Usage is estimated then.
+
+=item B<AI_SHOW_USAGE>
+
+Set to 0 to hide the usage line after each answer. Default: 1
+
+=item B<AI_STATUS>
+
+Set to 0 to switch the status line off. Default: 1
+
 =item B<AI_SHOW_THINKING>
 
 Set to 0 to hide the thinking of the model. Default: 1
@@ -437,8 +552,9 @@ Readline init file.
 =item F<~/.aicli/sessions/E<lt>nameE<gt>/>
 
 One directory per session: C<chat> (the conversation, one JSON message per
-line), C<prompt> and C<template> (system prompt), C<model>, C<history> (input
-history).
+line), C<chat.archive> (messages removed by context management), C<prompt> and
+C<template> (system prompt), C<model>, C<usage> (token counters), C<history>
+(input history), C<agents/> (conversations of sub-agents).
 
 =back
 

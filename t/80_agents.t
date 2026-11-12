@@ -240,7 +240,7 @@ sub run_calls {
     run_calls($agent->("a").$agent->("b"));
     my $s = $screen->();
     like($s, qr/agent \d+: waiting for model \x{2502} agent \d+: waiting for model/, "status: both agents, waiting");
-    like($s, qr/agent \d+: bash, turn 2/, "status: what an agent is doing");
+    like($s, qr/agent \d+: bash, turn 1/, "status: what an agent is doing");
     like($s, qr/\r\e\[2K\z/, "status: wiped when the agents are done");
     is(scalar(@{$ai::TUI->{order}}), 0, "status: no item left");
     unlike($s, qr/\n/, "status: never a newline, it stays on one line");

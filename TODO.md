@@ -162,9 +162,10 @@ This file outlines potential improvements and features for the AI coding agent (
     - Consider using a lightweight database for session storage.
 
 ## Open, found while fixing the agent loop
-- Tool confirmation / allow-list before a tool runs (today: the container is the sandbox).
-- An edit/patch tool, so the model does not rewrite whole files.
-- Retry with backoff on API errors and rate limits.
+- Run the tests with `Net::Curl` (Alpine image): since the event loop exists they only ran with `WWW::Curl`.
+- Sub-agents: context management of their own, a way to look at what one is doing while it runs.
+- Status line: token counts per agent, a real multi-pane TUI on top of `tui.pm`.
+- Tool confirmation / allow-list: not wanted for now, the container is the sandbox.
 - `ai.pl` drops privileges to a fixed uid/gid 1000, the `UID` passed by `aicli.sh` is not used.
 - Every start without `AI_SESSION` creates a new `session-<uuid>` directory, they are never cleaned up.
 - Providers named in older docs but not implemented: OpenAI, Groq, Anthropic, Bedrock.
@@ -185,3 +186,10 @@ This file outlines potential improvements and features for the AI coding agent (
 - [x] Slash commands from one table (execution, `/help`, completion), never sent to the model
 - [x] HTTP through curl multi + `select()`, errors never kill the chat
 - [x] Tests: agent loop with a scripted LLM, end-to-end against a fake server, commands, tools
+- [x] Retry with backoff, rate limits honour Retry-After / x-ratelimit-reset
+- [x] Token usage per session, usage line, `/usage`, `AI_TOKEN_BUDGET`
+- [x] Context management: old tool output cut, older messages summarized, `/compact`
+- [x] File tools in plain perl: lines, replace, edit (ed script), delete, move, mkdir, list
+- [x] One select() event loop for HTTP, tool processes and timers (`package loop`)
+- [x] Sub-agents as tool call, working side by side in the event loop
+- [x] Status line (`tui.pm`)

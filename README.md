@@ -12,14 +12,27 @@ framework.
   executed, the results go back to the model, until it is done
 - **Thinking is shown**: reasoning (`reasoning_content`/`reasoning` deltas and
   `<think>` blocks) streams in its own color, and is not kept in the history
-- **Tools the Perl way**: bash and grep are `exec()`ed in a forked child, perl
-  code is `eval`ed in a forked child (optionally in a `Safe` compartment)
+- **Tools the Perl way**: file tools (read, write, numbered lines, exact
+  replace, ed-style edit, delete, move, mkdir, list) are plain Perl in the
+  process; bash and grep are `exec()`ed in a forked child, perl code is
+  `eval`ed in a forked child (optionally in a `Safe` compartment)
+- **Sub-agents**: the model can hand tasks to sub-agents that work side by
+  side. No threads, no process per agent: every request is a curl handle and
+  every tool a child in one `select()` loop
+- **Status line**: what the model, a tool or each sub-agent is doing, and for
+  how long, drawn from that same loop
+- **Resilient**: retry with exponential backoff, rate limits wait what the API
+  says, ctrl-C stops the running turn and nothing else
+- **Token usage**: counted per session, shown after each answer, with an
+  optional budget
+- **Context management**: old tool output is cut and older messages are
+  summarized before the conversation outgrows the context window
 - **Text based tool protocol**: no function-calling API needed, so it works
   with any model, also on raw completion endpoints
 - **Providers**: Cerebras, OpenRouter, NVIDIA, Lemonade, and any OpenAI
   compatible local server (llama.cpp, ...)
 - **Sessions**: every conversation is a directory with its history, system
-  prompt and model
+  prompt, model and usage
 - **Slash commands** with TAB completion, multi-line input, readline history
 - **Docker wrapper** to keep what the model does inside a container
 
@@ -46,7 +59,7 @@ server on an AMD ROCm machine: adjust it (`AI_LOCAL_SERVER`, `AI_MODEL`, the
 # Alpine
 apk add perl perl-json-xs perl-net-curl perl-term-readline-gnu bash grep
 # Debian/Ubuntu
-apt-get install perl libjson-xs-perl libnet-curl-perl libterm-readline-gnu-perl
+apt-get install perl libjson-xs-perl libwww-curl-perl libterm-readline-gnu-perl
 
 export AI_API_KEY="csk-..."            # provider detected from the key
 export AI_PROMPT_TEMPLATE=coder        # the prompt with the tools
@@ -70,7 +83,7 @@ echo "which files here are bigger than 1MB?" | AI_SESSION=demo perl ai.pl
 | Module | Needed for | Alpine | Debian/Ubuntu |
 |--------|------------|--------|---------------|
 | `JSON::XS` | everything | `perl-json-xs` | `libjson-xs-perl` |
-| `Net::Curl` (or `WWW::Curl`) | HTTP, streaming | `perl-net-curl` | `libnet-curl-perl` |
+| `Net::Curl` or `WWW::Curl` | HTTP, streaming | `perl-net-curl` | `libwww-curl-perl` |
 | `Term::ReadLine::Gnu` | interactive input | `perl-term-readline-gnu` | `libterm-readline-gnu-perl` |
 | `Data::UUID` | optional: session ids | `perl-data-uuid` | `libdata-uuid-perl` |
 
@@ -93,6 +106,8 @@ the model:
 | `/session create\|delete\|switch <name>`, `/session rename <old> <new>` | manage sessions, `/session <name>` switches too |
 | `/model [name]` | list the models of the API, or set the model of this session |
 | `/prompt [name]` | list the prompt templates, or switch the system prompt |
+| `/usage [reset]` | token usage and context size of this session |
+| `/compact` | summarize the older messages now, to free context |
 | `/system <text>` | add a system message |
 | `/files [regex]` | add matching files of the current directory to the conversation (`.aiignore` is respected) |
 | `/tools` | list the tools |
@@ -114,7 +129,7 @@ turn** and returns to the prompt; ctrl-C at the prompt leaves.
               │        tool calls in the answer?
               │            │ yes                    │ no
               │            ▼                        ▼
-              └── results ◄── fork: exec/eval      done, back to the prompt
+              └── results ◄── tools, sub-agents     done, back to the prompt
 ```
 
 Every step is appended to the `chat` file of the session, and every request is
@@ -138,26 +153,100 @@ WRITE_edf5
 The result goes back as the next message, `[WRITE_edf5 RESULT_d170 ... RESULT_d170]`
 or `[WRITE_edf5 ERROR_9a78 ... ERROR_9a78]`.
 
-| Tool | How it runs |
-|------|-------------|
-| `bash` | script in a temp file, `exec bash` in a forked child |
-| `perl` | `eval` in a forked child, or `Safe->reval` with `AI_PERL_SAFE` |
-| `grep` | `exec grep -rn` in a forked child, no shell |
-| `read`, `write` | in the chat process |
+| Tool | What it does | How it runs |
+|------|--------------|-------------|
+| `read`, `lines` | a file, plain or with line numbers (a range) | Perl, in the chat process |
+| `write` | write or overwrite a file | Perl |
+| `replace` | swap one exact, unique piece of text | Perl |
+| `edit` | apply an ed script: `a`, `i`, `c`, `d`, `s///` with line, `$` and `/regex/` addresses | Perl |
+| `delete`, `move`, `mkdir`, `list` | file management | Perl |
+| `grep` | search files | `exec grep -rn` in a forked child, no shell |
+| `bash` | a shell script | temp file, `exec bash` in a forked child |
+| `perl` | Perl code | `eval` in a forked child, or `Safe->reval` with `AI_PERL_SAFE` |
+| `agent` | give a task to a sub-agent | a second conversation in the event loop |
+
+File tools never start a process. `replace` and `edit` write through a temp
+file and rename, and write nothing when they fail; `edit` works like `ed`, so
+line numbers are those after the previous command (edit bottom-up).
 
 A forked tool process has its own session/process group, stdin from
 `/dev/null`, stdout+stderr captured through a pipe, and a minimal environment:
-no `AI_*` variable, so no API key. The parent waits in a `select()` loop and
-kills the process group on `AI_TOOL_TIMEOUT` or ctrl-C.
+no `AI_*` variable, so no API key. It is stopped at `AI_TOOL_TIMEOUT` or on
+ctrl-C, with its whole process group.
 
 The parser is forgiving, because models are sloppy: sentinels may be the ones
 of the header or the ones of the tool definition, the `[length]` suffix and the
 closing tag are optional. Tool calls inside thinking are ignored. A call that
 cannot be parsed is answered with an error, so the model can correct itself.
 
-Adding a tool: add an entry to `$tools::TOOLS` in `ai.pm` (its `syntax` defines
-the tag and the sentinels) and a sub named after the lowercased tag
+There is no confirmation before a tool runs. Run it in the container.
+
+### Sub-agents
+
+With the `agent` tool the model delegates a self-contained task. A sub-agent
+has the system prompt of the session and all tools except `agent`, but nothing
+of the conversation; its final answer is the tool result. Several `agent`
+calls in one answer run at the same time (`AI_MAX_AGENTS`, default 4):
+
+```
+///AGENT_f2a8+EO_9d31
+List the public subs of utils.pm with one line on what each does.
+EO_9d31
+AGENT_f2a8
+```
+
+A sub-agent is not a process and not a thread. It is a small state machine:
+its request is a curl handle, its bash/perl/grep tools are forked children,
+and all of them sit in the same `select()` loop as everything else. Its
+thinking and tool calls are not printed, the status line shows what each agent
+is doing. Transcripts are kept in `sessions/<name>/agents/`. Sub-agents retry
+API errors like the main loop, count for the token usage of the session, and
+stop on ctrl-C. They have no context management of their own: give them tasks
+that fit.
+
+### Errors, retries, rate limits
+
+A request that fails with a rate limit (429), an overload or server error
+(408, 425, 500, 502, 503, 504, 529) or without any HTTP status (network) is
+tried again, `AI_RETRIES` times, waiting 2s, 4s, 8s, ... with jitter
+(`AI_RETRY_DELAY`). For a rate limit the wait is what the API asks for
+(`Retry-After`, `x-ratelimit-reset-*`), up to `AI_RETRY_MAX_WAIT`. Other
+errors, and errors after part of an answer arrived, are shown and the chat goes
+on. Ctrl-C ends a wait.
+
+### Token usage and context
+
+After each answer a line shows the tokens of the request, the total of the
+session, how full the context window is and the speed:
+
+```
+[tokens: 5210 in + 187 out, session 48213 | context 16% of 32768 | 4.1s, 52.3 tok/s]
+```
+
+The numbers come from the API (`stream_options.include_usage`); when it does
+not report them they are estimated and marked with `~`. `AI_TOKEN_BUDGET`
+stops a session that used that many tokens (`/usage reset` to go on).
+
+Before a request that would use more than 80% of the context window
+(`AI_CONTEXT_THRESHOLD`), the conversation is compacted:
+
+1. the output of old tool calls is cut to its first and last lines,
+2. if that is not enough, the older messages are replaced by a summary the
+   model writes (or just dropped with `AI_CONTEXT_SUMMARY=0`).
+
+The recent messages stay as they are, everything removed is appended to
+`chat.archive` in the session directory. The window size is `AI_CONTEXT_TOKENS`,
+else what the API reports (`context_length` in the model list, `/props` of a
+llama.cpp server). When it is unknown, compaction starts when the API refuses a
+request as too long. `/compact` does it on demand.
+
+### Adding a tool
+
+Add an entry to `$tools::TOOLS` in `ai.pm` (its `syntax` defines the tag and
+the sentinels) and a sub named after the lowercased tag
 (`sub mytool_1a2b {my ($t_args) = @_; ...}`) that returns the result or dies.
+A tool that needs a child process returns `_run(sub {exec ...})`: that waits
+for the main agent and becomes a job in the event loop for a sub-agent.
 
 ## Configuration
 
@@ -176,6 +265,18 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 | `AI_TOKENS` | max tokens per answer | 100000 |
 | `AI_TEMPERATURE`, `AI_TOP_P`, `AI_TOP_K`, `AI_MIN_P` | sampling | 0.6, 0.95, 20, 0.0 |
 | `AI_MAX_TURNS` | max requests per input (tool loop), 0 = no limit | 50 |
+| `AI_MAX_AGENTS` | sub-agents working at the same time | 4 |
+| `AI_AGENT_MODEL` | model for sub-agents | the session model |
+| `AI_RETRIES` | retries of a failed request | 4 |
+| `AI_RETRY_DELAY` | first backoff delay in seconds, doubles every retry | 2 |
+| `AI_RETRY_MAX_WAIT` | longest wait a rate limit may ask for, in seconds | 120 |
+| `AI_CONTEXT_TOKENS` | context window of the model, 0 = no context management | from the API |
+| `AI_CONTEXT_THRESHOLD` | compact when the conversation is over this part of the window | 0.8 |
+| `AI_CONTEXT_SUMMARY` | 0: drop old messages instead of summarizing them | 1 |
+| `AI_TOKEN_BUDGET` | max tokens a session may use | no limit |
+| `AI_USAGE` | 0: don't ask the API for token usage | 1 |
+| `AI_SHOW_USAGE` | 0 hides the usage line | 1 |
+| `AI_STATUS` | 0 switches the status line off | 1 |
 | `AI_SHOW_THINKING` | 0 hides the thinking | 1 |
 | `AI_TOOL_TIMEOUT` | seconds for a bash/perl/grep tool, 0 = no limit | 120 |
 | `AI_TOOL_MAX_OUTPUT` | max bytes of a tool result, the middle is cut out | 65536 |
@@ -192,8 +293,9 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 ## Project structure
 
 - `ai.pl` - entry point: options, drop privileges, POD
-- `ai.pm` - chat loop, streaming, commands, sessions, providers, prompt, tools
-- `utils.pm` - HTTP (curl multi + `select()`), `fork_run()`, logging
+- `ai.pm` - chat loop, streaming, retry, usage, context, commands, sessions, sub-agents, providers, prompt, tools
+- `utils.pm` - the event loop (curl multi, child pipes, timers in one `select()`), `fork_run()`, logging
+- `tui.pm` - the status line
 - `ai/` - system prompt templates (`default`, `coder`)
 - `aicli.sh`, `Dockerfile` - docker wrapper and image
 - `t/` - tests
