@@ -193,3 +193,5 @@ This file outlines potential improvements and features for the AI coding agent (
 - [x] One select() event loop for HTTP, tool processes and timers (`package loop`)
 - [x] Sub-agents as tool call, working side by side in the event loop
 - [x] Status line (`tui.pm`)
+- [x] Project instructions (AGENTS.md) and a coarse date in the system prompt, request prefix stays byte-stable
+- [x] Brief tool display, diffs for file changes, `/undo`

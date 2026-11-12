@@ -216,6 +216,30 @@ variables (so not the API key) are passed on. They are stopped at
 B<AI_TOOL_TIMEOUT> and on ctrl-C. There is no confirmation before a tool runs:
 use the docker wrapper (B<aicli.sh>) as the sandbox.
 
+=head1 DISPLAY AND UNDO
+
+The tool calls in an answer are not shown as the model writes them: every
+call is one line, followed by the first lines of its result (B<AI_TOOL_LINES>).
+B<write>, B<replace> and B<edit> show what they changed as a diff. The model
+always gets the complete result. B<AI_TOOL_DISPLAY=full> shows everything.
+
+Every change of the file tools (also of sub-agents) is noted in the session
+with a copy of the old content, B</undo> takes back the last one. Changes made
+by B<bash> or B<perl> are not covered.
+
+=head1 SYSTEM PROMPT
+
+The system prompt of a session is the prompt template, the tools (template
+C<coder>), the project instructions (F<AGENTS.md> of the working directory,
+see B<AI_PROJECT_FILE>) and the date (only the month by default, see
+B<AI_PROMPT_DATE>). It is built once, when the session starts, and stored with
+the conversation; B</clear> and B</prompt> build it again.
+
+The start of a conversation is never rewritten afterwards: each request is the
+previous one plus the new messages, byte for byte, so that the prompt (prefix)
+cache of the API or of a local server keeps working. Only context management
+changes older messages, when the context window is nearly full.
+
 =head1 SUB-AGENTS
 
 With the B<agent> tool the model hands a self-contained task to a sub-agent:
@@ -274,6 +298,11 @@ Enable or disable debug mode.
 =item B</tools>
 
 List the tools the model can call.
+
+=item B</undo> [list]
+
+Take back the last change a file tool made (write, replace, edit, delete,
+move, mkdir), C<list> shows the changes that can be undone.
 
 =item B</usage> [reset]
 
@@ -487,6 +516,41 @@ Set to 0 to hide the usage line after each answer. Default: 1
 
 Set to 0 to switch the status line off. Default: 1
 
+=item B<AI_TOOL_DISPLAY>
+
+C<brief> (default): one line per tool call and the first lines of its result.
+C<full>: the tool calls as the model writes them and the complete results.
+
+=item B<AI_TOOL_LINES>
+
+Number of result lines shown with the brief display. Default: 8
+
+=item B<AI_SHOW_DIFF>, B<AI_DIFF_LINES>
+
+Set B<AI_SHOW_DIFF> to 0 for no diff after a file change. B<AI_DIFF_LINES> is
+the maximum number of lines of a diff. Default: 1, 40
+
+=item B<AI_UNDO_MAX_SIZE>
+
+Files bigger than this many bytes are changed without a copy for B</undo>.
+Default: 8000000
+
+=item B<AI_PROJECT_FILE>
+
+Files with project instructions, looked for in the working directory and
+added to the system prompt (space or comma separated). Empty for none.
+Default: C<AGENTS.md>
+
+=item B<AI_PROJECT_FILE_MAX>
+
+Maximum number of bytes taken from a project instruction file. Default: 32768
+
+=item B<AI_PROMPT_DATE>
+
+How precise the date in the system prompt is: C<none>, C<year>, C<month>,
+C<day>, or a strftime(3) format. Coarse on purpose: the system prompt starts
+every request, a date that changes often defeats caching. Default: C<month>
+
 =item B<AI_SHOW_THINKING>
 
 Set to 0 to hide the thinking of the model. Default: 1
@@ -554,7 +618,8 @@ Readline init file.
 One directory per session: C<chat> (the conversation, one JSON message per
 line), C<chat.archive> (messages removed by context management), C<prompt> and
 C<template> (system prompt), C<model>, C<usage> (token counters), C<history>
-(input history), C<agents/> (conversations of sub-agents).
+(input history), C<agents/> (conversations of sub-agents), C<undo/> (journal
+and copies for B</undo>).
 
 =back
 

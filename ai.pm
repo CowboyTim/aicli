@@ -12,7 +12,8 @@ use JSON::XS ();
 use Time::HiRes ();
 
 BEGIN {
-    $::JSON //= JSON::XS->new->utf8->allow_blessed->allow_unknown->allow_nonref->convert_blessed;
+    # canonical: the same data is always the same bytes, in requests and files
+    $::JSON //= JSON::XS->new->utf8->canonical->allow_blessed->allow_unknown->allow_nonref->convert_blessed;
 }
 
 # Variables/Handles
@@ -326,26 +327,44 @@ sub handle_llm_response {
     my ($resp, $printer_sub) = @_;
     return (0, 0, []) unless defined $resp and ref($resp) eq 'SCALAR' and length($$resp // "");
     log::info("handling>>$$resp<<");
-    $printer_sub //= sub {
-        my ($r) = @_;
+    # with a printer of the caller everything is handed to it in full
+    my $brief = (!$printer_sub and tool_display() eq 'brief') ? 1 : 0;
+    my $say = sub {
         $TUI->clear();
-        print $r;
+        print $_[0];
     };
+    $printer_sub //= $say;
 
     # tools work with bytes, and never run from within a thinking block
     my $msg = to_bytes(strip_thinking($$resp));
     log::info("MSG THINK STRIPPED>>$msg<<");
     my (@rt, @agents);
+    my $announce = sub {
+        my ($c) = @_;
+        return &{$printer_sub}("${colors::yellow_color1}\[TOOL $c->{tool}\(...))\]${colors::reset_color}\n")
+            unless $brief;
+        &{$say}("${colors::yellow_color1}\x{e2}\x{97}\x{8f} $c->{k}${colors::reset_color} ".tool_summary($c)."\n");
+    };
     my $answer = sub {
         my ($i, $c, $result, $had_error) = @_;
         my $tool_response = tool_response($c->{tool}, $result, $had_error);
-        &{$printer_sub}("${colors::green_color}$tool_response${colors::reset_color}\n");
         $rt[$i] = {role => 'user', content => to_text($tool_response)};
+        my $changed = scalar(@tools::CHANGES);
+        if(!$brief){
+            &{$printer_sub}("${colors::green_color}$tool_response${colors::reset_color}\n");
+        } elsif($had_error){
+            my $e = $had_error =~ s/^\[ERROR\] (?:problem running tool '\w+': )?//r;
+            &{$say}($colors::red_color.clip_lines($e, $::ORIG_ENV{AI_TOOL_LINES} // 8, "  ").$colors::reset_color);
+        } elsif(!$changed or !($::ORIG_ENV{AI_SHOW_DIFF} // 1)){
+            # (a file change shows its diff instead)
+            &{$say}($colors::green_color.clip_lines($result, $::ORIG_ENV{AI_TOOL_LINES} // 8, "  ").$colors::reset_color);
+        }
+        show_changes($printer_sub == $say ? $say : undef);
     };
     foreach my $c (parse_tool_calls($msg)){
         my $i = scalar(@rt);
         push @rt, undef;
-        &{$printer_sub}("${colors::yellow_color1}\[TOOL $c->{tool}\(...))\]${colors::reset_color}\n");
+        &{$announce}($c);
         if(utils::aborted()){
             &{$answer}($i, $c, "", "[ERROR] not executed, interrupted by user");
         } elsif(!$c->{args}){
@@ -363,8 +382,10 @@ sub handle_llm_response {
     }
     if(@agents){
         agent::wait(map {$_->[2]} @agents);
+        @tools::CHANGES = (); # what the agents changed is in the undo journal
         foreach my $e (@agents){
             my ($i, $c, $a) = @$e;
+            &{$say}("${colors::yellow_color1}\x{e2}\x{97}\x{8f} agent $a->{id}${colors::reset_color} answered\n") if $brief;
             &{$answer}($i, $c, agent_result($a));
         }
     }
@@ -540,15 +561,52 @@ sub new_stream {
 
 # Shows thinking and answer in their own color while they stream in
 sub new_printer {
-    my ($out) = @_;
+    my ($out, %o) = @_;
     $out //= sub {$TUI->clear(); print $_[0]};
     my $show_thinking = ($::ORIG_ENV{AI_SHOW_THINKING} // 1) ? 1 : 0;
     my ($last, $ends_nl) = ('', 1);
+    # hide_tools: the tool call blocks in the answer are not shown, the tool
+    # display says what runs. A line is held back until it is clear that it
+    # does not start a tool call.
+    my ($bol, $hold, $in_tool) = (1, '', undef);
+    my $t_rx = tools::rx();
+    my $visible = sub {
+        my ($text) = @_;
+        my $vis = '';
+        $hold .= $text;
+        while(length($hold)){
+            my $nl = index($hold, "\n");
+            if(defined $in_tool){
+                last if $nl < 0;
+                my $line = substr($hold, 0, $nl + 1, '');
+                if($line =~ m/^\s*\Q$in_tool\E\s*$/){
+                    ($in_tool, $bol) = (undef, 1);
+                } elsif($line =~ m/$t_rx/){
+                    $in_tool = $1; # the next call, the one before was not closed
+                }
+            } elsif($bol and $nl < 0){
+                last if $hold =~ m{^[ \t]*(?:/{0,3}|///[\w+]*[ \t]*)$}; # may become a tool call
+                $bol = 0;
+            } elsif($bol){
+                my $line = substr($hold, 0, $nl + 1, '');
+                if($line =~ m/$t_rx/){
+                    $in_tool = $1;
+                } else {
+                    $vis .= $line;
+                }
+            } elsif($nl < 0){
+                $vis .= $hold;
+                $hold = '';
+            } else {
+                $vis .= substr($hold, 0, $nl + 1, '');
+                $bol = 1;
+            }
+        }
+        return $vis;
+    };
     my $p = {};
-    $p->{emit} = sub {
+    my $show = sub {
         my ($kind, $text) = @_;
-        return unless length($text // '');
-        return if $kind eq 'think' and !$show_thinking;
         if($last ne $kind){
             # thinking and answer each start on a line of their own, without
             # the empty lines models put in between
@@ -561,11 +619,158 @@ sub new_printer {
         $last    = $kind;
         $ends_nl = $text =~ m/\n\z/ ? 1 : 0;
     };
+    $p->{emit} = sub {
+        my ($kind, $text) = @_;
+        return unless length($text // '');
+        return if $kind eq 'think' and !$show_thinking;
+        $text = &{$visible}($text) if $o{hide_tools} and $kind eq 'text';
+        return unless length($text);
+        &{$show}($kind, $text);
+    };
     $p->{finish} = sub {
+        # a held back line that never became a tool call
+        &{$show}('text', $hold) if length($hold) and !defined $in_tool;
+        ($bol, $hold, $in_tool) = (1, '', undef);
         &{$out}("\n") unless $ends_nl;
         ($last, $ends_nl) = ('', 1);
     };
     return $p;
+}
+
+# how tool calls are shown: "brief" (one line per call, the first lines of the
+# result, a diff for file changes) or "full" (the call as the model wrote it,
+# the complete result)
+sub tool_display {
+    return lc($::ORIG_ENV{AI_TOOL_DISPLAY} // 'brief') eq 'full' ? 'full' : 'brief';
+}
+
+sub term_width {
+    my $w = $::T ? eval {($::T->get_screen_size())[1]} : undef;
+    return $w || $::ORIG_ENV{COLUMNS} || 100;
+}
+
+# a text for the terminal: at most $max lines, lines cut to the width
+sub clip_lines {
+    my ($text, $max, $prefix) = @_;
+    $prefix //= '';
+    my $width = term_width() - length($prefix) - 1;
+    $width = 20 if $width < 20;
+    my @lines = split m/\n/, $text // '';
+    my $more = ($max and @lines > $max) ? @lines - $max : 0;
+    splice(@lines, $max) if $more;
+    my $r = join('', map {
+        my $l = to_text($_) =~ s/\t/    /gr =~ s/[^\P{Cc}]//gr;
+        $l = substr($l, 0, $width - 1)."\x{2026}" if length($l) > $width;
+        $prefix.to_bytes($l)."\n";
+    } @lines);
+    $r .= $prefix."... +$more more line".($more == 1 ? "" : "s")."\n" if $more;
+    return $r;
+}
+
+# one line that says what a tool call is about: its first argument
+sub tool_summary {
+    my ($c) = @_;
+    my @lines = grep {m/\S/} split m/\n/, ($c->{args} // [])->[0] // '';
+    return '' unless @lines;
+    my $s = to_text($lines[0]) =~ s/^\s+//r =~ s/\s+/ /gr;
+    my $max = term_width() - length($c->{k}) - 16;
+    $max = 20 if $max < 20;
+    $s = substr($s, 0, $max - 1)."\x{2026}" if length($s) > $max;
+    $s .= " (+".(@lines - 1)." lines)" if @lines > 1;
+    return to_bytes($s);
+}
+
+# Line diff of two texts: a list of [op, line] with op ' ', '-' or '+'.
+# Common start and end are skipped first, the rest is a longest common
+# subsequence (or, when that would get too big, everything out, everything in).
+sub diff_lines {
+    my ($old, $new) = @_;
+    my @a = split m/\n/, $old // '', -1;
+    my @b = split m/\n/, $new // '', -1;
+    pop @a if @a and $a[-1] eq '';
+    pop @b if @b and $b[-1] eq '';
+    my ($s, $e) = (0, 0);
+    $s++ while $s < @a and $s < @b and $a[$s] eq $b[$s];
+    $e++ while $e < @a - $s and $e < @b - $s and $a[-1 - $e] eq $b[-1 - $e];
+    my @ma = @a[$s .. $#a - $e];
+    my @mb = @b[$s .. $#b - $e];
+    my @mid;
+    if(@ma * @mb > 4_000_000 or !@ma or !@mb){
+        @mid = ((map {['-', $_]} @ma), (map {['+', $_]} @mb));
+    } else {
+        my @l = map {[(0) x (@mb + 1)]} 0 .. @ma;
+        for(my $i = $#ma; $i >= 0; $i--){
+            for(my $j = $#mb; $j >= 0; $j--){
+                $l[$i][$j] = $ma[$i] eq $mb[$j] ? $l[$i + 1][$j + 1] + 1
+                    : $l[$i + 1][$j] >= $l[$i][$j + 1] ? $l[$i + 1][$j] : $l[$i][$j + 1];
+            }
+        }
+        my ($i, $j) = (0, 0);
+        while($i < @ma and $j < @mb){
+            if($ma[$i] eq $mb[$j]){
+                push @mid, [' ', $ma[$i]]; $i++; $j++;
+            } elsif($l[$i + 1][$j] >= $l[$i][$j + 1]){
+                push @mid, ['-', $ma[$i++]];
+            } else {
+                push @mid, ['+', $mb[$j++]];
+            }
+        }
+        push @mid, ['-', $ma[$i++]] while $i < @ma;
+        push @mid, ['+', $mb[$j++]] while $j < @mb;
+    }
+    return ((map {[' ', $_]} @a[0 .. $s - 1]), @mid, (map {[' ', $_]} @a[@a - $e .. $#a]));
+}
+
+# A diff for the terminal: changed lines with $context lines around them,
+# line numbers of the old file at each hunk, colors, at most $max lines.
+# Returns ($text, $added, $removed).
+sub format_diff {
+    my ($old, $new, %o) = @_;
+    my $context = $o{context} // 2;
+    my @d = diff_lines($old, $new);
+    my ($added, $removed) = (scalar(grep {$_->[0] eq '+'} @d), scalar(grep {$_->[0] eq '-'} @d));
+    return ('', 0, 0) unless $added or $removed;
+    # which lines to show
+    my @keep = (0) x @d;
+    foreach my $i (grep {$d[$_][0] ne ' '} 0 .. $#d){
+        $keep[$_] = 1 for grep {$_ >= 0 and $_ <= $#d} $i - $context .. $i + $context;
+    }
+    my ($out, $ln, $shown, $gap) = ('', 1, 0, 1);
+    my $max = $o{max} // 0;
+    my $width = term_width() - 4;
+    foreach my $i (0 .. $#d){
+        my ($op, $line) = @{$d[$i]};
+        if($keep[$i]){
+            if($max and $shown >= $max){
+                $out .= "  ${colors::cyan_color}... the diff goes on${colors::reset_color}\n";
+                last;
+            }
+            $out .= "  ${colors::cyan_color}\@\@ line $ln \@\@${colors::reset_color}\n" if $gap;
+            $gap = 0;
+            my $l = to_text($line) =~ s/\t/    /gr =~ s/[^\P{Cc}]//gr;
+            $l = substr($l, 0, $width - 1)."\x{2026}" if length($l) > $width;
+            my $color = $op eq '+' ? $colors::green_color : $op eq '-' ? $colors::red_color : '';
+            $out .= "  $color$op ".to_bytes($l).($color ? $colors::reset_color : '')."\n";
+            $shown++;
+        } else {
+            $gap = 1;
+        }
+        $ln++ if $op ne '+';
+    }
+    return ($out, $added, $removed);
+}
+
+# show the file changes the tools just made (and forget them)
+sub show_changes {
+    my ($printer) = @_;
+    my @changes = splice(@tools::CHANGES);
+    return unless $printer and ($::ORIG_ENV{AI_SHOW_DIFF} // 1);
+    foreach my $ch (@changes){
+        my ($diff, $added, $removed) = format_diff($ch->{old}, $ch->{new}, max => $::ORIG_ENV{AI_DIFF_LINES} // 40);
+        next unless length($diff);
+        &{$printer}("  ${colors::cyan_color}$ch->{path}".(defined $ch->{old} ? "" : " (new)").": +$added -$removed${colors::reset_color}\n$diff");
+    }
+    return;
 }
 
 sub format_api_error {
@@ -665,7 +870,7 @@ sub request_completion {
     STDOUT->autoflush(1);
     STDERR->autoflush(1);
     my $info = {t_start => Time::HiRes::time()};
-    my $printer = new_printer($o{quiet} ? sub {} : undef);
+    my $printer = new_printer($o{quiet} ? sub {} : undef, hide_tools => (tool_display() eq 'brief' ? 1 : 0));
     # the status line tells that we wait, until there is something to show
     $TUI->set('model', $o{quiet} ? 'summarizing' : 'waiting for model');
     my $st = new_stream(sub {
@@ -729,7 +934,7 @@ sub subagent_prompt {
     $prompt .= "\n\nYou are a sub-agent: another agent gave you the task below, the user is not here and you cannot ask questions. "
               ."Work on it with your tools. Your final answer, the one without a tool call, is all the other agent gets to see: "
               ."report what you found or did, complete but without the detours.\n";
-    return $prompt;
+    return $prompt.prompt_context();
 }
 
 #------------------------------------------------------------------------------
@@ -1068,7 +1273,49 @@ sub system_prompt {
         no strict "refs";
         $prompt .= &{"prompt::${template}::prompt"}() // "";
     }
-    return $prompt;
+    return $prompt.prompt_context();
+}
+
+# The date for the system prompt, as coarse as AI_PROMPT_DATE says: none,
+# year, month (default), day, or a strftime format. A date that changes
+# often would change the start of every request, and that is what an API
+# caches on.
+sub prompt_date {
+    my $g = $::ORIG_ENV{AI_PROMPT_DATE} // 'month';
+    return '' if $g =~ m/^(?:|none|off|no|0)$/i;
+    my %fmt = (year => '%Y', month => '%B %Y', day => '%Y-%m-%d');
+    return POSIX::strftime($fmt{lc $g} // $g, localtime());
+}
+
+# The instructions of the project in the working directory (AGENTS.md, or what
+# AI_PROJECT_FILE names; empty for none).
+sub project_instructions {
+    my $files = $::ORIG_ENV{AI_PROJECT_FILE} // 'AGENTS.md';
+    my $max   = $::ORIG_ENV{AI_PROJECT_FILE_MAX} // 32768;
+    my $r = '';
+    foreach my $file (grep {length} split m/[\s,:]+/, $files){
+        next unless -f $file;
+        my $data = slurp($file) // next;
+        next unless $data =~ m/\S/;
+        $data = substr($data, 0, $max)."\n[... $file is cut here, it is longer ...]\n"
+            if $max and length($data) > $max;
+        $data .= "\n" unless $data =~ m/\n\z/;
+        $r .= "\n\n**PROJECT INSTRUCTIONS** (from $file in the working directory)\n\n$data";
+    }
+    return $r;
+}
+
+# What a system prompt ends with: the project instructions and the date. The
+# most stable parts of the prompt come first, these last.
+# The system prompt is made once, when a session starts (and on /clear and
+# /prompt), and stored in the chat file. It is never changed behind the back
+# of the model: the start of the conversation stays byte for byte the same,
+# so the prefix cache of the API keeps working.
+sub prompt_context {
+    my $r = project_instructions();
+    my $date = prompt_date();
+    $r .= "\n\nCurrent date: $date\n" if length($date);
+    return $r;
 }
 
 sub init_session {
@@ -1292,6 +1539,53 @@ sub switch_prompt {
     print "Switched system prompt.\n";
 }
 
+# The undo journal of the session: every file change of the tools, newest last
+sub undo_journal {
+    my $data = slurp("$AI_SESSION_DIR/undo/journal") // '';
+    return grep {ref($_) eq 'HASH'} map {eval {JSON::XS::decode_json($_)}} grep {m/\S/} split m/\n/, $data;
+}
+
+sub undo_describe {
+    my ($e) = @_;
+    my $what = $e->{op} eq 'move' ? "$e->{path} -> $e->{to}" : $e->{path};
+    return "$e->{tool} $what".($e->{op} eq 'write' && !$e->{existed} ? " (new file)" : "");
+}
+
+# Take back the last file change a tool made. Returns what was undone, dies
+# when that is not possible.
+sub undo_last {
+    my @j = undo_journal();
+    my $e = pop @j
+        or die "nothing to undo\n";
+    my $dir = "$AI_SESSION_DIR/undo";
+    my $restore = sub {
+        die "no copy of the old content was kept\n" unless defined $e->{backup};
+        my $old = slurp("$dir/$e->{backup}") // die "the copy of the old content is gone\n";
+        open(my $fh, '>', $e->{path}) or die "cannot write $e->{path}: $!\n";
+        print {$fh} $old;
+        close($fh) or die "cannot write $e->{path}: $!\n";
+        chmod($e->{mode} & 07777, $e->{path}) if defined $e->{mode};
+    };
+    if($e->{op} eq 'write' and $e->{existed}){
+        &{$restore}();
+    } elsif($e->{op} eq 'write'){
+        unlink($e->{path}) or die "cannot delete $e->{path}: $!\n" if -e $e->{path};
+    } elsif($e->{op} eq 'delete'){
+        die "$e->{path} exists again\n" if -e $e->{path};
+        &{$restore}();
+    } elsif($e->{op} eq 'rmdir'){
+        mkdir($e->{path}) or die "cannot create $e->{path}: $!\n";
+    } elsif($e->{op} eq 'move'){
+        die "$e->{path} exists again\n" if -e $e->{path};
+        rename($e->{to}, $e->{path}) or die "cannot move $e->{to} back: $!\n";
+    } elsif($e->{op} eq 'mkdir'){
+        rmdir($_) for reverse @{$e->{created} // []};
+    }
+    unlink("$dir/$e->{backup}") if defined $e->{backup};
+    spew("$dir/journal", join('', map {JSON::XS->new->utf8->canonical->encode($_)."\n"} @j));
+    return $e;
+}
+
 # add the files of the current directory that match a regex to the chat
 sub add_files {
     my ($rx) = @_;
@@ -1490,6 +1784,28 @@ our @COMMANDS;
             $::ABORT = 0;
             return 0;
         },
+    },
+    '/undo' => {
+        usage => '/undo [list]',
+        help  => 'take back the last file change of a tool, "list" shows them',
+        run   => sub {
+            my ($args) = @_;
+            if($args eq 'list'){
+                my @j = undo_journal();
+                print "Nothing to undo.\n" unless @j;
+                my $n = @j;
+                print sprintf("%3d  ", $n--).undo_describe($_)."\n" for reverse @j;
+                return 0;
+            }
+            my $e = eval {undo_last()};
+            if(!$e){
+                print "Cannot undo: $@";
+                return 0;
+            }
+            print "Undone: ".undo_describe($e)."\n";
+            return 0;
+        },
+        complete => sub {return +{list => sub {0}}},
     },
     '/prompt' => {
         usage => '/prompt [name]',
@@ -2447,6 +2763,8 @@ sub write_edf5 {
     my ($t_args) = @_;
     my $path = utils::trim($t_args->[0] // '');
     log::info("WRITE: $path");
+    die "is a directory: $path\n" if -d $path;
+    _changing($path, 'write', $t_args->[1] // '');
     open(my $fh, '>', $path)
         or die "Cannot write to $path: $!\n";
     print {$fh} $t_args->[1] // '';
@@ -2468,9 +2786,49 @@ sub _slurp {
     return $content // "";
 }
 
+our @CHANGES; # file contents changed by the last tools: {tool, path, old, new}
+our $UNDO_SEQ = 0;
+
+# Remember how to take a file change back: a line in the undo journal of the
+# session, with a copy of what is about to be lost. See ai::undo_last.
+sub _journal {
+    my (%e) = @_;
+    my $dir = $ai::AI_SESSION_DIR;
+    return unless defined $dir and -d $dir;
+    eval {
+        $dir .= "/undo";
+        -d $dir or mkdir $dir or die "$dir: $!\n";
+        utils::load_cpan("File::Spec");
+        $e{$_} = File::Spec->rel2abs($e{$_}) for grep {defined $e{$_}} qw(path to);
+        if(defined(my $old = delete $e{old})){
+            if(length($old) <= ($::ORIG_ENV{AI_UNDO_MAX_SIZE} // 8_000_000)){
+                $e{backup} = sprintf("%d-%d-%04d", time(), $$, ++$UNDO_SEQ);
+                ai::spew("$dir/$e{backup}", $old);
+            }
+            $e{mode} = (stat($e{path}))[2];
+            $e{existed} = 1;
+        }
+        open(my $fh, '>>', "$dir/journal") or die "$dir/journal: $!\n";
+        print {$fh} JSON::XS->new->utf8->canonical->encode(\%e)."\n";
+        close($fh);
+        1;
+    } or log::info("undo journal: $@");
+    return;
+}
+
+# a file is about to get new content
+sub _changing {
+    my ($file, $tool, $new) = @_;
+    my $old = (-f $file) ? _slurp($file) : undef;
+    _journal(op => 'write', tool => $tool, path => $file, old => $old);
+    push @CHANGES, {tool => $tool, path => $file, old => $old, new => $new};
+    return;
+}
+
 # write through a temp file and rename: all of it or nothing, mode kept
 sub _spew {
-    my ($file, $content) = @_;
+    my ($file, $content, $tool) = @_;
+    _changing($file, $tool // 'write', $content);
     my $tmp  = "$file.aicli.$$";
     my $mode = (stat($file))[2];
     open(my $fh, '>', $tmp)
@@ -2520,7 +2878,7 @@ sub replace_91c4 {
     die "the old text is $count times in $file, add lines around it to make it unique\n" if $count > 1;
     my $at = index($content, $old);
     substr($content, $at, length($old)) = $new;
-    _spew($file, $content);
+    _spew($file, $content, 'replace');
     return "[OK] replaced in $file at line ".(1 + (substr($content, 0, $at) =~ tr/\n//));
 }
 
@@ -2612,7 +2970,7 @@ sub edit_b3e1 {
     my $old  = _slurp($file);
     my $new  = ed_apply($old, $t_args->[1]);
     return "[OK] no change in $file" if $new eq $old;
-    _spew($file, $new);
+    _spew($file, $new, 'edit');
     return "[OK] edited $file: ".($old =~ tr/\n//)." -> ".($new =~ tr/\n//)." lines";
 }
 
@@ -2623,9 +2981,11 @@ sub delete_5d2a {
     if(-d $path and !-l $path){
         rmdir($path)
             or die "cannot remove directory $path: $!\n";
+        _journal(op => 'rmdir', tool => 'delete', path => $path);
         return "[OK] removed directory $path";
     }
     die "no such file: $path\n" unless -e $path or -l $path;
+    _journal(op => 'delete', tool => 'delete', path => $path, old => ((-f $path and !-l $path) ? _slurp($path) : undef));
     unlink($path)
         or die "cannot delete $path: $!\n";
     return "[OK] deleted $path";
@@ -2645,6 +3005,7 @@ sub move_c7f0 {
         File::Copy::move($from, $to)
             or die "cannot move $from to $to: $!\n";
     }
+    _journal(op => 'move', tool => 'move', path => $from, to => $to);
     return "[OK] moved $from to $to";
 }
 
@@ -2654,7 +3015,9 @@ sub mkdir_2e9b {
     die "no path\n" unless length($path);
     return "[OK] $path exists already" if -d $path;
     utils::load_cpan("File::Path");
-    File::Path::make_path($path, {error => \my $err});
+    my @created = File::Path::make_path($path, {error => \my $err});
+    utils::load_cpan("File::Spec");
+    _journal(op => 'mkdir', tool => 'mkdir', path => $path, created => [map {File::Spec->rel2abs($_)} @created]) if @created;
     die "cannot create $path: ".join(", ", map {values %$_} @$err)."\n" if @$err;
     return "[OK] created $path";
 }

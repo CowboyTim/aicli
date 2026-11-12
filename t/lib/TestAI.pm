@@ -9,12 +9,14 @@ use JSON::XS ();
 
 our $ROOT = "$FindBin::Bin/..";
 our $TMP;
+our $CAPTURES = 0;
 our @REQUESTS;   # what was "sent": {method, url, data, key}
 our @SCRIPT;     # what the "LLM" answers, one entry per request
 
 # fresh base dir + session, ai.pm set up like ai.pl does
 sub setup {
     my (%env) = @_;
+    chdir("/"); # not in the scratch dir of the test before, not in a project
     $TMP = File::Temp::tempdir("aicli_t_XXXXXX", TMPDIR => 1, CLEANUP => 1);
     %::ORIG_ENV = (
         PATH            => $ENV{PATH},
@@ -27,6 +29,9 @@ sub setup {
         AI_PROMPT_TEMPLATE_FILE => "$ROOT/ai/coder",
         AI_RETRIES      => 0, # tests that want retries or the usage line ask for it
         AI_SHOW_USAGE   => 0,
+        AI_TOOL_DISPLAY => 'full', # and the same for the brief tool display,
+        AI_PROMPT_DATE  => 'none', # the date and the project file in the prompt
+        AI_PROJECT_FILE => '',
         %env,
     );
     $FindBin::Bin = $ROOT; # where ai.pm looks for the prompt templates
@@ -40,7 +45,7 @@ sub setup {
 # run code, return what it printed on STDOUT+STDERR
 sub capture(&) {
     my ($code) = @_;
-    my $fn = "$TMP/capture.$$";
+    my $fn = "$TMP/capture.$$.".(++$CAPTURES); # captures can be nested
     STDOUT->flush(); STDERR->flush();
     open(my $oldout, '>&', \*STDOUT) or die $!;
     open(my $olderr, '>&', \*STDERR) or die $!;

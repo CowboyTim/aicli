@@ -31,6 +31,16 @@ These are requirements, not suggestions.
 - **File tools are Perl**: reading, writing, editing, deleting, moving,
   listing files is done in-process with Perl, never by shelling out. Only
   what the model explicitly asks a shell for (`bash`, `grep`) is a process.
+- **Never rewrite the start of a conversation**: the system prompt is built
+  once per session and stored (`system_prompt()` at `init_session`, `/clear`,
+  `/prompt`); every request must be the previous one plus new messages, byte
+  for byte, or the prefix cache of the API is lost. No timestamps, counters or
+  re-read files in the system prompt or in old messages, JSON stays canonical
+  (`$::JSON`). The date in the prompt is coarse (`AI_PROMPT_DATE`, month).
+  Context compaction is the only exception, and only when it is needed.
+  `t/90_prompt_display_undo.t` checks this on the raw request bytes.
+- **What the model gets and what the user sees are separate**: display code
+  (brief tool lines, diffs, status) never changes the stored messages.
 - **Terminal output goes through the status line**: call `$ai::TUI->clear()`
   before printing while the loop may be running, or the line is garbled.
 - **A forked child ends with `POSIX::_exit()`**, never `exit`: END blocks and
@@ -138,6 +148,29 @@ session, writes its transcript to `agents/` in the session directory, and
 shows up in the status line. It has no context management, and cannot start
 agents.
 
+## System prompt
+
+`system_prompt()` = prompt file of the session + `prompt::<template>::prompt()`
+(tools) + `prompt_context()`: `project_instructions()` (`AGENTS.md` of the
+working directory, `AI_PROJECT_FILE`) and `prompt_date()`. Most stable first.
+Sub-agents: `subagent_prompt()`, same parts without the `agent` tool.
+
+## Display, diffs, undo
+
+`tool_display()` is `brief` or `full`. Brief: `new_printer(hide_tools => 1)`
+drops the tool call blocks from the streamed answer (a line is held back until
+it is clear that it is no tool header), `handle_llm_response()` prints one
+line per call (`tool_summary()`) and the first lines of the result
+(`clip_lines()`). A printer passed to `handle_llm_response()` always gets the
+full texts.
+
+The file tools push what they change to `@tools::CHANGES` (shown by
+`show_changes()` with `format_diff()`/`diff_lines()`, an LCS line diff) and
+write an entry to the undo journal of the session (`tools::_journal()`:
+`undo/journal`, JSON lines, plus a copy of the old content). `ai::undo_last()`
+pops and reverts one entry. A new tool that changes files must call
+`_changing()` or `_journal()` before it does.
+
 ## Usage and context
 
 `usage` file per session (`load_usage`/`save_usage`): requests, prompt and
@@ -220,6 +253,7 @@ implemented.
 | `t/65_file_tools.t` | lines, replace, the ed engine, edit, delete, move, mkdir, list |
 | `t/70_retry_usage_context.t` | retry/backoff, rate limits, usage, budget, context management |
 | `t/80_agents.t` | sub-agents (parallel, limits, errors, abort), the status line |
+| `t/90_prompt_display_undo.t` | project file and date in the prompt, byte-stable request prefix, brief display, diffs, `/undo` |
 
 `TestAI::mock_http` scripts the main agent (`utils::http`),
 `TestAI::mock_agent_http` answers the sub-agents (`loop::http`).

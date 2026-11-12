@@ -21,6 +21,13 @@ framework.
   every tool a child in one `select()` loop
 - **Status line**: what the model, a tool or each sub-agent is doing, and for
   how long, drawn from that same loop
+- **Readable tool runs**: one line per tool call and the first lines of its
+  result instead of the raw call; file changes are shown as a diff, and
+  `/undo` takes them back
+- **Project instructions**: `AGENTS.md` of the working directory becomes part
+  of the system prompt
+- **Cache friendly**: the start of a conversation is never rewritten, so the
+  prefix cache of the API or a local server keeps hitting
 - **Resilient**: retry with exponential backoff, rate limits wait what the API
   says, ctrl-C stops the running turn and nothing else
 - **Token usage**: counted per session, shown after each answer, with an
@@ -106,6 +113,7 @@ the model:
 | `/session create\|delete\|switch <name>`, `/session rename <old> <new>` | manage sessions, `/session <name>` switches too |
 | `/model [name]` | list the models of the API, or set the model of this session |
 | `/prompt [name]` | list the prompt templates, or switch the system prompt |
+| `/undo [list]` | take back the last file change a tool made, `list` shows them |
 | `/usage [reset]` | token usage and context size of this session |
 | `/compact` | summarize the older messages now, to free context |
 | `/system <text>` | add a system message |
@@ -180,6 +188,49 @@ closing tag are optional. Tool calls inside thinking are ignored. A call that
 cannot be parsed is answered with an error, so the model can correct itself.
 
 There is no confirmation before a tool runs. Run it in the container.
+
+### What you see, and taking it back
+
+The tool call blocks the model writes are not shown. Each call is one line,
+followed by the first lines of its result (`AI_TOOL_LINES`), errors in red:
+
+```
+● bash prove -I. t (+1 lines)
+  t/10_sessions.t ................ ok
+  ... +12 more lines
+● edit ai.pm
+  ai.pm: +2 -1
+  @@ line 118 @@
+      $SESSIONS_DIR = "$BASE_DIR/sessions";
+  -   -d $SESSIONS_DIR or mkdir $SESSIONS_DIR;
+  +   -d $SESSIONS_DIR
+  +       or mkdir $SESSIONS_DIR
+```
+
+`write`, `replace` and `edit` show what they changed as a diff
+(`AI_SHOW_DIFF`, `AI_DIFF_LINES`). The model always gets the complete result.
+`AI_TOOL_DISPLAY=full` shows the calls and results as they are.
+
+Every change the file tools make (also `delete`, `move`, `mkdir`, also by
+sub-agents) is noted in the session, with a copy of the old content. `/undo`
+takes back the last one, again and again; `/undo list` shows them. What `bash`
+or `perl` do to files is not covered.
+
+### System prompt and caching
+
+The system prompt of a session is: the prompt template, the tools (`coder`),
+the project instructions and the date, in that order, the most stable parts
+first. Project instructions are the `AGENTS.md` of the working directory
+(`AI_PROJECT_FILE` for other names, empty for none). The date is only the
+month by default (`AI_PROMPT_DATE`: `none`, `year`, `month`, `day` or a
+`strftime` format).
+
+It is built once, when the session starts, and stored. Later requests are that
+same text plus what was said since, byte for byte (JSON is written with sorted
+keys): nothing at the start of the conversation changes, so prompt/prefix
+caches keep working. A changed `AGENTS.md` or a new month only show up in a
+new session, or after `/clear` or `/prompt`. The one thing that rewrites
+history is context compaction, and only when the window is nearly full.
 
 ### Sub-agents
 
@@ -277,6 +328,14 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 | `AI_USAGE` | 0: don't ask the API for token usage | 1 |
 | `AI_SHOW_USAGE` | 0 hides the usage line | 1 |
 | `AI_STATUS` | 0 switches the status line off | 1 |
+| `AI_TOOL_DISPLAY` | `brief`: a line per tool call and the start of its result; `full`: everything | `brief` |
+| `AI_TOOL_LINES` | lines of a tool result shown with `brief` | 8 |
+| `AI_SHOW_DIFF` | 0: no diff after a file change | 1 |
+| `AI_DIFF_LINES` | max lines of a diff | 40 |
+| `AI_UNDO_MAX_SIZE` | files bigger than this (bytes) are changed without an undo copy | 8000000 |
+| `AI_PROJECT_FILE` | project instruction files to add to the system prompt, empty for none | `AGENTS.md` |
+| `AI_PROJECT_FILE_MAX` | max bytes taken from such a file | 32768 |
+| `AI_PROMPT_DATE` | date in the system prompt: `none`, `year`, `month`, `day` or a `strftime` format | `month` |
 | `AI_SHOW_THINKING` | 0 hides the thinking | 1 |
 | `AI_TOOL_TIMEOUT` | seconds for a bash/perl/grep tool, 0 = no limit | 120 |
 | `AI_TOOL_MAX_OUTPUT` | max bytes of a tool result, the middle is cut out | 65536 |
