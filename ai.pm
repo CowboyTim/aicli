@@ -3,6 +3,7 @@ package ai;
 use strict; use warnings;
 
 use utils;
+use tui;
 
 use Cwd ();
 use Encode ();
@@ -19,6 +20,7 @@ our ($api_key, $AI_ENDPOINT_URL, $SESSION_MODEL, $provider_name);
 our ($AI_SESSION_DIR, $HISTORY_FILE, $PROMPT_FILE, $STATUS_FILE, $BASE_DIR, $AI_PROMPT_TEMPLATE, $AI_PROMPT_TEMPLATE_FILE, $AI_SESSION, $SESSIONS_DIR, $AI_PROVIDER, $AI_URL);
 our $cmds;
 our @MODELS;
+our $TUI = tui->new(enabled => 0); # the status line, switched on in chat_loop
 our $BUSY = 0;      # a completion/tool turn is running: ctrl-C aborts the turn only
 our $MAIN_PID = $$;
 
@@ -290,20 +292,11 @@ sub parse_tool_args {
     return;
 }
 
-sub handle_llm_response {
-    my ($resp, $printer_sub) = @_;
-    return (0, 0, []) unless defined $resp and ref($resp) eq 'SCALAR' and length($$resp // "");
-    log::info("handling>>$$resp<<");
-    $printer_sub //= sub {
-        my ($r) = @_;
-        print $r;
-    };
-
-    my $newturns = 0;
-    my @rt;
-    # tools work with bytes, and never run from within a thinking block
-    my $msg = to_bytes(strip_thinking($$resp));
-    log::info("MSG THINK STRIPPED>>$msg<<");
+# the tool calls in an answer (bytes): a list of {tool, k, t, args}, where
+# args is undef for a call that could not be parsed
+sub parse_tool_calls {
+    my ($msg) = @_;
+    my @calls;
     my $t_rx = tools::rx();
     while($msg =~ m/$t_rx/mg){
         my ($tool, $declared) = ($1, $2);
@@ -312,28 +305,109 @@ sub handle_llm_response {
             or next;
         my $t_args = parse_tool_args(\$msg, $t, $declared);
         log::info("TOOL:$tool, K:$tool_k, A:".join(' ', @{$t_args // ['<malformed>']}));
+        push @calls, {tool => $tool, k => $tool_k, t => $t, args => $t_args};
+    }
+    return @calls;
+}
 
-        &{$printer_sub}("${colors::yellow_color1}\[TOOL $tool\(...))\]${colors::reset_color}\n");
-        my ($result, $had_error);
-        if(utils::aborted()){
-            ($result, $had_error) = ("", "[ERROR] not executed, interrupted by user");
-        } elsif(!$t_args){
-            ($result, $had_error) = ("", "[ERROR] malformed tool call for '$tool', nothing was executed. Expected syntax:\n$t->{syntax}");
-        } else {
-            ($result, $had_error) = execute_tool($tool_k, $tool, $t_args);
-        }
-        my $tool_response = "";
-        if(!$had_error){
-            $tool_response = "[$tool RESULT_d170\n$result\nRESULT_d170]";
-        } else {
-            $tool_response = "[$tool ERROR_9a78\n$had_error\nERROR_9a78]";
-        }
+sub malformed_error {
+    my ($c) = @_;
+    return "[ERROR] malformed tool call for '$c->{tool}', nothing was executed. Expected syntax:\n$c->{t}{syntax}";
+}
+
+# what the model gets to see of a tool run
+sub tool_response {
+    my ($tool, $result, $had_error) = @_;
+    return "[$tool ERROR_9a78\n$had_error\nERROR_9a78]" if $had_error;
+    return "[$tool RESULT_d170\n".($result // '')."\nRESULT_d170]";
+}
+
+sub handle_llm_response {
+    my ($resp, $printer_sub) = @_;
+    return (0, 0, []) unless defined $resp and ref($resp) eq 'SCALAR' and length($$resp // "");
+    log::info("handling>>$$resp<<");
+    $printer_sub //= sub {
+        my ($r) = @_;
+        $TUI->clear();
+        print $r;
+    };
+
+    # tools work with bytes, and never run from within a thinking block
+    my $msg = to_bytes(strip_thinking($$resp));
+    log::info("MSG THINK STRIPPED>>$msg<<");
+    my (@rt, @agents);
+    my $answer = sub {
+        my ($i, $c, $result, $had_error) = @_;
+        my $tool_response = tool_response($c->{tool}, $result, $had_error);
         &{$printer_sub}("${colors::green_color}$tool_response${colors::reset_color}\n");
-        push @rt, {role => 'user', content => to_text($tool_response)};
-        $newturns = 1;
+        $rt[$i] = {role => 'user', content => to_text($tool_response)};
+    };
+    foreach my $c (parse_tool_calls($msg)){
+        my $i = scalar(@rt);
+        push @rt, undef;
+        &{$printer_sub}("${colors::yellow_color1}\[TOOL $c->{tool}\(...))\]${colors::reset_color}\n");
+        if(utils::aborted()){
+            &{$answer}($i, $c, "", "[ERROR] not executed, interrupted by user");
+        } elsif(!$c->{args}){
+            &{$answer}($i, $c, "", malformed_error($c));
+        } elsif($c->{k} eq 'agent'){
+            # sub-agents are started now and work side by side, their answers
+            # are collected below
+            push @agents, [$i, $c, agent::launch($c->{args}[0])];
+        } else {
+            $TUI->set('tool', $c->{k});
+            my @r = execute_tool($c->{k}, $c->{tool}, $c->{args});
+            $TUI->unset('tool');
+            &{$answer}($i, $c, @r);
+        }
+    }
+    if(@agents){
+        agent::wait(map {$_->[2]} @agents);
+        foreach my $e (@agents){
+            my ($i, $c, $a) = @$e;
+            &{$answer}($i, $c, agent_result($a));
+        }
     }
 
+    my $newturns = @rt ? 1 : 0;
     return $newturns, ($newturns ? undef : 0), \@rt;
+}
+
+# ($result, $error) of a finished sub-agent, as for a tool
+sub agent_result {
+    my ($a) = @_;
+    return (truncate_output($a->{result} // ''), undef) unless defined $a->{error};
+    return ("", truncate_output("[ERROR] agent $a->{id} failed: $a->{error}"
+        .(length($a->{result} // '') ? "\nIts last answer was:\n$a->{result}" : "")));
+}
+
+# Run a tool without waiting for it: $cb is called with ($result, $error), at
+# once for the tools that run in this process, from the event loop for the
+# ones that fork. For the sub-agents.
+sub execute_tool_async {
+    my ($k, $tool, $t_args, $cb) = @_;
+    my $t  = $tools::TOOLS->{$k};
+    my $fn = $t && tools->can(lc $t->{tag});
+    return &{$cb}("", "[ERROR] Unknown tool '$tool'") unless $fn;
+    return &{$cb}("", "[ERROR] a sub-agent cannot start agents") if $k eq 'agent';
+    my $ret = eval {
+        local $tools::ASYNC = 1; # forking tools hand back a job instead of waiting
+        &{$fn}($t_args);
+    };
+    if($@){
+        chomp(my $err = $@);
+        return &{$cb}("", truncate_output("[ERROR] problem running tool '$tool': $err"));
+    }
+    return &{$cb}(truncate_output($ret // ""), undef) unless ref($ret) eq 'tools::job';
+    loop::spawn($ret->{worker}, timeout => $ret->{timeout}, on_done => sub {
+        my $out = eval {&{$ret->{finish}}(@_)};
+        if($@){
+            chomp(my $err = $@);
+            return &{$cb}("", truncate_output("[ERROR] problem running tool '$tool': $err"));
+        }
+        return &{$cb}(truncate_output($out // ""), undef);
+    });
+    return;
 }
 
 sub execute_tool {
@@ -467,7 +541,7 @@ sub new_stream {
 # Shows thinking and answer in their own color while they stream in
 sub new_printer {
     my ($out) = @_;
-    $out //= sub {print $_[0]};
+    $out //= sub {$TUI->clear(); print $_[0]};
     my $show_thinking = ($::ORIG_ENV{AI_SHOW_THINKING} // 1) ? 1 : 0;
     my ($last, $ends_nl) = ('', 1);
     my $p = {};
@@ -582,14 +656,9 @@ sub classify_error {
 # token usage, timing and, on error, what classify_error() says.
 sub request_completion {
     my ($msgs, %o) = @_;
-    my $req = do {
-        my $w   = $::ORIG_ENV{AI_RAW} ? "raw" : "req";
-        my $fn  = "provider::$AI_PROVIDER"->can($w) // provider->can($w);
-        &{$fn}(@$msgs);
-    };
+    my $req = build_request($msgs);
     return ('', "ERROR: no raw prompt format known for model '".($SESSION_MODEL // '')."' (AI_RAW)", {})
-        unless $req;
-    $req = $::JSON->encode($req);
+        unless defined $req;
     log::info($req);
     log::info("Requesting completion from AI API $AI_URL with ".(length($api_key // '') ? 'an' : 'no')." api key");
 
@@ -597,8 +666,11 @@ sub request_completion {
     STDERR->autoflush(1);
     my $info = {t_start => Time::HiRes::time()};
     my $printer = new_printer($o{quiet} ? sub {} : undef);
+    # the status line tells that we wait, until there is something to show
+    $TUI->set('model', $o{quiet} ? 'summarizing' : 'waiting for model');
     my $st = new_stream(sub {
         $info->{t_first} //= Time::HiRes::time();
+        $TUI->unset('model') unless $o{quiet};
         &{$printer->{emit}}(@_);
     });
     my $r = utils::http("post", $AI_URL, $req, $api_key, sub {
@@ -609,26 +681,55 @@ sub request_completion {
         &{$st->{feed}}($raw);
         return length($raw);
     });
+    $TUI->unset('model');
     &{$st->{finish}}();
     &{$printer->{finish}}();
     $info->{t_end} = Time::HiRes::time();
     $info->{usage} = $st->{usage};
 
     return ($st->{content}, "interrupted", $info) if utils::aborted();
+    my ($err, $c) = completion_result($st, !defined $r, $utils::http_error, $utils::http_code, \%utils::http_headers);
+    $info->{$_} = $c->{$_} for keys %$c;
+    return ($st->{content}, $err, $info);
+}
+
+# the JSON body of a completion request for these messages, undef when the
+# provider has no format for it
+sub build_request {
+    my ($msgs) = @_;
+    my $w   = $::ORIG_ENV{AI_RAW} ? "raw" : "req";
+    my $fn  = "provider::$AI_PROVIDER"->can($w) // provider->can($w);
+    my $req = &{$fn}(@$msgs)
+        or return;
+    return $::JSON->encode($req);
+}
+
+# How a request ended: ($error, {what classify_error() says}), $error is undef
+# when all is well. $st is the stream state the reply went through.
+sub completion_result {
+    my ($st, $failed, $http_error, $code, $headers) = @_;
     my $err;
     if($st->{error}){
         $err = format_api_error($st->{error});
-    } elsif(!defined $r){
+    } elsif($failed){
         log::info("GOT ERROR RESPONSE REMAINING >>$st->{rbuf}<<");
-        $err = format_api_error(undef, join(": ", grep {length} $utils::http_error // '', $st->{rbuf} =~ s/\s+\z//r));
+        $err = format_api_error(undef, join(": ", grep {length} $http_error // '', $st->{rbuf} =~ s/\s+\z//r));
     } elsif(!$st->{events} and $st->{rbuf} =~ m/\S/){
-        return ($st->{content}, "ERROR: unexpected reply: $st->{rbuf}", $info);
+        return ("ERROR: unexpected reply: $st->{rbuf}", {});
     }
-    if(defined $err){
-        my $c = classify_error($utils::http_code, $st->{error}, $err, \%utils::http_headers);
-        $info->{$_} = $c->{$_} for keys %$c;
-    }
-    return ($st->{content}, $err, $info);
+    return (undef, {}) unless defined $err;
+    return ($err, classify_error($code, $st->{error}, $err, $headers));
+}
+
+# the system prompt of a sub-agent: the prompt of the session, the tools
+# (without the agent tool) and what it is there for
+sub subagent_prompt {
+    my $prompt = slurp($PROMPT_FILE // '') // '';
+    $prompt .= prompt::coder::prompt(exclude => ['agent']);
+    $prompt .= "\n\nYou are a sub-agent: another agent gave you the task below, the user is not here and you cannot ask questions. "
+              ."Work on it with your tools. Your final answer, the one without a tool call, is all the other agent gets to see: "
+              ."report what you found or did, complete but without the detours.\n";
+    return $prompt;
 }
 
 #------------------------------------------------------------------------------
@@ -1657,6 +1758,10 @@ sub input_stdin {
 sub chat_loop {
     $::LOOP = 1;
     my $input_cli_sub = -t STDIN ? input_terminal() : input_stdin();
+    # the status line, animated by the event loop
+    $TUI = tui->new();
+    $loop::on_tick = sub {$TUI->tick()};
+    $loop::on_idle = sub {$TUI->clear()};
     while($::LOOP){
         log::info("Waiting for user input...");
         $::ABORT = 0;
@@ -1693,6 +1798,205 @@ sub cleanup_chat {
 
 END {
     ai::cleanup_chat();
+}
+
+package agent;
+# A sub-agent: its own conversation with the model and its own tool loop, for
+# one task of the main agent. It is not a process and not a thread: it is a
+# state machine whose HTTP request (a curl handle) and tools (forked children)
+# live in the event loop, next to those of the other agents, so several of
+# them work at the same time. Nothing of it is printed, the status line shows
+# what each one does, the final answer goes back to the main agent.
+
+use strict; use warnings;
+
+our $SEQ = 0;
+our %RUNNING; # id => agent
+our @QUEUE;   # agents waiting for a free slot (AI_MAX_AGENTS)
+
+sub new {
+    my ($class, $task) = @_;
+    my $self = bless {
+        id       => ++$SEQ,
+        task     => $task,
+        msgs     => [
+            {role => 'system', content => ai::to_text(ai::subagent_prompt())},
+            {role => 'user',   content => ai::to_text($task)},
+        ],
+        turns    => 0,
+        tools    => 0,
+        attempt  => 0,
+        activity => 'queued',
+        done     => 0,
+        result   => undef,
+        error    => undef,
+    }, $class;
+    return $self;
+}
+
+# create an agent for a task and start it, or queue it when enough are running
+sub launch {
+    my ($task) = @_;
+    my $self = agent->new($task);
+    $ai::TUI->set("agent $self->{id}", sub {$self->status()});
+    my $max = $::ORIG_ENV{AI_MAX_AGENTS} // 4;
+    if($max and keys(%RUNNING) >= $max){
+        push @QUEUE, $self;
+    } else {
+        $self->start();
+    }
+    return $self;
+}
+
+# drive the event loop until these agents are done
+sub wait {
+    my (@agents) = @_;
+    loop::run(sub {!grep {!$_->{done}} @agents});
+    return;
+}
+
+sub status {
+    my ($self) = @_;
+    return "agent $self->{id}: $self->{activity}".($self->{turns} ? ", turn ".($self->{turns} + 1) : "");
+}
+
+sub start {
+    my ($self) = @_;
+    $RUNNING{$self->{id}} = $self;
+    $self->request();
+    return;
+}
+
+sub request {
+    my ($self) = @_;
+    return $self->finish(undef, "interrupted") if utils::aborted();
+    my $budget = $::ORIG_ENV{AI_TOKEN_BUDGET};
+    return $self->finish(undef, "token budget used up (AI_TOKEN_BUDGET)")
+        if $budget and (ai::load_usage()->{total_tokens} // 0) >= $budget;
+    my $json = do {
+        local $ai::SESSION_MODEL = $::ORIG_ENV{AI_AGENT_MODEL} || $ai::SESSION_MODEL;
+        ai::build_request($self->{msgs});
+    };
+    return $self->finish(undef, "no request format for this model (AI_RAW)") unless defined $json;
+    $self->{activity} = 'waiting for model';
+    my $st = ai::new_stream(sub {
+        my ($kind) = @_;
+        $self->{activity} = $kind eq 'think' ? 'thinking' : 'answering';
+    });
+    my $info = {t_start => Time::HiRes::time()};
+    loop::http(
+        method  => 'post',
+        url     => $ai::AI_URL,
+        data    => $json,
+        api_key => $ai::api_key,
+        on_data => sub {
+            my ($ch, $raw) = @_;
+            $raw //= $ch; # WWW::Curl::Easy: <data>, <user_ref>, Net::Curl::Easy: <handle>, <data>
+            $info->{t_first} //= Time::HiRes::time();
+            &{$st->{feed}}($raw);
+            return length($raw);
+        },
+        on_done => sub {
+            my ($req) = @_;
+            &{$st->{finish}}();
+            $info->{t_end} = Time::HiRes::time();
+            $info->{usage} = $st->{usage};
+            my ($err, $c) = ai::completion_result($st, defined $req->{error}, $req->{error}, $req->{code}, $req->{headers});
+            $info->{$_} = $c->{$_} for keys %$c;
+            $self->response($st->{content}, $err, $info);
+        },
+    );
+    return;
+}
+
+sub response {
+    my ($self, $resp, $err, $info) = @_;
+    ai::record_usage($self->{msgs}, $resp, $info)
+        if !defined $err or length($resp);
+    my $answer = ai::strip_thinking($resp) =~ s/\A\s+//r;
+    if(defined $err){
+        return $self->finish(undef, "interrupted") if utils::aborted();
+        my $retries = $::ORIG_ENV{AI_RETRIES} // 4;
+        if(!length($answer) and $info->{retryable} and $self->{attempt} < $retries){
+            my $wait = ai::retry_delay(++$self->{attempt}, $info->{wait});
+            if($wait <= ($::ORIG_ENV{AI_RETRY_MAX_WAIT} // 120)){
+                $self->{activity} = "retry $self->{attempt} of $retries";
+                loop::timer($wait, sub {$_[0] ? $self->finish(undef, "interrupted") : $self->request()});
+                return;
+            }
+        }
+        return $self->finish(length($answer) ? $answer : undef, $err);
+    }
+    $self->{attempt} = 0;
+    return $self->finish(undef, "the model gave no answer") unless length($answer);
+    push @{$self->{msgs}}, {role => 'assistant', content => $answer};
+    my @calls = ai::parse_tool_calls(ai::to_bytes($answer));
+    return $self->finish($answer) unless @calls;
+    my $max_turns = $::ORIG_ENV{AI_MAX_TURNS} // 50;
+    return $self->finish($answer, "stopped after $max_turns tool turns (AI_MAX_TURNS)")
+        if $max_turns and ++$self->{turns} >= $max_turns;
+    $self->{queue} = \@calls;
+    $self->next_tool();
+    return;
+}
+
+# run the tool calls of the last answer one after the other, then ask again
+sub next_tool {
+    my ($self) = @_;
+    while(my $c = shift @{$self->{queue}}){
+        my $got = sub {
+            my ($result, $err) = @_;
+            push @{$self->{msgs}}, {role => 'user', content => ai::to_text(ai::tool_response($c->{tool}, $result, $err))};
+        };
+        if(utils::aborted()){
+            &{$got}("", "[ERROR] not executed, interrupted by user");
+            next;
+        }
+        if(!$c->{args}){
+            &{$got}("", ai::malformed_error($c));
+            next;
+        }
+        $self->{activity} = $c->{k};
+        $self->{tools}++;
+        # in-process tools answer at once, forked ones later from the loop
+        my ($in_call, $answered) = (1, 0);
+        ai::execute_tool_async($c->{k}, $c->{tool}, $c->{args}, sub {
+            &{$got}(@_);
+            return $answered = 1 if $in_call;
+            $self->next_tool();
+        });
+        $in_call = 0;
+        return unless $answered;
+    }
+    $self->request();
+    return;
+}
+
+sub finish {
+    my ($self, $result, $err) = @_;
+    return if $self->{done};
+    @{$self}{qw(done result error activity)} = (1, $result, $err, 'done');
+    delete $RUNNING{$self->{id}};
+    $ai::TUI->unset("agent $self->{id}");
+    # what it did, for whoever wants to know: sessions/<name>/agents/<n>.chat
+    eval {
+        my $dir = "$ai::AI_SESSION_DIR/agents";
+        -d $dir or mkdir $dir or die "$dir: $!\n";
+        ai::spew(sprintf("%s/%d-%03d.chat", $dir, $^T, $self->{id}),
+            join('', map {$::JSON->encode($_)."\n"} @{$self->{msgs}}));
+        1;
+    } or log::info("agent transcript not saved: $@");
+    # the next one in line
+    while(@QUEUE){
+        my $next = shift @QUEUE;
+        if(utils::aborted()){
+            $next->finish(undef, "interrupted");
+            next;
+        }
+        $next->start();
+        last;
+    }
+    return;
 }
 
 package model;
@@ -1824,6 +2128,8 @@ BEGIN {
 package prompt::coder;
 
 sub prompt {
+    my (%o) = @_;
+    my %exclude = map {($_ => 1)} @{$o{exclude} // []};
     my $list = "\n\n**TOOLS**\n\n";
     $list .= "You can run tools. To call a tool, write its block exactly as shown below, starting at the\n";
     $list .= "beginning of a line and outside of your thinking. You may call several tools in one answer,\n";
@@ -1839,7 +2145,7 @@ sub prompt {
         "description: $tools::TOOLS->{$_}{description}\n".
         "properties:\n"._kv_print($tools::TOOLS->{$_}{properties}, 1).
         ($tools::TOOLS->{$_}{example} ? "example: ```\n$tools::TOOLS->{$_}{example}```\n" : "")
-    } sort keys %{$tools::TOOLS});
+    } grep {!$exclude{$_}} sort keys %{$tools::TOOLS});
     $list .= "\n";
     log::info("TOOLS SECTION>>$list<<");
     return $list;
@@ -2003,6 +2309,14 @@ EOb
         },
         required => ["path"],
     },
+    agent => {
+        description => "give a task to a sub-agent and get its final answer. It has the same tools but knows nothing of this conversation: put everything it needs in the task (goal, paths, what to report). Several agent calls in one answer work in parallel, use that for independent tasks like exploring different parts of a project",
+        syntax => "///AGENT_f2a8+EO_9d31\n{{task}}\nEO_9d31[LENGTH({{task}})]\nAGENT_f2a8",
+        properties  => {
+            "task" => {type => "string", description => "The complete, self-contained task"},
+        },
+        required => ["task"],
+    },
     list => {
         description => "list a directory: type (d, f, l), size and name of every entry",
         syntax => "///LIST_a41d+EO_6c08\n{{path}}\nEO_6c08[LENGTH({{path}})]\nLIST_a41d",
@@ -2031,17 +2345,40 @@ sub rx {
     $TOOLS_RX;
 }
 
+our $ASYNC; # true: _run hands back a job for the event loop instead of waiting
+
 # Run a worker in a fork, give back its output. Dies with the reason and the
-# output so far when it did not end well.
+# output so far when it did not end well. Options: cleanup (a sub, called when
+# the child is gone), exit_ok (exit codes besides 0 that are fine).
+# With $ASYNC nothing is started: the job comes back, see execute_tool_async.
 sub _run {
-    my ($worker_sub) = @_;
+    my ($worker_sub, %o) = @_;
     my $timeout = $::ORIG_ENV{AI_TOOL_TIMEOUT} // 120;
-    my ($out, $exit, $sig, $why) = utils::fork_run($worker_sub, timeout => $timeout);
-    return $out unless $why or $sig or $exit;
-    $out =~ s/\n\z//;
-    die "$why, output: $out\n" if $why;
-    die "killed by signal $sig, output: $out\n" if $sig;
-    die "exit code: $exit, output: $out\n";
+    my $finish = sub {
+        my ($out, $exit, $sig, $why) = @_;
+        $o{cleanup}->() if $o{cleanup};
+        return $out unless $why or $sig or ($exit and !grep {$exit == $_} @{$o{exit_ok} // []});
+        $out =~ s/\n\z//;
+        die "$why, output: $out\n" if $why;
+        die "killed by signal $sig, output: $out\n" if $sig;
+        die "exit code: $exit, output: $out\n";
+    };
+    return bless({worker => $worker_sub, timeout => $timeout, finish => $finish}, 'tools::job')
+        if $ASYNC;
+    return &{$finish}(utils::fork_run($worker_sub, timeout => $timeout));
+}
+
+# agent: a sub-agent works on the task, see package agent. (Several calls in
+# one answer are started together by handle_llm_response, this is one alone.)
+sub agent_f2a8 {
+    my ($t_args) = @_;
+    my $task = $t_args->[0] // '';
+    die "no task\n" unless $task =~ m/\S/;
+    my $a = agent::launch($task);
+    agent::wait($a);
+    my ($result, $err) = ai::agent_result($a);
+    die(($err =~ s/^\[ERROR\] //r)."\n") if defined $err;
+    return $result;
 }
 
 # bash: the script goes to a temp file, a forked child exec()s bash on it
@@ -2055,11 +2392,8 @@ sub bash_7c48 {
         unlink $fn;
         die "failed to write to temp file: $err\n";
     }
-    my $out = eval {_run(sub {exec {'bash'} 'bash', $fn or die "cannot exec bash: $!\n"})};
-    my $err = $@;
-    unlink $fn;
-    die $err if $err;
-    return $out;
+    return _run(sub {exec {'bash'} 'bash', $fn or die "cannot exec bash: $!\n"},
+        cleanup => sub {unlink $fn});
 }
 
 # code of the LLM gets its own package, and none of our lexicals
@@ -2346,16 +2680,10 @@ sub grep_6629 {
     my $path    = utils::trim($t_args->[0] // '');
     my $pattern = $t_args->[1];
     die "not enough properties\n" unless length($path) and length($pattern // "");
-    my $timeout = $::ORIG_ENV{AI_TOOL_TIMEOUT} // 120;
-    my ($out, $exit, $sig, $why) = utils::fork_run(sub {
+    return _run(sub {
         exec {'grep'} 'grep', '-rn', '-e', $pattern, '--', $path
             or die "cannot exec grep: $!\n";
-    }, timeout => $timeout);
-    die "$why, output: $out\n" if $why;
-    die "killed by signal $sig, output: $out\n" if $sig;
-    return "" if $exit == 1; # no match
-    die "exit code: $exit, output: $out\n" if $exit;
-    return $out;
+    }, exit_ok => [1]); # 1: no match
 }
 
 

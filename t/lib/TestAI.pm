@@ -116,6 +116,45 @@ sub mock_http {
     return;
 }
 
+# The LLM of the sub-agents: they talk through loop::http, several at a time,
+# so there is no script but a responder: sub($messages, $request) that returns
+# the chunks to stream, or {code, body, headers} for a failure, or a number of
+# seconds to hang. @AGENT_REQUESTS has what was asked, $MAX_INFLIGHT how many
+# requests were open at once.
+our (@AGENT_REQUESTS, $INFLIGHT, $MAX_INFLIGHT);
+sub mock_agent_http {
+    my ($responder, %o) = @_;
+    @AGENT_REQUESTS = ();
+    ($INFLIGHT, $MAX_INFLIGHT) = (0, 0);
+    no warnings 'redefine';
+    *loop::http = sub {
+        my (%r) = @_;
+        my $req = {%r, code => 0, error => undef, headers => {}, body => '', messages => JSON::XS::decode_json($r{data})->{messages}};
+        push @AGENT_REQUESTS, $req;
+        $INFLIGHT++;
+        $MAX_INFLIGHT = $INFLIGHT if $INFLIGHT > $MAX_INFLIGHT;
+        my $step = $responder->($req->{messages}, $req);
+        loop::timer(ref($step) ? ($o{delay} // 0.02) : $step, sub {
+            my ($aborted) = @_;
+            $INFLIGHT--;
+            if($aborted or !ref($step)){
+                $req->{error} = $aborted ? "interrupted" : "Timeout was reached";
+            } elsif(ref($step) eq 'HASH'){
+                $r{on_data}->(undef, $step->{body}) if defined $step->{body};
+                $req->{code}    = $step->{code} // 0;
+                $req->{headers} = $step->{headers} // {};
+                $req->{error}   = $req->{code} ? "HTTP status $req->{code}" : "Couldn't connect to server";
+            } else {
+                $r{on_data}->(undef, $_) for @$step;
+                $req->{code} = 200;
+            }
+            $r{on_done}->($req);
+        });
+        return $req;
+    };
+    return;
+}
+
 # the messages of request number $i (0 based) as sent to the API
 sub sent_messages {
     my ($i) = @_;

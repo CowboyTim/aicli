@@ -234,7 +234,7 @@ our ($multi, $net);
 our (%http, $http_seq); # running transfers
 our %child;             # running children, by pid
 our @timers;            # [time, callback]
-our $on_tick;           # called after every round (status line)
+our $on_tick;           # called every round, before the wait (status line)
 our $on_idle;           # called when run() returns
 
 sub _multi {
@@ -336,6 +336,7 @@ sub _http_done {
 sub spawn {
     my ($worker_sub, %o) = @_;
     my ($pid, $fh) = utils::fork_child($worker_sub);
+    $fh->blocking(0); # the loop must never hang in a read
     my $job = {
         pid      => $pid,
         fh       => $fh,
@@ -418,11 +419,17 @@ sub step {
             } @sets[0 .. 2];
         }
     }
-    vec($rin, fileno($_->{fh}), 1) = 1 for values %child;
+    # only what is waited for here may be read below: a child that a callback
+    # starts in this round can get the file descriptor number of a socket
+    # that was just closed, and that one is still marked readable
+    my @jobs = values %child;
+    vec($rin, fileno($_->{fh}), 1) = 1 for @jobs;
     foreach my $due ((map {$_->[0]} @timers), (map {grep {$_} @{$_}{qw(deadline kill_at giveup_at)}} values %child)){
         $t = $due - $now if $due - $now < $t;
     }
     $t = 0 if $t < 0;
+    # show where things are (status line), then wait
+    $on_tick->() if $on_tick;
     my ($rout, $wout, $eout) = ($rin, $win, $ein);
     my $ready = select($rout, $wout, $eout, $t);
     # interrupted by a signal: nothing is readable, whatever the sets say
@@ -449,10 +456,11 @@ sub step {
     }
 
     # children: their output, their end, their deadlines
-    foreach my $job (values %{{%child}}){
+    foreach my $job (@jobs){
+        next unless $child{$job->{pid}};
         if(vec($rout // '', fileno($job->{fh}), 1)){
             my $got = sysread($job->{fh}, $job->{buf}, 65536, length($job->{buf}));
-            next if !defined $got and $!{EINTR};
+            next if !defined $got and ($!{EINTR} or $!{EAGAIN});
             if(!$got){ # EOF or error
                 _child_done($job);
                 next;
@@ -477,7 +485,6 @@ sub step {
         $_->[1]->(0) for @due;
     }
 
-    $on_tick->() if $on_tick;
     return;
 }
 

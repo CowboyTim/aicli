@@ -88,6 +88,25 @@ my ($Y, $G, $R) = ($colors::yellow_color1, $colors::green_color, $colors::reset_
     ai::handle_command("/clear");
 }
 
+# sub-agents: two conversations and their tools at the same time, real HTTP
+{
+    my $t0 = Time::HiRes::time();
+    my $out = TestAI::capture {ai::chat_completion("agents please")};
+    my $took = Time::HiRes::time() - $t0;
+    my @msgs = ai::load_messages();
+    is(TestAI::roles(@msgs), "system,user,assistant,user,user,assistant", "agents: two results for the model");
+    like($msgs[3]{content}, qr/\A\[AGENT_f2a8 RESULT_d170\nThe tool said: A-done by \d+ \(messages: 4,/, "agents: answer of the 1st, it ran its own tool loop");
+    like($msgs[4]{content}, qr/\A\[AGENT_f2a8 RESULT_d170\nThe tool said: B-done by \d+ /, "agents: answer of the 2nd, in call order");
+    my ($pa) = $msgs[3]{content} =~ m/A-done by (\d+)/;
+    my ($pb) = $msgs[4]{content} =~ m/B-done by (\d+)/;
+    isnt($pa, $pb, "agents: each ran its own bash");
+    ok($took >= 2 && $took < 3.7, "agents: 2 x 2s of work in ".sprintf("%.1fs", $took).", so side by side");
+    unlike($out, qr/on it|sleep 2/, "agents: their thinking and tool calls are not printed");
+    my @transcripts = glob("$tmp/aicli/sessions/test/agents/*.chat");
+    is(scalar(@transcripts), 2, "agents: transcripts saved");
+    ai::handle_command("/clear");
+}
+
 # the same connection handle keeps working after errors and aborts
 {
     my $out = TestAI::capture {ai::chat_completion("go again")};

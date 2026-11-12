@@ -4,6 +4,8 @@ package FakeLLM;
 #   "fail..."          HTTP 429 with a JSON error
 #   "slow..."          starts to think, then hangs
 #   "limited <file>"   HTTP 429 with Retry-After: 1 the first time, then fine
+#   "agents..."        calls two sub-agents with a "sleep-task"
+#   "sleep-task X"     (a sub-agent) calls bash: sleep 2, echo X-done
 #   a tool result      the final answer, quoting the result
 #   anything else      thinks, then calls the bash tool
 
@@ -98,6 +100,15 @@ sub serve {
         print {$c} sse({reasoning_content => "let me think for a long time"});
         sleep 60;
         return;
+    } elsif($last =~ m/^agents/){
+        # the main agent delegates to two sub-agents
+        @events = map {sse({content => $_})} "Two at once.\n",
+            "///AGENT_f2a8+EO_9d31\nsleep-task A\nEO_9d31\nAGENT_f2a8\n",
+            "///AGENT_f2a8+EO_9d31\nsleep-task B\nEO_9d31\nAGENT_f2a8\n";
+    } elsif($last =~ m/^sleep-task (\w+)/){
+        # a sub-agent: something that takes a while
+        @events = (sse({reasoning_content => "on it"}),
+            sse({content => "///BASH_7c48+EO_dfd7\nsleep 2; echo \"$1-done by \$\$\"\nEO_dfd7\nBASH_7c48\n"}));
     } elsif($last =~ m/RESULT_d170\n(.*?)\n/s){
         @events = map {sse({content => $_})} "The tool said: $1", " (messages: ".scalar(@$msgs),
             ", model: ".($req->{model} // 'none'), ", auth: ".($h{authorization} // 'none').")";
