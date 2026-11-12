@@ -28,6 +28,10 @@ These are requirements, not suggestions.
 - **Children only through the loop**: `loop::spawn()` / `utils::fork_run()`
   give the child its own session, a clean environment, captured output, a
   timeout and abort handling. No backticks, `system()` or piped `open()`.
+- **File tools stay in the workspace**: every path a file tool takes from the
+  model goes through `tools::_path()` first (`nofollow => 1` when the tool
+  acts on the entry itself: delete, move). A new file tool that skips it is a
+  hole. `bash` and `perl` are not confined, the container is.
 - **File tools are Perl**: reading, writing, editing, deleting, moving,
   listing files is done in-process with Perl, never by shelling out. Only
   what the model explicitly asks a shell for (`bash`, `grep`) is a process.
@@ -230,8 +234,13 @@ How they run:
 | fetch, search | `tools::_http` → `loop::http` (web proxy, timeout, size limit, redirects) |
 | agent | `agent::launch` + `agent::wait` |
 
-There is no confirmation step and no path restriction, by choice: the docker
-container is the sandbox.
+There is no confirmation step, by choice. The file tools are confined to the
+workspace (`$ai::WORKSPACE`, set by `ai::set_workspace()` at start from
+`AI_WORKSPACE` or the current directory; `@ai::WORKSPACE_ALLOW`).
+`tools::_path()` resolves the part of a path that exists with `realpath`
+(symlinks, `..`), requires plain names for the rest, and dies with "outside of
+the workspace" unless the result is under an allowed root. The docker
+container is still the sandbox for `bash` and `perl`.
 
 ## Commands
 
@@ -273,6 +282,7 @@ implemented.
 | `t/50_commands.t` | slash commands, input readers, completion |
 | `t/60_tools.t` | `fork_run`, environment, bash/perl/Safe/read/write/grep |
 | `t/65_file_tools.t` | lines, replace, the ed engine, edit, delete, move, mkdir, list |
+| `t/66_workspace.t` | workspace confinement: `..`, absolute paths, symlinks, every file tool, `/workspace` |
 | `t/70_retry_usage_context.t` | retry/backoff, rate limits, usage, budget, context management |
 | `t/80_agents.t` | sub-agents (parallel, limits, errors, abort), the status line |
 | `t/95_cli.t` | `-p` (one request, exit codes, stdin) and `-c` (continue per directory), as a process |

@@ -24,6 +24,8 @@ our @MODELS;
 our $TUI = tui->new(enabled => 0); # the status line, switched on in chat_loop
 our $BUSY = 0;      # a completion/tool turn is running: ctrl-C aborts the turn only
 our $MAIN_PID = $$;
+our $WORKSPACE;       # the directory the file tools are confined to, undef: no limit
+our @WORKSPACE_ALLOW; # more directories they may use
 
 our %PROVIDERS = (
     'cerebras' => {
@@ -136,9 +138,28 @@ sub chat_setup {
     $AI_URL = "$AI_ENDPOINT_URL/v1/chat/completions";
     $AI_URL = "$AI_ENDPOINT_URL/v1/completions" if $::ORIG_ENV{AI_RAW};
 
+    set_workspace($::ORIG_ENV{AI_WORKSPACE});
     init_session($AI_SESSION);
     use_session($AI_SESSION);
     return;
+}
+
+# Confine the file tools to a directory: the given one, the current directory
+# by default, "none" for no limit. AI_WORKSPACE_ALLOW adds directories.
+# Returns the workspace, undef for none.
+sub set_workspace {
+    my ($dir) = @_;
+    if(($dir // '') =~ m/^(?:none|off|no)$/i){
+        ($WORKSPACE, @WORKSPACE_ALLOW) = (undef);
+        return;
+    }
+    $dir = Cwd::cwd() unless length($dir // '');
+    my $real = (-d $dir) ? Cwd::realpath($dir) : undef;
+    die "workspace is not a directory: $dir\n" unless defined $real;
+    $WORKSPACE = $real;
+    @WORKSPACE_ALLOW = grep {defined} map {(-d $_) ? Cwd::realpath($_) : undef}
+        grep {length} split m/[\s,:]+/, $::ORIG_ENV{AI_WORKSPACE_ALLOW} // '';
+    return $WORKSPACE;
 }
 
 sub new_session_id {
@@ -1422,6 +1443,8 @@ sub project_instructions {
 # so the prefix cache of the API keeps working.
 sub prompt_context {
     my $r = project_instructions();
+    $r .= "\n\nWorkspace: $WORKSPACE\nThe file tools only work inside this directory.\n"
+        if defined $WORKSPACE and $WORKSPACE ne '/';
     my $date = prompt_date();
     $r .= "\n\nCurrent date: $date\n" if length($date);
     return $r;
@@ -1806,6 +1829,20 @@ our @COMMANDS;
                 print "$_\n" for sort grep {!m/^\./} readdir($dh);
                 closedir $dh;
             }
+            return 0;
+        },
+    },
+    '/workspace' => {
+        usage => '/workspace [dir|none]',
+        help  => 'show or set the directory the file tools are confined to',
+        run   => sub {
+            my ($args) = @_;
+            if(length($args)){
+                eval {set_workspace($args); 1}
+                    or print "Cannot set the workspace: $@";
+            }
+            print "Workspace: ".($WORKSPACE // 'none, the file tools can go anywhere')."\n";
+            print "Also allowed: @WORKSPACE_ALLOW\n" if @WORKSPACE_ALLOW;
             return 0;
         },
     },
@@ -3044,12 +3081,12 @@ sub perl_d8d2 {
 
 sub read_c5a3 {
     my ($t_args) = @_;
-    return _slurp(utils::trim($t_args->[0] // ''));
+    return _slurp(_path($t_args->[0]));
 }
 
 sub write_edf5 {
     my ($t_args) = @_;
-    my $path = utils::trim($t_args->[0] // '');
+    my $path = _path($t_args->[0]);
     log::info("WRITE: $path");
     die "is a directory: $path\n" if -d $path;
     _changing($path, 'write', $t_args->[1] // '');
@@ -3072,6 +3109,41 @@ sub _slurp {
     my $content = <$fh>;
     close($fh);
     return $content // "";
+}
+
+# The workspace: the file tools only touch what is inside $ai::WORKSPACE (and
+# the directories of AI_WORKSPACE_ALLOW). Returns the path as given (trimmed)
+# when it is inside, dies otherwise. What counts is where the path really
+# ends up: ".." and symbolic links are resolved first, so a link in the
+# workspace that points out of it is outside. With nofollow the last part is
+# taken as the entry itself, not what it links to (delete, move).
+# This holds the file tools back, not bash or perl: for those the container
+# is the fence.
+sub _path {
+    my ($path, %o) = @_;
+    $path = utils::trim($path // '');
+    $path = $o{default} if !length($path) and defined $o{default};
+    my $root = $ai::WORKSPACE;
+    return $path unless defined $root and length($path);
+    utils::load_cpan("File::Spec");
+    my @parts = grep {length and $_ ne '.'} split m{/+}, File::Spec->rel2abs($path);
+    my @rest  = $o{nofollow} && @parts ? (pop @parts) : ();
+    # the part that exists is resolved by the system, what does not exist yet
+    # has to be plain names
+    my $dir = '/'.join('/', @parts);
+    until(-e $dir or -l $dir){
+        unshift @rest, pop @parts;
+        $dir = '/'.join('/', @parts);
+    }
+    my $outside = "outside of the workspace ($root): $path\n";
+    die $outside if grep {$_ eq '..'} @rest;
+    my $real = Cwd::realpath($dir);
+    die $outside unless defined $real and -e $real; # a link to nowhere
+    $real = join('/', ($real eq '/' ? '' : $real), @rest) || '/';
+    foreach my $ok ($root, @ai::WORKSPACE_ALLOW){
+        return $path if $ok eq '/' or $real eq $ok or index($real, "$ok/") == 0;
+    }
+    die $outside;
 }
 
 our @CHANGES; # file contents changed by the last tools: {tool, path, old, new}
@@ -3138,7 +3210,7 @@ sub _spew {
 
 sub lines_7b06 {
     my ($t_args) = @_;
-    my $file  = utils::trim($t_args->[0] // '');
+    my $file  = _path($t_args->[0]);
     my $range = utils::trim($t_args->[1] // '');
     my @lines = split m/\n/, _slurp($file), -1;
     pop @lines if @lines and $lines[-1] eq '';
@@ -3157,7 +3229,7 @@ sub lines_7b06 {
 
 sub replace_91c4 {
     my ($t_args) = @_;
-    my $file = utils::trim($t_args->[0] // '');
+    my $file = _path($t_args->[0]);
     my ($old, $new) = ($t_args->[1] // '', $t_args->[2] // '');
     die "the old text is empty\n" unless length($old);
     my $content = _slurp($file);
@@ -3254,7 +3326,7 @@ sub ed_apply {
 
 sub edit_b3e1 {
     my ($t_args) = @_;
-    my $file = utils::trim($t_args->[0] // '');
+    my $file = _path($t_args->[0]);
     my $old  = _slurp($file);
     my $new  = ed_apply($old, $t_args->[1]);
     return "[OK] no change in $file" if $new eq $old;
@@ -3264,7 +3336,7 @@ sub edit_b3e1 {
 
 sub delete_5d2a {
     my ($t_args) = @_;
-    my $path = utils::trim($t_args->[0] // '');
+    my $path = _path($t_args->[0], nofollow => 1);
     die "no path\n" unless length($path);
     if(-d $path and !-l $path){
         rmdir($path)
@@ -3281,11 +3353,11 @@ sub delete_5d2a {
 
 sub move_c7f0 {
     my ($t_args) = @_;
-    my $from = utils::trim($t_args->[0] // '');
-    my $to   = utils::trim($t_args->[1] // '');
+    my $from = _path($t_args->[0], nofollow => 1);
+    my $to   = _path($t_args->[1]);
     die "need two paths\n" unless length($from) and length($to);
     die "no such file: $from\n" unless -e $from or -l $from;
-    $to = "$to/".($from =~ s{.*/}{}r) if -d $to;
+    $to = _path("$to/".($from =~ s{.*/}{}r), nofollow => 1) if -d $to;
     die "$to exists already\n" if -e $to or -l $to;
     if(!rename($from, $to)){
         # another filesystem
@@ -3299,7 +3371,7 @@ sub move_c7f0 {
 
 sub mkdir_2e9b {
     my ($t_args) = @_;
-    my $path = utils::trim($t_args->[0] // '');
+    my $path = _path($t_args->[0]);
     die "no path\n" unless length($path);
     return "[OK] $path exists already" if -d $path;
     utils::load_cpan("File::Path");
@@ -3312,7 +3384,7 @@ sub mkdir_2e9b {
 
 sub list_a41d {
     my ($t_args) = @_;
-    my $path = utils::trim($t_args->[0] // '');
+    my $path = _path($t_args->[0], default => '.');
     $path = '.' unless length($path);
     opendir(my $dh, $path)
         or die "cannot list $path: $!\n";
@@ -3328,7 +3400,7 @@ sub list_a41d {
 # grep: a forked child exec()s grep, no shell involved
 sub grep_6629 {
     my ($t_args) = @_;
-    my $path    = utils::trim($t_args->[0] // '');
+    my $path    = _path($t_args->[0]);
     my $pattern = $t_args->[1];
     die "not enough properties\n" unless length($path) and length($pattern // "");
     return _run(sub {

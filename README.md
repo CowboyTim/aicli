@@ -135,6 +135,7 @@ the model:
 | `/system <text>` | add a system message |
 | `/files [regex]` | add matching files of the current directory to the conversation (`.aiignore` is respected) |
 | `/tools` | list the tools |
+| `/workspace [dir\|none]` | show or set the directory the file tools are confined to |
 | `/chdir <dir>`, `/cd`, `/pwd`, `/ls` | working directory |
 | `/history` | input history |
 | `/debug`, `/nodebug` | debug logging |
@@ -206,6 +207,23 @@ closing tag are optional. Tool calls inside thinking are ignored. A call that
 cannot be parsed is answered with an error, so the model can correct itself.
 
 There is no confirmation before a tool runs. Run it in the container.
+
+### Workspace
+
+The file tools (`read`, `lines`, `write`, `replace`, `edit`, `delete`, `move`,
+`mkdir`, `list`, and the path of `grep`) only work inside the workspace: the
+directory `ai.pl` was started in, or `AI_WORKSPACE`. A path is judged by where
+it really ends up: `..` and symbolic links are resolved first, so
+`../other/file`, `/etc/passwd` and a link in the workspace that points out of
+it are all refused, and the model is told so. `delete` and `move` act on a
+link itself, never on what it points to.
+
+`AI_WORKSPACE_ALLOW` names more directories, `/workspace <dir>` moves the
+workspace while you chat, `AI_WORKSPACE=none` switches the limit off.
+
+This keeps the file tools from wandering. It is not a sandbox: `bash` and
+`perl` run what the model writes and can reach whatever the user can. For
+those the container is the fence.
 
 ### What you see, and taking it back
 
@@ -374,6 +392,8 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 | `AI_SHOW_DIFF` | 0: no diff after a file change | 1 |
 | `AI_DIFF_LINES` | max lines of a diff | 40 |
 | `AI_UNDO_MAX_SIZE` | files bigger than this (bytes) are changed without an undo copy | 8000000 |
+| `AI_WORKSPACE` | directory the file tools are confined to, `none` for no limit | start directory |
+| `AI_WORKSPACE_ALLOW` | more directories the file tools may use | |
 | `AI_PROJECT_FILE` | project instruction files to add to the system prompt, empty for none | `AGENTS.md` |
 | `AI_PROJECT_FILE_MAX` | max bytes taken from such a file | 32768 |
 | `AI_PROMPT_DATE` | date in the system prompt: `none`, `year`, `month`, `day` or a `strftime` format | `month` |

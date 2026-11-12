@@ -297,6 +297,19 @@ is honoured.
 The SearXNG instance has to allow the JSON format (settings.yml:
 C<search: formats: [html, json]>).
 
+=head1 WORKSPACE
+
+The file tools (B<read>, B<lines>, B<write>, B<replace>, B<edit>, B<delete>,
+B<move>, B<mkdir>, B<list> and the path of B<grep>) are confined to the
+workspace: the directory B<ai.pl> is started in, or B<AI_WORKSPACE>. A path
+counts by where it really leads: C<..> and symbolic links are resolved before
+the check, a path that ends up outside is refused. B<delete> and B<move> work
+on a link itself, not on its target. B<AI_WORKSPACE_ALLOW> adds directories,
+B</workspace> changes it while chatting.
+
+This is no sandbox: B<bash> and B<perl> are not held back by it. Use the
+container for that.
+
 =head1 SUB-AGENTS
 
 With the B<agent> tool the model hands a self-contained task to a sub-agent:
@@ -388,6 +401,10 @@ Add a system message to the conversation.
 
 Add the files of the current directory that match to the conversation. Files
 listed (as globs) in F<.aiignore> are skipped.
+
+=item B</workspace> [dir|none]
+
+Show the workspace, or set it to a directory; C<none> lifts the limit.
 
 =item B</chdir> <dir> or B</cd> <dir>
 
@@ -601,6 +618,15 @@ the maximum number of lines of a diff. Default: 1, 40
 
 Files bigger than this many bytes are changed without a copy for B</undo>.
 Default: 8000000
+
+=item B<AI_WORKSPACE>
+
+The directory the file tools are confined to. Default: the directory ai.pl is
+started in. C<none> for no limit.
+
+=item B<AI_WORKSPACE_ALLOW>
+
+More directories the file tools may use (space, comma or colon separated).
 
 =item B<AI_PROJECT_FILE>
 

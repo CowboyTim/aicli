@@ -200,3 +200,4 @@ This file outlines potential improvements and features for the AI coding agent (
 - [x] `-c` continues the last session of the directory, `-p` runs one request and exits with a status
 - [x] `/retry` and `/rewind` for the conversation
 - [x] Web tools: `fetch` and `search` (SearXNG) as async HTTP, separate proxies for the LLM API, the web and SearXNG
+- [x] Workspace: the file tools are confined to the start directory (`AI_WORKSPACE`), `..` and symlinks resolved
