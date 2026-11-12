@@ -189,9 +189,12 @@ When stdin is not a terminal every line is one request.
 
 =head1 TOOLS
 
-The model calls a tool by writing a block in its answer, the syntax is part of
-the system prompt of the B<coder> template (the B<default> template has no
-tools):
+The model calls a tool through the API: the request carries the tools (with
+their arguments as JSON schemas), and the server returns the calls as
+B<tool_calls>. The result goes back as a message of its own, with the id of
+the call. This is B<AI_TOOL_CALLS=native>, the default. With B<AI_TOOL_CALLS=text>
+the tools are described in the system prompt of the B<coder> template (the
+B<default> template has no tools) and the model writes a block in its answer:
 
   ///BASH_7c48+EO_dfd7
   ls -la
@@ -424,6 +427,17 @@ and everything that followed.
 =item B</compact>
 
 Summarize the older messages now, to free context.
+
+=item B</context> [summary]
+
+How full the context is (tokens against the window), the number of archived
+messages, the compactions of this session and the thinking setting.
+B<summary> shows the last summary the model wrote for the older messages.
+
+=item B</thinking> [on|off|<tokens>|default]
+
+The reasoning of the model for this session: on, off, a token budget, or the
+default (B<AI_THINKING>). Without an argument it shows the setting.
 
 =item B</system> <text>
 

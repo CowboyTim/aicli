@@ -149,6 +149,8 @@ the model:
 | `/retry` | ask the last request again, its answer and tool runs are dropped |
 | `/rewind [n]` | take the last exchange (or n) out of the conversation |
 | `/compact` | summarize the older messages now, to free context |
+| `/context [summary]` | how full the context is, its compactions and the thinking setting; `summary` shows the last summary of the older messages |
+| `/thinking [on\|off\|<tokens>\|default]` | the reasoning of the model for this session |
 | `/system <text>` | add a system message |
 | `/files [regex]` | add matching files of the current directory to the conversation (`.aiignore` is respected) |
 | `/tools` | list the tools |
@@ -181,9 +183,12 @@ built from that file, so a session can be continued at any time.
 
 ### Tools
 
-The model calls a tool by writing a block in its answer. The syntax is
-explained to the model in the system prompt of the `coder` template (the
-`default` template is a plain chat without tools):
+The model calls a tool through the API: the request carries the tools and the
+server returns the calls (`AI_TOOL_CALLS=native`, the default). The result goes
+back as a tool message with the id of the call. With `AI_TOOL_CALLS=text` the
+syntax is explained to the model in the system prompt of the `coder` template
+(the `default` template is a plain chat without tools), and the model writes a
+block like this in its answer:
 
 ```
 ///WRITE_edf5+EO_d068+EO_ecde
@@ -194,8 +199,8 @@ EO_ecde
 WRITE_edf5
 ```
 
-The result goes back as the next message, `[WRITE_edf5 RESULT_d170 ... RESULT_d170]`
-or `[WRITE_edf5 ERROR_9a78 ... ERROR_9a78]`.
+In text mode the result goes back as the next message, `[WRITE_edf5 RESULT_d170 ... RESULT_d170]`
+or `[WRITE_edf5 ERROR_9a78 ... ERROR_9a78]`. In native mode it is a tool message.
 
 | Tool | What it does | How it runs |
 |------|--------------|-------------|

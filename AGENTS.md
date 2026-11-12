@@ -377,6 +377,10 @@ implemented (it needs AWS request signing and its own binary event stream).
 | `t/70_retry_usage_context.t` | retry/backoff, rate limits, usage, budget, context management |
 | `t/80_agents.t` | sub-agents (parallel, limits, errors, abort), the status line |
 | `t/82_footer.t` | the footer (`tui.pm` bar mode, line fallback, resize, close), `fmt_k`, speeds, cached tokens, the info line from a mocked request |
+| `t/84_providers.t` | providers: detection by key, OpenAI and Anthropic requests and stream, the curl shim, tool calls in the text, the logging of server calls |
+| `t/86_native_tools.t` | native tool calls: tools in the request, calls and results, pieces of arguments, errors, the text fallback, sub-agents |
+| `t/88_markdown.t` | markdown of the answer: headings, emphasis, code, lists, tables, streaming, the printer |
+| `t/89_context_thinking.t` | the reasoning setting, what the request says, the first request through compactions, `/context` |
 | `t/95_cli.t` | `-p` (one request, exit codes, stdin) and `-c` (continue per directory), as a process |
 | `t/85_web.t` | proxy selection, HTML to text, fetch, search (mocked HTTP layer), a real fetch, `/retry`, `/rewind` |
 | `t/90_prompt_display_undo.t` | project file and date in the prompt, byte-stable request prefix, brief display, diffs, `/undo` |
