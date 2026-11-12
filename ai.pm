@@ -24,6 +24,7 @@ our @MODELS;
 our $TUI = tui->new(enabled => 0); # the status line, switched on in chat_loop
 our $BUSY = 0;      # a completion/tool turn is running: ctrl-C aborts the turn only
 our $MAIN_PID = $$;
+our %AUTO_SESSION;    # sessions this process made up a name for
 our $WORKSPACE;       # the directory the file tools are confined to, undef: no limit
 our @WORKSPACE_ALLOW; # more directories they may use
 
@@ -86,8 +87,10 @@ sub chat_setup {
     # --continue: go on where this directory left off
     $AI_SESSION = last_session()
         if !length($AI_SESSION // '') and $::ORIG_ENV{AI_CONTINUE};
-    $AI_SESSION = "session-".new_session_id()
-        unless length($AI_SESSION // '');
+    if(!length($AI_SESSION // '')){
+        $AI_SESSION = "session-".new_session_id();
+        $AUTO_SESSION{$AI_SESSION} = 1; # ours: removed at the end when nothing was said
+    }
     if(!valid_session_name($AI_SESSION)){
         log::error("Invalid session name '$AI_SESSION' (use letters, digits, '.', '_' and '-')");
         exit 1;
@@ -141,6 +144,7 @@ sub chat_setup {
     $AI_URL = "$AI_ENDPOINT_URL/v1/completions" if $::ORIG_ENV{AI_RAW};
 
     set_workspace($::ORIG_ENV{AI_WORKSPACE});
+    tidy_sessions($AI_SESSION);
     init_session($AI_SESSION);
     use_session($AI_SESSION);
     return;
@@ -1538,12 +1542,148 @@ sub get_sessions {
 
 sub list_sessions {
     foreach my $s (@{get_sessions()}) {
+        my $i = session_info($s);
+        my $line = sprintf("%s  %s", $s, format_age($i->{age}));
+        $line .= "  ".to_bytes(clip_text($i->{first}, 50)) if length($i->{first});
         if ($s eq $AI_SESSION) {
-            print "${colors::green_color}* $s${colors::reset_color}\n";
+            print "${colors::green_color}* $line${colors::reset_color}\n";
         } else {
-            print "  $s\n";
+            print "  $line\n";
         }
     }
+}
+
+sub format_age {
+    my ($seconds) = @_;
+    return sprintf("%dd", $seconds / 86400) if $seconds >= 86400;
+    return sprintf("%dh", $seconds / 3600)  if $seconds >= 3600;
+    return sprintf("%dm", $seconds / 60)    if $seconds >= 60;
+    return "now";
+}
+
+# one line of a text, not longer than $max
+sub clip_text {
+    my ($text, $max) = @_;
+    my $t = to_text($text // '') =~ s/\s+/ /gr =~ s/^ | $//gr;
+    $t = substr($t, 0, $max - 1)."\x{2026}" if length($t) > $max;
+    return $t;
+}
+
+# a session made up by this program, not named by the user
+sub is_auto_name {
+    my ($s) = @_;
+    return $s =~ m/\Asession-[0-9A-Fa-f-]{16,}\z/ ? 1 : 0;
+}
+
+# What there is to know about a session without loading it: when it was last
+# used (seconds ago), the first thing the user said, its size on disk, and
+# whether there is anything in it worth keeping.
+sub session_info {
+    my ($s) = @_;
+    my $dir = "$SESSIONS_DIR/$s";
+    my $mtime = (stat("$dir/chat"))[9] // (stat($dir))[9] // time();
+    my ($first, $messages, $said) = ('', 0, 0);
+    if(open(my $fh, '<', "$dir/chat")){
+        while(my $l = <$fh>){
+            next unless $l =~ m/\S/;
+            $messages++;
+            my $m = eval {JSON::XS::decode_json($l)} // next;
+            $said++ unless ($m->{role} // '') eq 'system' and $messages == 1;
+            $first = $m->{content} if !length($first) and is_user_input($m);
+            last if length($first) and $messages > 50;
+        }
+        close($fh);
+    }
+    my $size = 0;
+    utils::load_cpan("File::Find");
+    File::Find::find({no_chdir => 1, wanted => sub {$size += (lstat($_))[7] // 0 if -f $_ and !-l $_}}, $dir)
+        if -d $dir;
+    # nothing was said, set or done in it: only the system prompt is there
+    my $empty = (!$said
+        and !grep({-e "$dir/$_"} qw(model usage chat.archive agents))
+        and !-s "$dir/undo/journal") ? 1 : 0;
+    return {name => $s, mtime => $mtime, age => time() - $mtime, first => $first, size => $size, empty => $empty};
+}
+
+sub remove_session {
+    my ($s) = @_;
+    return unless valid_session_name($s) and -d "$SESSIONS_DIR/$s";
+    utils::load_cpan("File::Path");
+    File::Path::remove_tree("$SESSIONS_DIR/$s");
+    delete $AUTO_SESSION{$s};
+    return 1;
+}
+
+# At the end: a session this process made up a name for and in which nothing
+# happened is not kept. (Sessions the user named stay, empty or not.)
+sub drop_empty_sessions {
+    return unless defined $SESSIONS_DIR;
+    foreach my $s (keys %AUTO_SESSION){
+        remove_session($s) if -d "$SESSIONS_DIR/$s" and session_info($s)->{empty};
+    }
+    return;
+}
+
+# At the start: what a crash left behind goes (empty sessions with a made-up
+# name, older than a day), and with AI_SESSION_KEEP_DAYS every session that
+# was not used for that many days, conversation or not. Never $keep, the
+# session that is about to be used.
+sub tidy_sessions {
+    my ($keep) = @_;
+    my $days = $::ORIG_ENV{AI_SESSION_KEEP_DAYS};
+    $days = undef unless defined $days and $days =~ m/\A\d+(?:\.\d+)?\z/ and $days > 0;
+    my $removed = 0;
+    foreach my $s (@{get_sessions()}){
+        next if $s eq ($keep // '');
+        my $i = session_info($s);
+        if(is_auto_name($s) and $i->{empty} and $i->{age} > 86400){
+            remove_session($s);
+        } elsif(defined $days and $i->{age} > $days * 86400){
+            $removed += remove_session($s) ? 1 : 0;
+        }
+    }
+    print STDERR "Removed $removed session".($removed == 1 ? "" : "s")." not used for $days days (AI_SESSION_KEEP_DAYS).\n"
+        if $removed;
+    return $removed;
+}
+
+# ask the user, true for a yes
+sub confirm {
+    my ($question) = @_;
+    my $answer = $::T ? eval {$::T->readline("$question [y/N] ")} : do {
+        print "$question [y/N] ";
+        STDOUT->flush();
+        scalar(<STDIN>);
+    };
+    return (($answer // '') =~ m/\A\s*y(?:es)?\s*\z/i) ? 1 : 0;
+}
+
+# /session prune [days] [yes]: remove the sessions that were not used for a
+# while, after showing them and asking (not asked with "yes")
+sub prune_sessions {
+    my ($days, $yes) = @_;
+    $days //= $::ORIG_ENV{AI_SESSION_KEEP_DAYS} || 30;
+    my @old = sort {$b->{age} <=> $a->{age}} grep {$_->{name} ne $AI_SESSION and $_->{age} > $days * 86400}
+        map {session_info($_)} @{get_sessions()};
+    if(!@old){
+        print "No sessions that were not used for $days days.\n";
+        return 0;
+    }
+    my $size = 0;
+    foreach my $i (@old){
+        $size += $i->{size};
+        printf "  %s  %s  %dk  %s\n", $i->{name}, format_age($i->{age}), ($i->{size} + 1023) / 1024,
+            $i->{empty} ? "(empty)" : to_bytes(clip_text($i->{first}, 50));
+    }
+    my $what = scalar(@old)." session".(@old == 1 ? "" : "s")." not used for $days days, ".int(($size + 1023) / 1024)."k";
+    if(!$yes and !confirm("Delete $what?")){
+        print "Nothing deleted.\n";
+        return 0;
+    }
+    remove_session($_->{name}) for @old;
+    print "Deleted $what.\n";
+    refresh_session_completions();
+    return scalar(@old);
 }
 
 sub switch_session {
@@ -1587,6 +1727,7 @@ sub delete_session {
     if ($name eq $AI_SESSION) {
         # there is always a session to chat in: a new, empty one
         my $new = "session-".new_session_id();
+        $AUTO_SESSION{$new} = 1;
         init_session($new);
         use_session($new);
         print "Switched to session: $new\n";
@@ -1923,7 +2064,7 @@ our @COMMANDS;
         run  => sub {print Cwd::cwd()."\n"; 0},
     },
     '/session' => {
-        usage => '/session [list|create|delete|rename|switch|reset] [name]',
+        usage => '/session [list|create|delete|rename|switch|reset|prune] [name]',
         help  => 'manage sessions, "/session <name>" switches',
         run   => sub {
             my ($args) = @_;
@@ -1936,6 +2077,10 @@ our @COMMANDS;
                 create_session($rest);
             } elsif ($sub eq 'delete' and length($rest)) {
                 delete_session($rest);
+            } elsif ($sub eq 'prune' and $rest =~ m/\A(?:(\d+(?:\.\d+)?)\s*)?(yes|-y)?\z/) {
+                prune_sessions($1, $2);
+            } elsif ($sub eq 'prune') {
+                print "Usage: /session prune [days] [yes]\n";
             } elsif ($sub eq 'reset' and $rest eq '') {
                 reset_session();
             } elsif ($sub eq 'rename' and $rest =~ m/^(\S+)$/) {
@@ -1957,6 +2102,7 @@ our @COMMANDS;
                 'list'   => sub {0},
                 'create' => sub {0},
                 'reset'  => sub {0},
+                'prune'  => sub {0},
                 'delete' => {map {($_, sub {0})} @$s},
                 'rename' => {map {($_, sub {0})} @$s},
                 'switch' => {map {($_, sub {0})} @$s},
@@ -2414,6 +2560,7 @@ sub cleanup_chat {
 
 END {
     ai::cleanup_chat();
+    ai::drop_empty_sessions() if $$ == $MAIN_PID;
 }
 
 package agent;

@@ -131,7 +131,8 @@ the model:
 | `/help` | list the commands |
 | `/exit`, `/quit` | leave (also ctrl-D) |
 | `/clear` | forget the conversation, keep the system prompt |
-| `/session [list]` | list the sessions |
+| `/session [list]` | list the sessions: when each was last used and what it started with |
+| `/session prune [days] [yes]` | remove the sessions not used for that long (default 30 days), after showing them and asking |
 | `/session create\|delete\|switch <name>` | manage sessions, `/session <name>` switches too; deleting the current one continues in a new, empty session |
 | `/session rename [<old>] <new>` | rename a session, with one name the current one |
 | `/session reset` | start the current session over: conversation, archive, token counters, undo journal and agent transcripts go, its name, prompt, model and input history stay |
@@ -332,6 +333,16 @@ There are separate proxies, each takes anything curl understands
 `AI_PROXY=none` for a local model server next to `AI_WEB_PROXY=http://...`.
 `NO_PROXY` is honoured. The API key is never sent with web requests.
 
+### Sessions that are not kept
+
+A start without `AI_SESSION` or `-c` makes up a session (`session-<id>`). When
+nothing was said in it, it is removed again at the end, so trying a command or
+`-p` with a typo leaves nothing behind. A session you named is always kept.
+What a crash leaves (empty made-up sessions older than a day) is removed at
+the next start. Sessions with a conversation are only removed when you say so:
+`/session delete`, `/session prune`, or `AI_SESSION_KEEP_DAYS=90` to drop
+everything unused for 90 days at each start, without asking.
+
 ### Sub-agents
 
 With the `agent` tool the model delegates a self-contained task. A sub-agent
@@ -411,6 +422,7 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 | `AI_LOCAL_SERVER` | URL of an OpenAI compatible server, instead of a provider | |
 | `AI_MODEL` | model for sessions without their own | provider-dependent |
 | `AI_SESSION` | session name | new `session-<uuid>` |
+| `AI_SESSION_KEEP_DAYS` | at start, remove sessions not used for that many days, without asking; also the default of `/session prune` | never |
 | `AI_PROMPT_TEMPLATE` | `default` (chat) or `coder` (with tools), a file in `ai/` | `default` |
 | `AI_PROMPT_TEMPLATE_FILE` | a system prompt file of your own | |
 | `AI_CLEAR` | start with an empty conversation and a fresh system prompt | 0 |

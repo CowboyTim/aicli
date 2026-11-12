@@ -464,6 +464,13 @@ Manage chat sessions.
                              prompt, model and input history stay
   /session rename <old> <new> - Rename a session
   /session rename <new>    - Rename the current session
+  /session prune [days] [yes] - Remove the sessions that were not used for
+                             that many days (default 30): they are listed
+                             and you are asked, unless "yes" is given
+
+The list shows for every session when it was last used and the first thing
+that was said in it. A session ai.pl made up a name for and in which nothing
+was said is removed when ai.pl ends.
   /session switch <name>   - Switch to a session
   /session <name>          - Switch to a session (shortcut)
 
@@ -552,6 +559,12 @@ Model name, the default for sessions without a model of their own.
 =item B<AI_SESSION>
 
 Name of the session to use. Default: a new C<session-E<lt>uuidE<gt>>.
+
+=item B<AI_SESSION_KEEP_DAYS>
+
+At every start, remove the sessions that were not used for this many days,
+conversation or not, without asking. Also the default number of days of
+B</session prune>. Default: sessions are kept forever.
 
 =item B<AI_PROMPT_TEMPLATE>
 

@@ -305,7 +305,17 @@ command, 1 to leave; a command line never reaches the LLM. `/retry` and
 Names match `^[A-Za-z0-9_][A-Za-z0-9_.-]*$`, checked by
 `valid_session_name()` everywhere a name comes in. There is always a current
 session: `delete_session()` of the current one moves on to a new, empty one,
-`reset_session()` empties it in place. `use_session()` notes the
+`reset_session()` empties it in place.
+
+Sessions must not pile up, and conversations must not vanish:
+`%AUTO_SESSION` has the sessions this process made up a name for, at `END`
+`drop_empty_sessions()` removes those in which nothing happened
+(`session_info()->{empty}`: only the system prompt, no model, usage, archive,
+undo or agents). `tidy_sessions()` at start removes empty made-up sessions
+older than a day (crash leftovers; a younger one may belong to a running
+process). A session with a conversation, or one the user named, is only
+removed on request: `/session delete`, `/session prune` (asks via
+`ai::confirm()`), `AI_SESSION_KEEP_DAYS`. `use_session()` notes the
 working directory in `cwd`; `last_session()` finds the most recent session of
 a directory for `-c`. `chat_completion()` returns true when the turn ended
 with an answer, `one_shot()` makes the exit code of `-p` out of that.
@@ -329,6 +339,7 @@ implemented.
 | `t/40_chat_loop.t` | agent loop, streaming, thinking, errors, abort (scripted LLM) |
 | `t/45_http_e2e.t` | real curl against a fake server: loop, rate limit headers, usage, parallel sub-agents, `ai.pl` end to end |
 | `t/50_commands.t` | slash commands, input readers, completion |
+| `t/55_session_cleanup.t` | empty sessions removed at exit and start, `/session prune`, `AI_SESSION_KEEP_DAYS`, the session list |
 | `t/60_tools.t` | `fork_run`, environment, bash/perl/Safe/read/write/grep |
 | `t/65_file_tools.t` | lines, replace, the ed engine, edit, delete, move, mkdir, list |
 | `t/67_sandbox.t` | Landlock for forked tools: writes, reads, child processes, extra paths, fallbacks (skipped without kernel support) |
@@ -346,7 +357,6 @@ implemented.
 
 See TODO.md. The proxies and the SearXNG search have only been tested with a
 mocked HTTP layer, never against a real proxy or instance. The bigger ones: `Net::Curl` is the preferred curl module but the
-tests have only run with `WWW::Curl` since the event loop exists; old
-sessions are never removed (plan in TODO.md); no tool confirmation or
-allow-list (by choice);
+tests have only run with `WWW::Curl` since the event loop exists; no tool
+confirmation or allow-list (by choice);
 the privilege drop itself (as root) is not covered by a test, only the plan.

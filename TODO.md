@@ -167,12 +167,6 @@ This file outlines potential improvements and features for the AI coding agent (
 - Status line: token counts per agent, a real multi-pane TUI on top of `tui.pm`.
 - Tool confirmation / allow-list: not wanted for now, the container is the sandbox.
 - Run the docker wrapper as a user other than 1000 once: the privilege drop now follows `UID`/`GID` (`AI_UID`, `AI_GID`, `AI_GROUPS`), only the plan is tested.
-- Old sessions pile up: every start without `AI_SESSION` or `-c` creates a `session-<uuid>` directory. Plan, in this order:
-    1. Don't create the directory until there is something to keep: `chat_setup` only picks the name, the first message, `/model`, `/prompt` or `/system` creates it. Most leftovers are sessions in which nothing was said (`--help`, a single command, a typo). This removes them at the source and needs no policy.
-    2. At start, remove sessions that hold nothing but their system prompt and are older than a day (those created before 1., or by a crash). Never one with a conversation.
-    3. `/session prune [days]` (default 30): lists the sessions not used for that long with their size and first user message, removes them after a "y". Explicit, because it deletes conversations; `AI_SESSION_KEEP_DAYS` to do it at start without asking, off by default.
-    4. Not planned: a session browser. `/session list` could show age and first user message, that is enough to pick one.
-  Already there: `/session delete` also for the current session, `/session reset`, `/session rename`.
 - A native tool to find files by name (the model uses bash for that now).
 - Try `AI_PROXY`, `AI_WEB_PROXY` and the `search` tool against a real proxy and SearXNG instance: only tested with a mocked HTTP layer.
 - Providers named in older docs but not implemented: OpenAI, Groq, Anthropic, Bedrock.
@@ -213,3 +207,4 @@ This file outlines potential improvements and features for the AI coding agent (
 - [x] Ctrl-C with piped input stops the turn, not the program
 - [x] Sub-agents: context management of their own, tokens in the status line
 - [x] `/session delete` of the current session, `/session reset`, `/session rename <new>`
+- [x] Sessions don't pile up: empty made-up sessions go at exit (and at the next start after a crash), `/session prune`, `AI_SESSION_KEEP_DAYS`, age and first message in `/session list`
