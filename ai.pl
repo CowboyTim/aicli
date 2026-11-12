@@ -645,11 +645,19 @@ that refuse it. Usage is estimated then.
 
 =item B<AI_SHOW_USAGE>
 
-Set to 0 to hide the usage line after each answer. Default: 1
+Set to 1 to show the usage line after each answer, 0 to hide it. Default:
+shown, except while the footer is on (then it is shown only with 1), because
+the footer shows the same numbers.
 
 =item B<AI_STATUS>
 
-Set to 0 to switch the status line off. Default: 1
+C<bar> (default): a two-line footer at the bottom of the terminal. Line one
+is what is going on (waiting for the model, a tool, each sub-agent with its
+tokens), line two the model, tokens, context, speed and cache. The
+conversation scrolls above it. C<line>: one status line at the cursor, no
+footer. A terminal too small for the footer gets the line too. Set to 0 to
+switch the status off.
+Default: bar
 
 =item B<AI_TOOL_DISPLAY>
 

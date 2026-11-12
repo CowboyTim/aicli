@@ -52,6 +52,7 @@ sub cmd {
     like($msgs[0]{content}, qr/You are a master developer.*LIST OF TOOLS/s, "/clear: prompt and tools section are back");
     ($r, $out) = cmd("/tools");
     like($out, qr/^  \Q$_\E: /m, "/tools: lists $_") for qw(bash grep perl read write);
+    unlike($out, qr/^  search: /m, "/tools: not what is not available");
     cmd("/debug");
     is($::DEBUG, 1, "/debug: on");
     cmd("/nodebug");

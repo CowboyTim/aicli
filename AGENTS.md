@@ -106,8 +106,16 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   `step`, `run`), the waits on top of it (`utils::http()`,
   `utils::fork_run()`, `utils::wait_abortable()`), `utils::fork_child()`,
   `utils::tool_env()`, packages `curl` (Net::Curl/WWW::Curl shim) and `log`.
-- **tui.pm** – `tui`: the status line (named items, spinner, elapsed time),
-  drawn from `$loop::on_tick`, wiped by `clear()`.
+- **tui.pm** – `tui`: the screen. Two modes: `bar` (default when the terminal
+  is big enough, at least 7 rows and 20 columns): a footer of two lines at
+  the bottom, activity (`set`/`unset` items with spinner and elapsed time)
+  and info (`info` pieces: model, context, tokens, speed, cache), fenced off
+  with a scroll region (`ESC[1;Nr`), drawn with the cursor saved and put
+  back; `line` (`AI_STATUS=line`, or no size known): one line at the cursor,
+  wiped by `clear()`. Both are animated by `tick()` from `$loop::on_tick`.
+  `open()`/`close()`/`resize()` handle the footer; `set_screen_size` of
+  readline is set to the rows above it (`ai::fit_readline()`). Only VT100
+  escapes, no curses. `ai::status_info()` fills the info pieces.
 - **ai/** – prompt templates: `default` (chat), `coder` (adds the tools).
 - **aicli.sh**, **Dockerfile** – docker wrapper and Alpine image.
 - **t/** – tests, **TODO.md** – roadmap.
@@ -347,6 +355,7 @@ implemented.
 | `t/66_workspace.t` | workspace confinement: `..`, absolute paths, symlinks, every file tool, `/workspace` |
 | `t/70_retry_usage_context.t` | retry/backoff, rate limits, usage, budget, context management |
 | `t/80_agents.t` | sub-agents (parallel, limits, errors, abort), the status line |
+| `t/82_footer.t` | the footer (`tui.pm` bar mode, line fallback, resize, close), `fmt_k`, speeds, cached tokens, the info line from a mocked request |
 | `t/95_cli.t` | `-p` (one request, exit codes, stdin) and `-c` (continue per directory), as a process |
 | `t/85_web.t` | proxy selection, HTML to text, fetch, search (mocked HTTP layer), a real fetch, `/retry`, `/rewind` |
 | `t/90_prompt_display_undo.t` | project file and date in the prompt, byte-stable request prefix, brief display, diffs, `/undo` |

@@ -19,8 +19,12 @@ framework.
 - **Sub-agents**: the model can hand tasks to sub-agents that work side by
   side. No threads, no process per agent: every request is a curl handle and
   every tool a child in one `select()` loop
-- **Status line**: what the model, a tool or each sub-agent is doing, and for
-  how long, drawn from that same loop
+- **Status footer**: a two-line footer at the bottom of the terminal, the
+  conversation scrolls above it. Line one is what the model, a tool or each
+  sub-agent is doing and for how long; line two is the model, the tokens,
+  the context used, the speed (pp and tg tokens/s) and the cache. Drawn from
+  that same loop, with VT100 escapes and no extra module. On a terminal too
+  small for it, or with `AI_STATUS=line`, it is one line at the cursor
 - **Readable tool runs**: one line per tool call and the first lines of its
   result instead of the raw call; file changes are shown as a diff, and
   `/undo` takes them back
@@ -439,8 +443,8 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 | `AI_CONTEXT_SUMMARY` | 0: drop old messages instead of summarizing them | 1 |
 | `AI_TOKEN_BUDGET` | max tokens a session may use | no limit |
 | `AI_USAGE` | 0: don't ask the API for token usage | 1 |
-| `AI_SHOW_USAGE` | 0 hides the usage line | 1 |
-| `AI_STATUS` | 0 switches the status line off | 1 |
+| `AI_SHOW_USAGE` | 1 shows the usage line after each answer, 0 hides it | shown, except while the footer is on |
+| `AI_STATUS` | `bar`: footer at the bottom; `line`: one line at the cursor; 0 switches the status off | `bar` |
 | `AI_TOOL_DISPLAY` | `brief`: a line per tool call and the start of its result; `full`: everything | `brief` |
 | `AI_TOOL_LINES` | lines of a tool result shown with `brief` | 8 |
 | `AI_SHOW_DIFF` | 0: no diff after a file change | 1 |
@@ -481,7 +485,7 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 - `ai.pl` - entry point: options, drop privileges, POD
 - `ai.pm` - chat loop, streaming, retry, usage, context, commands, sessions, sub-agents, providers, prompt, tools
 - `utils.pm` - the event loop (curl multi, child pipes, timers in one `select()`), `fork_run()`, logging
-- `tui.pm` - the status line
+- `tui.pm` - the screen: the status footer (scroll region) or the status line
 - `ai/` - system prompt templates (`default`, `coder`)
 - `aicli.sh`, `Dockerfile` - docker wrapper and image
 - `t/` - tests

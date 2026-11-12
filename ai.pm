@@ -250,6 +250,9 @@ sub use_session {
     $SESSION_MODEL  = read_session_model() || $::ORIG_ENV{AI_MODEL};
     # where it is used, for --continue
     eval {spew("$AI_SESSION_DIR/cwd", Cwd::cwd()."\n")} if -d $AI_SESSION_DIR;
+    # the footer: the numbers of this session, not the speed of a request of another
+    $TUI->info($_ => undef) for qw(speed cache);
+    status_info();
     return;
 }
 
@@ -577,6 +580,7 @@ sub new_stream {
         events    => 0,
         error     => undef,
         usage     => undef,
+        timings   => undef, # llama.cpp: how fast the prompt and the answer went
     };
     my $content = sub {
         my ($delta) = @_;
@@ -611,6 +615,7 @@ sub new_stream {
         return unless ref($decoded) eq 'HASH';
         $st->{events}++;
         $st->{usage} = $decoded->{usage} if ref($decoded->{usage}) eq 'HASH';
+        $st->{timings} = $decoded->{timings} if ref($decoded->{timings}) eq 'HASH';
         if(my $e = $decoded->{error}){
             $st->{error} = $decoded;
             return;
@@ -1025,11 +1030,27 @@ sub request_completion {
     my $printer = new_printer($o{quiet} ? sub {} : undef, hide_tools => (tool_display() eq 'brief' ? 1 : 0));
     # the status line tells that we wait, until there is something to show
     $TUI->set('model', $o{quiet} ? 'summarizing' : 'waiting for model');
-    my $st = new_stream(sub {
+    my $st;
+    $st = new_stream(sub {
+        my ($kind) = @_;
         $info->{t_first} //= Time::HiRes::time();
-        $TUI->unset('model') unless $o{quiet};
+        if($o{quiet}){
+            # nothing is shown of it
+        } elsif($TUI->bar()){
+            $TUI->set('model', $kind eq 'think' ? 'thinking' : 'answering');
+        } else {
+            $TUI->unset('model'); # one line: the text itself is in its place now
+        }
         &{$printer->{emit}}(@_);
     });
+    # how far the answer is, while it comes in
+    my $cpt = load_usage()->{chars_per_token} || 3.5;
+    $TUI->info(live => sub {
+        return '' unless $info->{t_first};
+        my $tokens = (length($st->{content}) + length($st->{reasoning})) / $cpt;
+        my $took   = Time::HiRes::time() - $info->{t_first};
+        return sprintf("%s~%s%s", chr(0x2193), fmt_k($tokens), $took > 0.5 ? sprintf(" %.0f/s", $tokens / $took) : "");
+    }) if $TUI->bar();
     my $r = utils::http("post", $AI_URL, $req, $api_key, sub {
         my ($ch, $raw) = @_;
         $raw //= $ch; # WWW::Curl::Easy: <data>, <user_ref>, Net::Curl::Easy: <handle>, <data>
@@ -1038,11 +1059,13 @@ sub request_completion {
         &{$st->{feed}}($raw);
         return length($raw);
     });
+    $TUI->info(live => undef);
     $TUI->unset('model');
     &{$st->{finish}}();
     &{$printer->{finish}}();
     $info->{t_end} = Time::HiRes::time();
     $info->{usage} = $st->{usage};
+    $info->{timings} = $st->{timings};
 
     return ($st->{content}, "interrupted", $info) if utils::aborted();
     my ($err, $c) = completion_result($st, !defined $r, $utils::http_error, $utils::http_code, \%utils::http_headers);
@@ -1160,10 +1183,75 @@ sub usage_line {
     }
     if($info->{t_end} and $info->{t_start}){
         $s .= sprintf(" | %.1fs", $info->{t_end} - $info->{t_start});
-        my $gen = $info->{t_end} - ($info->{t_first} // $info->{t_end});
-        $s .= sprintf(", %.1f tok/s", $out / $gen) if $out > 1 and $gen > 0.05;
+        my ($pp, $tg) = speeds($out, $info);
+        $s .= sprintf(", pp %.1f tok/s", $pp) if defined $pp;
+        $s .= sprintf(", %s%.1f tok/s", (defined $pp ? "tg " : ""), $tg) if defined $tg;
     }
+    my $cached = cached_tokens($info);
+    $s .= " | $cached cached" if $cached;
     return "[$s]";
+}
+
+# 1234 -> 1.2k
+sub fmt_k {
+    my ($n) = @_;
+    $n //= 0;
+    return sprintf("%.1fM", $n / 1e6) if $n >= 1e6;
+    return sprintf("%dk", $n / 1000)  if $n >= 10_000;
+    return sprintf("%.1fk", $n / 1000) if $n >= 1000;
+    return int($n);
+}
+
+# Tokens per second of a request: (prompt processing, generation). From the
+# timings a llama.cpp server reports; else the generation speed is measured
+# here (from the first to the last piece of the answer) and the prompt speed
+# is not known.
+sub speeds {
+    my ($out, $info) = @_;
+    my $t = ref($info->{timings}) eq 'HASH' ? $info->{timings} : {};
+    my ($pp, $tg) = @{$t}{qw(prompt_per_second predicted_per_second)};
+    if(!defined $tg and $info->{t_end} and $info->{t_first}){
+        my $gen = $info->{t_end} - $info->{t_first};
+        $tg = $out / $gen if $out > 1 and $gen > 0.05;
+    }
+    return ($pp, $tg);
+}
+
+# how much of the prompt the server took from its cache, when it says so
+sub cached_tokens {
+    my ($info) = @_;
+    my $u = ref($info->{usage}) eq 'HASH' ? $info->{usage} : {};
+    my $d = ref($u->{prompt_tokens_details}) eq 'HASH' ? $u->{prompt_tokens_details} : {};
+    my $t = ref($info->{timings}) eq 'HASH' ? $info->{timings} : {};
+    return $d->{cached_tokens} // $u->{cached_tokens} // $t->{cache_n};
+}
+
+# The info line of the footer: session, model, context, tokens, and after a
+# request how fast it was. Called whenever one of those may have changed.
+sub status_info {
+    my (%last) = @_; # out, info: the request that just ended
+    return unless $TUI->enabled();
+    my $u = load_usage();
+    my ($in, $out) = ($u->{last_prompt_tokens} // 0, $u->{last_completion_tokens} // 0);
+    my $limit = context_limit();
+    my $est = $u->{estimated} ? '~' : '';
+    $TUI->info(session => $AI_SESSION);
+    $TUI->info(model   => length($SESSION_MODEL // '') ? $SESSION_MODEL : undef);
+    $TUI->info(context => $limit ? sprintf("ctx %d%% of %s", 100 * ($in + $out) / $limit, fmt_k($limit))
+                        : $in    ? "ctx $est".fmt_k($in + $out) : undef);
+    $TUI->info(tokens  => $in ? sprintf("%s%s%s %s%s", chr(0x2191), $est, fmt_k($in), chr(0x2193), fmt_k($out)) : undef);
+    $TUI->info(total   => $u->{total_tokens}
+        ? chr(0x3a3)." $est".fmt_k($u->{total_tokens}).($::ORIG_ENV{AI_TOKEN_BUDGET} ? " of ".fmt_k($::ORIG_ENV{AI_TOKEN_BUDGET}) : "")
+        : undef);
+    if($last{info}){
+        my ($pp, $tg) = speeds($last{out} // 0, $last{info});
+        $TUI->info(speed => (defined $pp or defined $tg)
+            ? join(' ', (defined $pp ? sprintf("pp %.0f/s", $pp) : ()), (defined $tg ? sprintf("tg %.0f/s", $tg) : ()))
+            : undef);
+        my $cached = cached_tokens($last{info});
+        $TUI->info(cache => $cached ? "cache ".fmt_k($cached) : undef);
+    }
+    return;
 }
 
 # true (and says so) when the session used up AI_TOKEN_BUDGET
@@ -1424,8 +1512,10 @@ sub chat_completion {
             if length($answer);
         if(!defined $err or length($resp)){
             my @u = record_usage(\@msgs, $resp, $info);
+            status_info(out => $u[1], info => $info);
+            # the footer has it all, the line is for when there is none
             print "${colors::cyan_color}".usage_line(@u, $info)."${colors::reset_color}\n"
-                if ($::ORIG_ENV{AI_SHOW_USAGE} // 1);
+                if ($::ORIG_ENV{AI_SHOW_USAGE} // ($TUI->bar() ? 0 : 1));
         }
         if(defined $err){
             $ok = 0;
@@ -1542,6 +1632,7 @@ sub init_session {
 # forget the conversation, keep the system prompt
 sub reset_chat {
     write_messages({role => 'system', content => to_text(system_prompt())});
+    status_info();
     return;
 }
 
@@ -1794,6 +1885,7 @@ sub switch_model {
         return;
     }
     $SESSION_MODEL = $new_model;
+    status_info();
     print "Switched model to '$new_model'.\n";
 }
 
@@ -2003,7 +2095,7 @@ our @COMMANDS;
         help => 'list the tools the model can call',
         run  => sub {
             print "Available tools:\n";
-            foreach my $name (sort keys %$tools::TOOLS) {
+            foreach my $name (grep {tools::available($_)} sort keys %$tools::TOOLS) {
                 print "  $name: $tools::TOOLS->{$name}{description}\n";
             }
             return 0;
@@ -2138,6 +2230,7 @@ our @COMMANDS;
             if($args eq 'reset'){
                 my $u = load_usage();
                 save_usage({map {($_ => $u->{$_})} grep {$_ eq 'chars_per_token'} keys %$u});
+                status_info();
                 print "Usage of session '$AI_SESSION' reset.\n";
                 return 0;
             }
@@ -2355,6 +2448,8 @@ sub setup_readline {
     $SIG{WINCH} = sub {
         $term->reset_screen_size();
         my ($n_rows, $n_cols) = $term->get_screen_size();
+        $TUI->resize(); # the footer moves to the new bottom
+        fit_readline();
         $term->redisplay();
         return;
     };
@@ -2487,7 +2582,12 @@ sub input_stdin {
 
 # the status line, animated by the event loop
 sub start_status_line {
-    $TUI = tui->new();
+    my (%o) = @_;
+    $TUI = tui->new($o{bar} ? () : (mode => 'line'));
+    # the footer: the lines above it are what readline has to work with
+    fit_readline() if $o{bar} and $TUI->open();
+    status_info();
+    $TUI->clear();
     $log::before_print = sub {$TUI->clear()};
     $loop::on_tick = sub {$TUI->tick()};
     $loop::on_idle = sub {$TUI->clear()};
@@ -2516,10 +2616,19 @@ sub one_shot {
     return $ok ? 0 : 1;
 }
 
+# tell readline how much of the screen is its own
+sub fit_readline {
+    return unless $::T and $TUI->bar();
+    my ($rows, $cols) = $TUI->size()
+        or return;
+    eval {$::T->set_screen_size($rows - $TUI->{footer}, $cols)};
+    return;
+}
+
 sub chat_loop {
     $::LOOP = 1;
     my $input_cli_sub = -t STDIN ? input_terminal() : input_stdin();
-    start_status_line();
+    start_status_line(bar => (-t STDIN ? 1 : 0));
     # Input from a pipe or file: there is no readline to catch the signals.
     # ctrl-C (INT) stops the turn that runs and the next line is read; a
     # second one while that is still stopping, or one while nothing runs,
@@ -2554,8 +2663,9 @@ sub chat_loop {
 }
 
 sub cleanup_chat {
-    return unless $::T;
     return unless $$ == $MAIN_PID; # never from a forked tool process
+    $TUI->close() if $TUI;        # the whole screen scrolls again
+    return unless $::T;
     log::info("cleanup terminal");
     $::T->write_history($HISTORY_FILE);
     $::T->clear_message();

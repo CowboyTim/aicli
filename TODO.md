@@ -164,7 +164,7 @@ This file outlines potential improvements and features for the AI coding agent (
 ## Open, found while fixing the agent loop
 - Look at the first CI runs (`.github/workflows/tests.yml`): the Alpine job is the first time the tests run with `Net::Curl` since the event loop exists.
 - Sub-agents: a way to look at what one is doing while it runs.
-- A real multi-pane TUI on top of `tui.pm`, if ever.
+- More panes than the footer (files, tool output side by side) on top of `tui.pm`, if ever. The footer itself is done; no curses (no CPAN dependency).
 - Tool confirmation / allow-list: not wanted for now, the container is the sandbox.
 - Run the docker wrapper as a user other than 1000 once: the privilege drop now follows `UID`/`GID` (`AI_UID`, `AI_GID`, `AI_GROUPS`), only the plan is tested.
 - A native tool to find files by name (the model uses bash for that now).
@@ -193,6 +193,7 @@ This file outlines potential improvements and features for the AI coding agent (
 - [x] One select() event loop for HTTP, tool processes and timers (`package loop`)
 - [x] Sub-agents as tool call, working side by side in the event loop
 - [x] Status line (`tui.pm`)
+- [x] Status footer: two lines at the bottom of the terminal (scroll region, VT100 only), speeds, tokens, context, cache per session; `AI_STATUS=line` for one line
 - [x] Project instructions (AGENTS.md) and a coarse date in the system prompt, request prefix stays byte-stable
 - [x] Brief tool display, diffs for file changes, `/undo`
 - [x] `-c` continues the last session of the directory, `-p` runs one request and exits with a status
