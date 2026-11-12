@@ -143,7 +143,8 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
    or to give up,
 6. the answer without thinking is appended as assistant message,
    `record_usage()` counts the tokens,
-7. `handle_llm_response()`: `parse_tool_calls()`, then `execute_tool()` for
+7. `handle_llm_response()`: the calls the server made (`tool_calls`, see
+`native_call()`), or else `parse_tool_calls()`, then `execute_tool()` for
    each, `agent` calls are started together and waited for at the end; the
    results are appended as user messages,
 8. back to 2 while there were tool calls (max `AI_MAX_TURNS`).
@@ -219,7 +220,7 @@ It cannot start agents.
 ## System prompt
 
 `system_prompt()` = prompt file of the session + `prompt::<template>::prompt()`
-(tools) + `prompt_context()`: `project_instructions()` (`AGENTS.md` of the
+(tools, not with native calls: the API has them) + `prompt_context()`: `project_instructions()` (`AGENTS.md` of the
 working directory, `AI_PROJECT_FILE`) and `prompt_date()`. Most stable first.
 Sub-agents: `subagent_prompt()`, same parts without the `agent` tool.
 
@@ -281,6 +282,13 @@ How they run:
 | perl | `_run` → `eval` in package `aicli::tool`, or `Safe->reval` (`AI_PERL_SAFE`) |
 | fetch, search | `tools::_http` → `loop::http` (web proxy, timeout, size limit, redirects) |
 | agent | `agent::launch` + `agent::wait` |
+
+Tools are called natively by default: the request has their JSON schemas (from
+the same table: the names and the properties in the order of the syntax), and
+the server returns the calls as tool_calls. The result of such a call is a
+message with role "tool" and the id of the call. The text syntax above is the
+fallback (AI_TOOL_CALLS=text, or a model that writes it): calls are parsed from
+the answer, the /// header and a code fence before it are optional.
 
 There is no confirmation step, by choice. The file tools are confined to the
 workspace (`$ai::WORKSPACE`, set by `ai::set_workspace()` at start from

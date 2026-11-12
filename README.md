@@ -465,6 +465,7 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 | `AI_TOOL_MAX_OUTPUT` | max bytes of a tool result, the middle is cut out | 65536 |
 | `AI_TOOL_ENV` | extra environment variables to pass to tools | |
 | `AI_PERL_SAFE` | perl tool in a `Safe` compartment: `1`, or extra opcodes like `:filesys_read` | off |
+| `AI_TOOL_CALLS` | `native`: tools sent with the request, calls as the server parses them; `text`: the tool syntax in the prompt | native |
 | `AI_RAW` | use `/v1/completions` with a prompt built here (qwen only) | off |
 | `AI_DIR` | base directory | `~/.aicli` |
 | `AI_PS1`, `AI_PS2` | input prompts | |

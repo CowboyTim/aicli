@@ -426,7 +426,50 @@ sub parse_tool_calls {
 
 sub malformed_error {
     my ($c) = @_;
+    return "[ERROR] no tool named '$c->{tool}', nothing was executed." unless $c->{t};
     return "[ERROR] malformed tool call for '$c->{tool}', nothing was executed. Expected syntax:\n$c->{t}{syntax}";
+}
+
+# Tool calls go through the API (native) unless AI_TOOL_CALLS=text, or the
+# request is a raw prompt (AI_RAW, the client writes the template) or the API
+# is Anthropic (its own format, not used yet). Then the tools are sent in the
+# request and the model's calls come back in tool_calls.
+our $IN_AGENT = 0; # set while a sub-agent builds its request
+# the calls the server made itself, from the stream: each has an id (its result
+# refers to it), the arguments are complete
+sub stream_tool_calls {
+    my ($st) = @_;
+    my $n = 0;
+    return [map {
+        $_->{id} //= sprintf('call_%d_%d', $$, ++$n);
+        $_->{arguments} //= '';
+        $_;
+    } grep {$_ and length($_->{name} // '')} @{$st->{tool_calls} // []}];
+}
+
+sub native_calls {
+    return 0 if $::ORIG_ENV{AI_RAW};
+    return 0 if ($::ORIG_ENV{AI_TOOL_CALLS} // 'native') ne 'native';
+    return 0 if defined $AI_PROVIDER and $AI_PROVIDER eq 'anthropic';
+    return 1;
+}
+
+# a call the server sent (name and JSON arguments) as the call record the
+# tools run from; the tool is undef when there is no such tool
+sub native_call {
+    my ($c) = @_;
+    my $name = $c->{name} // '';
+    my $k    = lc $name;
+    my $t    = $tools::TOOLS->{$k};
+    my $args = $t ? tools::native_args($k, $c->{arguments}) : undef;
+    return {
+        id   => $c->{id},
+        tool => uc($name),
+        k    => $k,
+        t    => $t,
+        args => $args,
+        native => 1,
+    };
 }
 
 # what the model gets to see of a tool run
@@ -437,9 +480,10 @@ sub tool_response {
 }
 
 sub handle_llm_response {
-    my ($resp, $printer_sub) = @_;
-    return (0, 0, []) unless defined $resp and ref($resp) eq 'SCALAR' and length($$resp // "");
-    log::info("handling>>$$resp<<");
+    my ($resp, $printer_sub, $native) = @_;
+    $native //= []; # the calls the server made (native), else the ones in the text
+    return (0, 0, []) unless defined $resp and ref($resp) eq 'SCALAR' and (length($$resp // "") or @$native);
+    log::info("handling>>".($$resp // '')."<<");
     # with a printer of the caller everything is handed to it in full
     my $brief = (!$printer_sub and tool_display() eq 'brief') ? 1 : 0;
     my $say = sub {
@@ -449,7 +493,7 @@ sub handle_llm_response {
     $printer_sub //= $say;
 
     # tools work with bytes, and never run from within a thinking block
-    my $msg = to_bytes(strip_thinking($$resp));
+    my $msg = to_bytes(strip_thinking($$resp // ''));
     log::info("MSG THINK STRIPPED>>$msg<<");
     my (@rt, @agents);
     my $announce = sub {
@@ -461,7 +505,10 @@ sub handle_llm_response {
     my $answer = sub {
         my ($i, $c, $result, $had_error) = @_;
         my $tool_response = tool_response($c->{tool}, $result, $had_error);
-        $rt[$i] = {role => 'user', content => to_text($tool_response)};
+        # a call of the server is answered with a tool message, as its API wants
+        $rt[$i] = $c->{id}
+            ? {role => 'tool', tool_call_id => $c->{id}, content => to_text($had_error // $result // '')}
+            : {role => 'user', content => to_text($tool_response)};
         my $changed = scalar(@tools::CHANGES);
         if(!$brief){
             &{$printer_sub}("${colors::green_color}$tool_response${colors::reset_color}\n");
@@ -474,7 +521,7 @@ sub handle_llm_response {
         }
         show_changes($printer_sub == $say ? $say : undef);
     };
-    foreach my $c (parse_tool_calls($msg)){
+    foreach my $c (@$native ? map {native_call($_)} @$native : parse_tool_calls($msg)){
         my $i = scalar(@rt);
         push @rt, undef;
         &{$announce}($c);
@@ -1138,6 +1185,7 @@ sub request_completion {
     return ($st->{content}, "interrupted", $info) if utils::aborted();
     my ($err, $c) = completion_result($st, !defined $r, $utils::http_error, $utils::http_code, \%utils::http_headers);
     $info->{$_} = $c->{$_} for keys %$c;
+    $info->{tool_calls} = stream_tool_calls($st);
     return ($st->{content}, $err, $info);
 }
 
@@ -1180,7 +1228,7 @@ sub completion_result {
 # (without the agent tool) and what it is there for
 sub subagent_prompt {
     my $prompt = slurp($PROMPT_FILE // '') // '';
-    $prompt .= prompt::coder::prompt(exclude => ['agent']);
+    $prompt .= prompt::coder::prompt(exclude => ['agent']) unless native_calls(); # the text syntax, see system_prompt()
     $prompt .= "\n\nYou are a sub-agent: another agent gave you the task below, the user is not here and you cannot ask questions. "
               ."Work on it with your tools. Your final answer, the one without a tool call, is all the other agent gets to see: "
               ."report what you found or did, complete but without the detours.\n";
@@ -1203,7 +1251,11 @@ sub save_usage {
 
 sub chars_of {
     my $n = 0;
-    $n += length(to_bytes($_->{content})) for @_;
+    $n += length(to_bytes($_->{content} // '')) for @_;
+    # the calls of the server are text too (name and JSON arguments)
+    for my $call (map {@{$_->{tool_calls} // []}} @_){
+        $n += length($call->{function}{name} // '') + length($call->{function}{arguments} // '');
+    }
     return $n;
 }
 
@@ -1354,6 +1406,7 @@ sub context_limit {
 
 sub is_tool_result {
     my ($m) = @_;
+    return 1 if ($m->{role} // '') eq 'tool'; # a native result
     return (($m->{role} // '') eq 'user' and ($m->{content} // '') =~ m/\A\[\w+ (?:RESULT_d170|ERROR_9a78)\n/) ? 1 : 0;
 }
 
@@ -1583,8 +1636,13 @@ sub chat_completion {
         # what is kept: the answer without the thinking
         my $answer = strip_thinking($resp);
         $answer =~ s/\A\s+//;
-        append_messages({role => 'assistant', content => $answer})
-            if length($answer);
+        my $native = $info->{tool_calls} // []; # the calls the server made
+        my %assistant = (role => 'assistant', content => $answer);
+        $assistant{tool_calls} = [map {+{id => $_->{id}, type => 'function',
+            function => {name => $_->{name}, arguments => $_->{arguments}}}} @$native]
+            if @$native;
+        append_messages(\%assistant)
+            if length($answer) or @$native;
         if(!defined $err or length($resp)){
             my @u = record_usage(\@msgs, $resp, $info);
             status_info(out => $u[1], info => $info);
@@ -1601,10 +1659,10 @@ sub chat_completion {
             }
             last;
         }
-        last unless length($answer);
+        last unless length($answer) or @$native;
 
         # handle tools
-        my ($newturns, undef, $r) = handle_llm_response(\$answer);
+        my ($newturns, undef, $r) = handle_llm_response(\$answer, undef, $native);
         append_messages(@{$r // []});
         last unless $newturns;
     }
@@ -1622,7 +1680,8 @@ sub system_prompt {
     my $prompt   = slurp("$session_dir/prompt") // '';
     my $template = slurp("$session_dir/template") // $AI_PROMPT_TEMPLATE // 'default';
     $template =~ s/\s+//g;
-    if($template =~ m/^\w+$/ and UNIVERSAL::can("prompt::${template}", "prompt")){
+    # the tools section is the text syntax: with native calls the API has the tools
+    if(!native_calls() and $template =~ m/^\w+$/ and UNIVERSAL::can("prompt::${template}", "prompt")){
         log::info("PROMPT check for 'prompt::${template}'");
         no strict "refs";
         $prompt .= &{"prompt::${template}::prompt"}() // "";
@@ -2841,6 +2900,7 @@ sub request {
     $self->compact();
     my $json = do {
         local $ai::SESSION_MODEL = $::ORIG_ENV{AI_AGENT_MODEL} || $ai::SESSION_MODEL;
+        local $ai::IN_AGENT = 1; # no agent tool for an agent
         ai::build_request($self->{msgs});
     };
     return $self->finish(undef, "no request format for this model (AI_RAW)") unless defined $json;
@@ -2869,6 +2929,7 @@ sub request {
             $info->{usage} = $st->{usage};
             my ($err, $c) = ai::completion_result($st, defined $req->{error}, $req->{error}, $req->{code}, $req->{headers});
             $info->{$_} = $c->{$_} for keys %$c;
+            $info->{tool_calls} = ai::stream_tool_calls($st);
             $self->response($st->{content}, $err, $info);
         },
     );
@@ -2899,9 +2960,14 @@ sub response {
         return $self->finish(length($answer) ? $answer : undef, $err);
     }
     $self->{attempt} = 0;
-    return $self->finish(undef, "the model gave no answer") unless length($answer);
-    push @{$self->{msgs}}, {role => 'assistant', content => $answer};
-    my @calls = ai::parse_tool_calls(ai::to_bytes($answer));
+    my $native = $info->{tool_calls} // []; # the calls the server made
+    return $self->finish(undef, "the model gave no answer") unless length($answer) or @$native;
+    my %m = (role => 'assistant', content => $answer);
+    $m{tool_calls} = [map {+{id => $_->{id}, type => 'function',
+        function => {name => $_->{name}, arguments => $_->{arguments}}}} @$native]
+        if @$native;
+    push @{$self->{msgs}}, \%m;
+    my @calls = @$native ? map {ai::native_call($_)} @$native : ai::parse_tool_calls(ai::to_bytes($answer));
     return $self->finish($answer) unless @calls;
     my $max_turns = $::ORIG_ENV{AI_MAX_TURNS} // 50;
     return $self->finish($answer, "stopped after $max_turns tool turns (AI_MAX_TURNS)")
@@ -2954,7 +3020,10 @@ sub next_tool {
     while(my $c = shift @{$self->{queue}}){
         my $got = sub {
             my ($result, $err) = @_;
-            push @{$self->{msgs}}, {role => 'user', content => ai::to_text(ai::tool_response($c->{tool}, $result, $err))};
+            # a call of the server is answered with a tool message, as its API wants
+            push @{$self->{msgs}}, $c->{id}
+                ? {role => 'tool', tool_call_id => $c->{id}, content => ai::to_text($err // $result // '')}
+                : {role => 'user', content => ai::to_text(ai::tool_response($c->{tool}, $result, $err))};
         };
         if(utils::aborted()){
             &{$got}("", "[ERROR] not executed, interrupted by user");
@@ -3061,6 +3130,9 @@ sub req {
     # token usage in the last chunk of the stream
     $req->{stream_options} = {include_usage => $Types::Serialiser::true}
         if ($::ORIG_ENV{AI_USAGE} // 1);
+    # the tools, natively: the server turns the model's calls into tool_calls
+    $req->{tools} = tools::native_list(exclude => ($ai::IN_AGENT ? ['agent'] : []))
+        if ai::native_calls();
 
     return $req;
 }
@@ -3448,6 +3520,57 @@ EOb
 
 sub rx {
     $TOOLS_RX;
+}
+
+# the arguments of a tool, in the order of its syntax: {{path}}, {{content}}, ...
+sub arg_names {
+    my ($t) = @_;
+    my @names;
+    push @names, $1 while $t->{syntax} =~ m/\{\{(\w+)\}\}/g;
+    return @names;
+}
+
+# the tools as the API takes them natively (OpenAI style "tools" of a request):
+# the same names and descriptions as the text syntax, sorted so that the
+# request stays the same from one call to the next
+sub native_list {
+    my (%o) = @_;
+    my %exclude = map {($_ => 1)} @{$o{exclude} // []};
+    my @list;
+    foreach my $k (sort keys %$TOOLS){
+        next if $exclude{$k} or !available($k);
+        my $t = $TOOLS->{$k};
+        push @list, {type => 'function', function => {
+            name        => $k,
+            description => $t->{description},
+            parameters  => {
+                type       => 'object',
+                properties => $t->{properties},
+                required   => $t->{required} // [],
+            },
+        }};
+    }
+    return \@list;
+}
+
+# the arguments (an arrayref, bytes, in the order of the syntax) of a native
+# call, from its JSON arguments; undef when they do not fit the tool
+sub native_args {
+    my ($name, $json) = @_;
+    my $t = $TOOLS->{lc $name} or return;
+    my $in = eval {$::JSON->decode(length($json // '') ? $json : '{}')};
+    return unless ref($in) eq 'HASH';
+    my %required = map {($_ => 1)} @{$t->{required} // []};
+    my @args;
+    foreach my $a (arg_names($t)){
+        my $v = $in->{$a};
+        if(!defined $v or ref($v)){
+            return if $required{$a};
+            $v = '';
+        }
+        push @args, ai::to_bytes("$v");
+    }
+    return \@args;
 }
 
 # is a tool there to be used (and to be told about in the prompt)

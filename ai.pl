@@ -600,6 +600,14 @@ Maximum number of tokens for a completion. Default: 100000
 
 Sampling settings. Defaults: 0.6, 0.95, 20, 0.0
 
+=item B<AI_TOOL_CALLS>
+
+C<native> (default): the tools are sent with the request (the API's C<tools>),
+and the calls come back as the server parses them (C<tool_calls>). The tool
+syntax is not in the system prompt then. C<text>: the tool syntax is in the
+system prompt and the calls are written in the answer. Anthropic and B<AI_RAW>
+always use the text. Calls written in the text are run in both modes.
+
 =item B<AI_RAW>
 
 Use the raw F</v1/completions> endpoint with a prompt formatted here (for

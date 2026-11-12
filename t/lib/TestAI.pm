@@ -33,6 +33,7 @@ sub setup {
         AI_PROMPT_DATE  => 'none', # the date and the project file in the prompt
         AI_PROJECT_FILE => '',
         AI_GLYPHS       => "unicode", # the status glyphs, whatever the locale of the test run
+        AI_TOOL_CALLS   => "text", # the text syntax, the tests script it; native calls have t/86
         %env,
     );
     $FindBin::Bin = $ROOT; # where ai.pm looks for the prompt templates
