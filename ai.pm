@@ -46,6 +46,10 @@ our %PROVIDERS = (
         url   => 'http://localhost:8000',
         local => 1, # no API key needed
     },
+    'flm' => {
+        url   => 'http://localhost:8001', # FastFlowLM, the NPU: one request at a time
+        local => 1,
+    },
     'openai' => {
         url => 'https://api.openai.com',
         key_prefix => 'sk-',
@@ -452,6 +456,18 @@ sub stream_tool_calls {
         $_->{arguments} //= '';
         $_;
     } grep {$_ and length($_->{name} // '')} @{$st->{tool_calls} // []}];
+}
+
+# the provider in use (undef before the setup)
+sub provider_is {
+    my ($name) = @_;
+    return defined $AI_PROVIDER && $AI_PROVIDER eq $name;
+}
+
+# How many sub-agents work at once. FastFlowLM locks the NPU for one request
+# at a time, so it defaults to one.
+sub max_agents {
+    return $::ORIG_ENV{AI_MAX_AGENTS} // (provider_is('flm') ? 1 : 4);
 }
 
 sub native_calls {
@@ -3002,7 +3018,7 @@ sub launch {
     my $self = agent->new($task);
     ai::agent_view("agent $self->{id}", "started: ".($task // ""));
     $ai::TUI->set("agent $self->{id}", sub {$self->status()});
-    my $max = $::ORIG_ENV{AI_MAX_AGENTS} // 4;
+    my $max = ai::max_agents();
     if($max and keys(%RUNNING) >= $max){
         push @QUEUE, $self;
     } else {
@@ -3332,6 +3348,14 @@ sub req {
     $req->{model} //= 'gpt-oss-120b';
     return $req;
 }
+
+package provider::flm;
+
+use strict; use warnings;
+use base qw(provider);
+
+*req = *provider::req;
+*raw = *provider::raw;
 
 package provider::lemonade;
 

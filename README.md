@@ -440,7 +440,7 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 | `AI_TOKENS` | max tokens per answer | 100000 |
 | `AI_TEMPERATURE`, `AI_TOP_P`, `AI_TOP_K`, `AI_MIN_P` | sampling | 0.6, 0.95, 20, 0.0 |
 | `AI_MAX_TURNS` | max requests per input (tool loop), 0 = no limit | 50 |
-| `AI_MAX_AGENTS` | sub-agents working at the same time | 4 |
+| `AI_MAX_AGENTS` | sub-agents working at the same time (1 with `AI_PROVIDER=flm`, the NPU takes one request at a time) | 4 |
 | `AI_AGENT_VIEW` | 0: no line per sub-agent start and tool call | 1 |
 | `AI_AGENT_MODEL` | model for sub-agents | the session model |
 | `AI_RETRIES` | retries of a failed request | 4 |
