@@ -60,6 +60,8 @@ is the sandbox.
 
 ```bash
 docker build -t local/ai/aicli:latest .
+# or, with docker buildx bake (docker-bake.hcl, same image name)
+docker buildx bake
 cd ~/my-project
 /path/to/aicli.sh
 ```
@@ -488,7 +490,7 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 - `utils.pm` - the event loop (curl multi, child pipes, timers in one `select()`), `fork_run()`, logging
 - `tui.pm` - the screen: the status footer (scroll region) or the status line
 - `ai/` - system prompt templates (`default`, `coder`)
-- `aicli.sh`, `Dockerfile` - docker wrapper and image
+- `aicli.sh`, `Dockerfile`, `docker-bake.hcl` - docker wrapper, image, and the bake file for it
 - `t/` - tests
 - `TODO.md` - roadmap
 - `AGENTS.md` - notes and rules for (AI) contributors

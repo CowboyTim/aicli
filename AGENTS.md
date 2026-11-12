@@ -122,6 +122,8 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   `?`. Tests run with the unicode set (`TestAI::setup`).
 - **ai/** – prompt templates: `default` (chat), `coder` (adds the tools).
 - **aicli.sh**, **Dockerfile** – docker wrapper and Alpine image.
+  **docker-bake.hcl** builds that image (`docker buildx bake`; `image-ci`
+  adds the GitHub Actions cache). CI still uses `docker build`.
 - **t/** – tests, **TODO.md** – roadmap.
 
 ## How a turn works
