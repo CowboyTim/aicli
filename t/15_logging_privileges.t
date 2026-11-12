@@ -117,8 +117,8 @@ SKIP: {
 }
 
 # not root here: nothing is dropped, nothing complains
-{
-    plan(skip_all => "this test runs as root") if $< == 0;
+SKIP: {
+    skip "this test runs as root", 2 if $< == 0;
     my ($out, $err, $rc) = ai_pl("", "/pwd\n", UID => 4242, AI_UID => 4243, AI_GROUPS => "1 2 3");
     is($rc, 0, "as a normal user the settings for root do nothing");
     is($err, "", "and nothing is said about it");

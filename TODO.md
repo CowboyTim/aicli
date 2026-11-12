@@ -162,15 +162,14 @@ This file outlines potential improvements and features for the AI coding agent (
     - Consider using a lightweight database for session storage.
 
 ## Open, found while fixing the agent loop
-- Run the tests with `Net::Curl` (Alpine image): since the event loop exists they only ran with `WWW::Curl`.
+- Look at the first CI runs (`.github/workflows/tests.yml`): the Alpine job is the first time the tests run with `Net::Curl` since the event loop exists.
 - Sub-agents: a way to look at what one is doing while it runs.
-- Status line: token counts per agent, a real multi-pane TUI on top of `tui.pm`.
+- A real multi-pane TUI on top of `tui.pm`, if ever.
 - Tool confirmation / allow-list: not wanted for now, the container is the sandbox.
 - Run the docker wrapper as a user other than 1000 once: the privilege drop now follows `UID`/`GID` (`AI_UID`, `AI_GID`, `AI_GROUPS`), only the plan is tested.
 - A native tool to find files by name (the model uses bash for that now).
 - Try `AI_PROXY`, `AI_WEB_PROXY` and the `search` tool against a real proxy and SearXNG instance: only tested with a mocked HTTP layer.
 - Providers named in older docs but not implemented: OpenAI, Groq, Anthropic, Bedrock.
-- Readline history is read once at start, not per session on `/session switch`.
 
 ## Completed Items (Reference)
 - [x] Basic interactive shell with history
@@ -208,3 +207,5 @@ This file outlines potential improvements and features for the AI coding agent (
 - [x] Sub-agents: context management of their own, tokens in the status line
 - [x] `/session delete` of the current session, `/session reset`, `/session rename <new>`
 - [x] Sessions don't pile up: empty made-up sessions go at exit (and at the next start after a crash), `/session prune`, `AI_SESSION_KEEP_DAYS`, age and first message in `/session list`
+- [x] CI: the tests on Debian packages (WWW::Curl) and in the Alpine image (Net::Curl)
+- [x] The input history is per session, also after `/session switch`

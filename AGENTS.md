@@ -301,7 +301,8 @@ command, 1 to leave; a command line never reaches the LLM. `/retry` and
 ## Sessions
 
 `$AI_DIR/sessions/<name>/` with `chat` (conversation), `prompt` + `template`
-(system prompt and the template it came from), `model`, `history` (readline).
+(system prompt and the template it came from), `model`, `history` (readline,
+saved and loaded by `use_session()` when the session changes).
 Names match `^[A-Za-z0-9_][A-Za-z0-9_.-]*$`, checked by
 `valid_session_name()` everywhere a name comes in. There is always a current
 session: `delete_session()` of the current one moves on to a new, empty one,
@@ -349,6 +350,10 @@ implemented.
 | `t/95_cli.t` | `-p` (one request, exit codes, stdin) and `-c` (continue per directory), as a process |
 | `t/85_web.t` | proxy selection, HTML to text, fetch, search (mocked HTTP layer), a real fetch, `/retry`, `/rewind` |
 | `t/90_prompt_display_undo.t` | project file and date in the prompt, byte-stable request prefix, brief display, diffs, `/undo` |
+
+CI (`.github/workflows/tests.yml`) runs them twice on every push to `main`:
+with the Debian packages (`WWW::Curl`) and inside the image of the Dockerfile
+(Alpine, `Net::Curl`), there as a normal user.
 
 `TestAI::mock_http` scripts the main agent (`utils::http`),
 `TestAI::mock_agent_http` answers the sub-agents (`loop::http`).

@@ -240,6 +240,36 @@ sub cmd {
     $::T = undef;
 }
 
+# the input history follows the session
+{
+    package RecTerm;
+    our @CALLS;
+    sub new { return bless {}, shift }
+    sub AUTOLOAD { our $AUTOLOAD; my ($s, @a) = @_; push @CALLS, join(' ', ($AUTOLOAD =~ s/.*:://r), map {s{.*/sessions/}{}r} @a) unless $AUTOLOAD =~ m/DESTROY/; return }
+}
+{
+    cmd("/session create hist-a");
+    cmd("/session create hist-b");
+    ai::spew("$tmp/aicli/sessions/hist-a/history", "typed in a\n");
+    local $::T = RecTerm->new();
+    @RecTerm::CALLS = ();
+    cmd("/session hist-a");
+    is_deeply(\@RecTerm::CALLS, ["write_history hist-b/history", "clear_history", "ReadHistory hist-a/history"], "history: saved for the session left, loaded for the session entered");
+    @RecTerm::CALLS = ();
+    cmd("/session hist-b");
+    is_deeply(\@RecTerm::CALLS, ["write_history hist-a/history", "clear_history"], "history: a session without one starts empty");
+    @RecTerm::CALLS = ();
+    cmd("/session hist-b");
+    is_deeply(\@RecTerm::CALLS, [], "history: nothing to do when the session stays");
+    cmd("/session delete hist-b");
+    is($RecTerm::CALLS[0], "clear_history", "history: nothing is written into a deleted session");
+    ok(!-d "$tmp/aicli/sessions/hist-b", "history: and it stays deleted");
+    $::T = undef;
+    cmd("/session test");
+    cmd("/session delete hist-a");
+    cmd("/session delete $_") for grep {ai::is_auto_name($_)} @{ai::get_sessions()};
+}
+
 # stdin reader
 {
     my $fn = "$tmp/stdin";

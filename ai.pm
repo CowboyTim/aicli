@@ -232,9 +232,19 @@ sub valid_session_name {
 # point all per-session globals to a session
 sub use_session {
     my ($session) = @_;
+    my $old_history = $HISTORY_FILE;
     $AI_SESSION     = $session;
     $AI_SESSION_DIR = "$SESSIONS_DIR/$AI_SESSION";
     $HISTORY_FILE   = "$AI_SESSION_DIR/history";
+    # the input history belongs to the session: save the one, load the other
+    if($::T and defined $old_history and $old_history ne $HISTORY_FILE){
+        eval {
+            $::T->write_history($old_history) if -d ($old_history =~ s{/[^/]+\z}{}r);
+            $::T->clear_history();
+            $::T->ReadHistory($HISTORY_FILE) if -e $HISTORY_FILE;
+            1;
+        } or log::info("input history not switched: $@");
+    }
     $PROMPT_FILE    = "$AI_SESSION_DIR/prompt";
     $STATUS_FILE    = "$AI_SESSION_DIR/chat";
     $SESSION_MODEL  = read_session_model() || $::ORIG_ENV{AI_MODEL};

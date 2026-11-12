@@ -1,0 +1,35 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # Debian/Ubuntu packages: this is the WWW::Curl side of the curl shim
+  debian:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the Perl modules
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libjson-xs-perl libwww-curl-perl libterm-readline-gnu-perl libdata-uuid-perl
+      - name: Run the tests
+        run: prove -I. t
+
+  # The image of the Dockerfile: Alpine, musl, and Net::Curl
+  alpine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the image
+        run: docker build -t aicli .
+      - name: Which curl module
+        run: >
+          docker run --rm --entrypoint perl aicli
+          -e 'for (qw(Net::Curl::Multi WWW::Curl::Multi)) { print eval "require $_; 1" ? "ok   " : "MISS ", $_, "\n" }'
+      - name: Run the tests in it, as a normal user
+        run: >
+          docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp
+          -v "$PWD":/src -w /src --entrypoint prove aicli -I. t

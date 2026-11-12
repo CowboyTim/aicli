@@ -494,7 +494,8 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 prove -I. t
 ```
 
-The LLM is scripted in the tests. `t/45_http_e2e.t` runs the real HTTP code
+CI runs them on every push, with the Debian packages and inside the Alpine
+image. The LLM is scripted in the tests. `t/45_http_e2e.t` runs the real HTTP code
 against a small fake server (and `ai.pl` itself as a process), it is skipped
 without a curl module.
 
