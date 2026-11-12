@@ -663,6 +663,12 @@ unknown, the conversation is compacted when the API refuses it as too long.
 
 Part of the context window that may be used before compacting. Default: 0.8
 
+=item B<AI_THINKING>
+
+The reasoning of the model: C<on>, C<off>, or a token budget (for servers that
+take one, C<reasoning_budget>). Set per session with B</thinking>, which wins
+over this. Not set: the server decides. Sent to OpenAI-compatible servers only.
+
 =item B<AI_CONTEXT_SUMMARY>
 
 Set to 0 to drop old messages instead of having the model summarize them.

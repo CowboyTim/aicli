@@ -1468,9 +1468,58 @@ sub prune_tool_results {
 # dropped: AI_CONTEXT_SUMMARY=0, or when the summary fails). The recent
 # messages stay as they are, removed messages go to the "chat.archive" file.
 # Returns true when the conversation was changed.
+# The reasoning of the model: 'on', 'off', a token budget (a number), or undef
+# for what the server does. The session's choice (the file "thinking", set by
+# /thinking) wins over AI_THINKING.
+sub thinking_setting {
+    my $v = defined $AI_SESSION_DIR ? slurp("$AI_SESSION_DIR/thinking") : undef;
+    $v = undef if defined $v and $v !~ m/\S/;
+    $v //= $::ORIG_ENV{AI_THINKING};
+    return undef unless defined $v;
+    $v =~ s/\s+//g;
+    return undef unless length $v;
+    return 'on'  if $v =~ m/^(?:on|yes|true|1)$/i;
+    return 'off' if $v =~ m/^(?:off|no|false|0)$/i;
+    return int($v) if $v =~ m/^\d+$/;
+    return undef;
+}
+
+sub thinking_text {
+    my $from = (defined $AI_SESSION_DIR and -f "$AI_SESSION_DIR/thinking") ? 'session'
+        : defined $::ORIG_ENV{AI_THINKING} ? 'AI_THINKING' : 'default';
+    return (thinking_setting() // 'server default')." ($from)";
+}
+
+# The first request of the conversation, kept in the session: a compaction
+# takes it out of the chat, the summaries carry it on.
+sub first_request {
+    my (@msgs) = @_;
+    my $kept = slurp("$AI_SESSION_DIR/first_request");
+    if(!defined $kept){
+        my ($first) = grep {is_user_input($_)} @msgs;
+        return undef unless $first;
+        $kept = to_bytes($first->{content} // '');
+        eval {spew("$AI_SESSION_DIR/first_request", $kept); 1}
+            or log::info("the first request is not kept: $@");
+    }
+    return to_text($kept);
+}
+
+# every compaction is written down: when, how, messages and tokens before/after
+sub record_compaction {
+    my (%e) = @_;
+    $e{time} = time;
+    open(my $fh, '>>', "$AI_SESSION_DIR/compactions") or return;
+    print {$fh} $::JSON->encode(\%e)."\n";
+    close($fh);
+    return;
+}
+
 sub compact_context {
     my (%o) = @_; # summarize => 1: always summarize, quiet => 1
     my @msgs   = load_messages();
+    my $n_all  = scalar(@msgs);
+    my $pin    = first_request(@msgs); # before anything is taken out
     my $before = estimate_tokens(@msgs);
     my $limit  = context_limit();
     my $target = int(($limit || $before) * 0.5); # where to end up
@@ -1491,8 +1540,10 @@ sub compact_context {
     my @tail = @msgs[$cut .. $#msgs];
     my $say  = sub {
         my ($how, @new) = @_;
+        my $after = estimate_tokens(@new);
+        record_compaction(how => $how, messages => [$n_all, scalar(@new)], tokens => [$before, $after]);
         return if $o{quiet};
-        print "${colors::cyan_color}[context: $how, ~$before -> ~".estimate_tokens(@new)." tokens]${colors::reset_color}\n";
+        print "${colors::cyan_color}[context: $how, ~$before -> ~$after tokens]${colors::reset_color}\n";
     };
     my $archive = \&archive_messages;
 
@@ -1548,9 +1599,11 @@ sub compact_context {
     }
 
     # 3. or without one
+    my $pin_text = (defined $pin and length $pin)
+        ? "\n\nThe first request of the user, word for word:\n".substr($pin, 0, 2000) : '';
     my $note = defined $summary
-        ? "[Summary of the conversation so far, the older messages were removed to save context]\n$summary"
-        : "[The older messages of this conversation were removed to save context]";
+        ? "[Summary of the conversation so far, the older messages were removed to save context]\n$summary$pin_text"
+        : "[The older messages of this conversation were removed to save context]$pin_text";
     my @new = (@sys, {role => 'user', content => $note}, @tail);
     &{$archive}(@head);
     write_messages(@new);
@@ -1801,6 +1854,7 @@ sub init_session {
 
 # forget the conversation, keep the system prompt
 sub reset_chat {
+    unlink("$AI_SESSION_DIR/first_request"); # a new conversation has a new first request
     write_messages({role => 'system', content => to_text(system_prompt())});
     status_info();
     return;
@@ -2012,7 +2066,7 @@ sub delete_session {
 sub reset_session {
     utils::load_cpan("File::Path");
     File::Path::remove_tree("$AI_SESSION_DIR/$_") for qw(undo agents);
-    unlink(map {"$AI_SESSION_DIR/$_"} qw(chat.archive usage chat.tmp usage.tmp));
+    unlink(map {"$AI_SESSION_DIR/$_"} qw(chat.archive usage chat.tmp usage.tmp compactions));
     reset_chat();
     print "Session '$AI_SESSION' reset.\n";
     return;
@@ -2451,6 +2505,58 @@ our @COMMANDS;
             print to_bytes(clip_lines($inputs[0]{content}, 2, "  "));
             return 0;
         },
+    },
+    '/context' => {
+        usage => '/context [summary]',
+        help  => 'how full the context is and its compactions; "summary" shows the last summary',
+        run   => sub {
+            my ($args) = @_;
+            my @msgs = load_messages();
+            if(($args // '') eq 'summary'){
+                my ($note) = grep {($_->{content} // '') =~ m/\A\[Summary of the conversation so far/} reverse @msgs;
+                print $note ? "$note->{content}\n" : "No summary yet.\n";
+                return 0;
+            }
+            my $tok   = estimate_tokens(@msgs);
+            my $limit = context_limit();
+            printf "messages:    %d\n", scalar(@msgs);
+            printf "tokens:      ~%d%s\n", $tok, $limit ? sprintf(" of %d (%d%%)", $limit, 100 * $tok / $limit) : " (window unknown)";
+            my $archive = slurp("$AI_SESSION_DIR/chat.archive") // '';
+            printf "archived:    %d messages\n", scalar(() = $archive =~ m/\n/g);
+            my @c = grep {ref($_) eq 'HASH'} map {eval {$::JSON->decode($_)}} grep {m/\S/} split /\n/, slurp("$AI_SESSION_DIR/compactions") // '';
+            printf "compactions: %d\n", scalar(@c);
+            if(@c){
+                my $l = $c[-1];
+                printf "last:        %s, %s -> %s messages, ~%s -> ~%s tokens (%s)\n", scalar(localtime($l->{time})),
+                    $l->{messages}[0], $l->{messages}[1], $l->{tokens}[0], $l->{tokens}[1], $l->{how};
+            }
+            print "thinking:    ".thinking_text()."\n";
+            return 0;
+        },
+    },
+    '/thinking' => {
+        usage => '/thinking [on|off|<tokens>|default]',
+        help  => 'the reasoning of the model in this session: on, off, a token budget, or the default',
+        run   => sub {
+            my ($args) = @_;
+            $args = lc(utils::trim($args // ''));
+            if(length $args){
+                if($args eq 'default'){
+                    unlink("$AI_SESSION_DIR/thinking");
+                } elsif($args =~ m/^(?:on|off|\d+)$/){
+                    if(!eval {spew("$AI_SESSION_DIR/thinking", $args); 1}){
+                        print "Failed to set thinking: $@";
+                        return 0;
+                    }
+                } else {
+                    print "Usage: /thinking on|off|<tokens>|default\n";
+                    return 0;
+                }
+            }
+            print "thinking: ".thinking_text()."\n";
+            return 0;
+        },
+        complete => sub {return +{map {($_ => sub {0})} qw(on off default)}},
     },
     '/compact' => {
         help => 'summarize the older messages to free context',
@@ -3169,6 +3275,11 @@ sub req {
     # the tools, natively: the server turns the model's calls into tool_calls
     $req->{tools} = tools::native_list(exclude => ($ai::IN_AGENT ? ['agent'] : []))
         if ai::native_calls();
+    # the reasoning of the model, when it is set (/thinking, AI_THINKING)
+    if(defined(my $th = ai::thinking_setting())){
+        $req->{chat_template_kwargs} = {enable_thinking => $th eq 'off' ? $Types::Serialiser::false : $Types::Serialiser::true};
+        $req->{reasoning_budget} = $th + 0 if $th =~ m/^\d+$/;
+    }
 
     return $req;
 }
@@ -3200,7 +3311,8 @@ use base qw(provider);
 sub req {
     my (@jstr) = @_;
     my $req = provider::req(@jstr);
-    $req->{chat_template_kwargs} = {"enable_thinking" => $Types::Serialiser::true};
+    # thinking on unless the session or AI_THINKING says otherwise (provider::req)
+    $req->{chat_template_kwargs} //= {"enable_thinking" => $Types::Serialiser::true};
     $req->{model} //= 'nvidia/nemotron-3.5-lightning-30b-a3b';
     return $req;
 }
@@ -3243,7 +3355,7 @@ sub req {
     my (@jstr) = @_;
     my $req = provider::req(@jstr);
     $req->{max_completion_tokens} = delete $req->{max_tokens};
-    delete $req->{$_} for qw(top_k min_p);
+    delete $req->{$_} for qw(top_k min_p chat_template_kwargs reasoning_budget);
     delete $req->{temperature} unless defined $::ORIG_ENV{AI_TEMPERATURE};
     delete $req->{top_p} unless defined $::ORIG_ENV{AI_TOP_P};
     return $req;

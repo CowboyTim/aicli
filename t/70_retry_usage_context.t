@@ -215,7 +215,7 @@ my $big_tool = sub {{role => 'user', content => "[BASH_7c48 RESULT_d170\n".("$_[
     like($out, qr/\[context: summarizing \d+ older messages\.\.\.\].*\[context: summarized \d+ older messages, ~\d+ -> ~\d+ tokens\]/s, "summary: said so");
     my @msgs = ai::load_messages();
     is($msgs[0]{content}, "sys", "summary: system prompt kept");
-    is($msgs[1]{content}, "[Summary of the conversation so far, the older messages were removed to save context]\nThe user asked 8 things about lorem.", "summary: replaces the old part");
+    like($msgs[1]{content}, qr/\A\[Summary of the conversation so far, the older messages were removed to save context\]\nThe user asked 8 things about lorem\./, "summary: replaces the old part");
     is($msgs[-2]{content}, "question 9", "summary: the new input is still there");
     is($msgs[-1]{content}, "and the answer", "summary: and answered");
     ok(scalar(@msgs) < 12, "summary: fewer messages (".scalar(@msgs).")");
@@ -243,7 +243,7 @@ my $big_tool = sub {{role => 'user', content => "[BASH_7c48 RESULT_d170\n".("$_[
         is(scalar(@TestAI::REQUESTS), $requests, "$name: requests");
         like($out, qr/\[context: dropped \d+ older messages/, "$name: dropped");
         my @msgs = ai::load_messages();
-        is($msgs[1]{content}, "[The older messages of this conversation were removed to save context]", "$name: note for the model");
+        like($msgs[1]{content}, qr/\A\[The older messages of this conversation were removed to save context\]/, "$name: note for the model");
         is($msgs[-1]{content}, "answer", "$name: the chat goes on");
     }
 }
@@ -281,7 +281,7 @@ my $big_tool = sub {{role => 'user', content => "[BASH_7c48 RESULT_d170\n".("$_[
     TestAI::mock_http($ok->("the summary"));
     my $out = TestAI::capture {ai::handle_command("/compact")};
     like($out, qr/context: summarized \d+ older messages/, "/compact: summarized");
-    like((ai::load_messages())[1]{content}, qr/the summary\z/, "/compact: summary in the conversation");
+    like((ai::load_messages())[1]{content}, qr/\nthe summary\n/, "/compact: summary in the conversation");
     ai::handle_command("/clear");
     TestAI::mock_http();
     $out = TestAI::capture {ai::handle_command("/compact")};
