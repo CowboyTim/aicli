@@ -449,6 +449,7 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 | `AI_CONTEXT_TOKENS` | context window of the model, 0 = no context management | from the API |
 | `AI_CONTEXT_THRESHOLD` | compact when the conversation is over this part of the window | 0.8 |
 | `AI_CONTEXT_SUMMARY` | 0: drop old messages instead of summarizing them | 1 |
+| `AI_SUMMARY_CHUNKS` | most pieces the older part is summarized in, one request each | 8 |
 | `AI_THINKING` | the reasoning of the model: `on`, `off` or a token budget; `/thinking` sets it per session | server decides |
 | `AI_TOKEN_BUDGET` | max tokens a session may use | no limit |
 | `AI_USAGE` | 0: don't ask the API for token usage | 1 |

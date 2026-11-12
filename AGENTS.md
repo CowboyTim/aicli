@@ -247,7 +247,7 @@ pops and reverts one entry. A new tool that changes files must call
 completion tokens, `chars_per_token` (learned from what the API reports, used
 by `estimate_tokens()`). `context_limit()`: `AI_CONTEXT_TOKENS`, else
 `%MODEL_CONTEXT` (model list) or `$SERVER_CONTEXT` (llama.cpp `/props`), else
-0 = unknown. `compact_context()` keeps the first request of the conversation (the file
+0 = unknown. `compact_context()` summarizes the older part in pieces that fit a request (`summarize_messages()`, each piece updates the summary so far; a piece that fails keeps what there is). It keeps the first request of the conversation (the file
 `first_request`) word for word in its summary, and records every compaction in
 `compactions` (`/context` shows them). `compact_context()`: prune old tool results, then summarize the
 older messages with a quiet request (or drop them); removed messages are

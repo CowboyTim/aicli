@@ -53,7 +53,7 @@ my $bash = sub {"///BASH_7c48+EO_dfd7\n$_[0]\nEO_dfd7\nBASH_7c48\n"};
 
 # retry with backoff
 {
-    TestAI::setup(AI_RETRIES => 3, AI_RETRY_DELAY => 0.01);
+    TestAI::setup(AI_RETRIES => 3, AI_RETRY_DELAY => 0.01, AI_SUMMARY_CHUNKS => 1);
     TestAI::mock_http(TestAI::fail(503, '{"error":{"message":"busy"}}'), TestAI::fail(0), $ok->("at last"));
     my $out = TestAI::capture {ai::chat_completion("hi")};
     is(scalar(@TestAI::REQUESTS), 3, "retry: two failures, then success");
@@ -91,7 +91,7 @@ my $bash = sub {"///BASH_7c48+EO_dfd7\n$_[0]\nEO_dfd7\nBASH_7c48\n"};
 
 # rate limits
 {
-    TestAI::setup(AI_RETRIES => 2, AI_RETRY_DELAY => 30);
+    TestAI::setup(AI_RETRIES => 2, AI_RETRY_DELAY => 30, AI_SUMMARY_CHUNKS => 1);
     TestAI::mock_http(TestAI::fail(429, '{"error":{"message":"rate limit"}}', 'retry-after' => '0.4'), $ok->());
     my $t0 = Time::HiRes::time();
     my $out = TestAI::capture {ai::chat_completion("hi")};
@@ -119,7 +119,7 @@ my $bash = sub {"///BASH_7c48+EO_dfd7\n$_[0]\nEO_dfd7\nBASH_7c48\n"};
 
 # token usage
 {
-    my $tmp = TestAI::setup(AI_SHOW_USAGE => 1);
+    my $tmp = TestAI::setup(AI_SHOW_USAGE => 1, AI_SUMMARY_CHUNKS => 1);
     TestAI::mock_http([TestAI::content("Hello"), TestAI::usage(100, 20), TestAI::done()]);
     my $out = TestAI::capture {ai::chat_completion("hi")};
     ok(JSON::XS::decode_json($TestAI::REQUESTS[0]{data})->{stream_options}{include_usage}, "usage: asked for in the request");
@@ -150,7 +150,7 @@ my $bash = sub {"///BASH_7c48+EO_dfd7\n$_[0]\nEO_dfd7\nBASH_7c48\n"};
     is(ai::load_usage()->{requests} // 0, 0, "usage: is per session");
 }
 {
-    TestAI::setup(AI_USAGE => 0, AI_SHOW_USAGE => 0);
+    TestAI::setup(AI_USAGE => 0, AI_SHOW_USAGE => 0, AI_SUMMARY_CHUNKS => 1);
     TestAI::mock_http($ok->());
     my $out = TestAI::capture {ai::chat_completion("hi")};
     ok(!exists JSON::XS::decode_json($TestAI::REQUESTS[0]{data})->{stream_options}, "AI_USAGE=0: not asked for");
@@ -159,7 +159,7 @@ my $bash = sub {"///BASH_7c48+EO_dfd7\n$_[0]\nEO_dfd7\nBASH_7c48\n"};
 
 # token budget
 {
-    TestAI::setup(AI_TOKEN_BUDGET => 500, AI_SHOW_USAGE => 1);
+    TestAI::setup(AI_TOKEN_BUDGET => 500, AI_SHOW_USAGE => 1, AI_SUMMARY_CHUNKS => 1);
     TestAI::mock_http(
         [TestAI::content($bash->('echo 1')), TestAI::usage(200, 100), TestAI::done()],
         [TestAI::content($bash->('echo 2')), TestAI::usage(250, 100), TestAI::done()],
@@ -182,7 +182,7 @@ my $bash = sub {"///BASH_7c48+EO_dfd7\n$_[0]\nEO_dfd7\nBASH_7c48\n"};
 my $big_tool = sub {{role => 'user', content => "[BASH_7c48 RESULT_d170\n".("$_[0] output line\n" x 300)."RESULT_d170]"}};
 {
     # old tool output goes first, without asking the model
-    my $tmp = TestAI::setup(AI_CONTEXT_TOKENS => 6000);
+    my $tmp = TestAI::setup(AI_CONTEXT_TOKENS => 6000, AI_SUMMARY_CHUNKS => 1);
     ai::write_messages({role => 'system', content => 'sys'},
         {role => 'user', content => 'first task'},
         (map {({role => 'assistant', content => "call $_"}, $big_tool->($_))} 1 .. 4),
@@ -202,7 +202,7 @@ my $big_tool = sub {{role => 'user', content => "[BASH_7c48 RESULT_d170\n".("$_[
 }
 {
     # a long conversation is summarized by the model
-    my $tmp = TestAI::setup(AI_CONTEXT_TOKENS => 6000);
+    my $tmp = TestAI::setup(AI_CONTEXT_TOKENS => 6000, AI_SUMMARY_CHUNKS => 1);
     my @old = map {({role => 'user', content => "question $_ ".("lorem ipsum " x 150)}, {role => 'assistant', content => "answer $_ ".("dolor sit " x 150)})} 1 .. 8;
     ai::write_messages({role => 'system', content => 'sys'}, @old);
     TestAI::mock_http($ok->("<think>hm</think>The user asked 8 things about lorem."), $ok->("and the answer"));
@@ -210,7 +210,7 @@ my $big_tool = sub {{role => 'user', content => "[BASH_7c48 RESULT_d170\n".("$_[
     is(scalar(@TestAI::REQUESTS), 2, "summary: one request for the summary, one for the answer");
     my $sreq = TestAI::sent_messages(0);
     is(TestAI::roles(@$sreq), "system,user", "summary: own small conversation");
-    like($sreq->[1]{content}, qr/\AUSER:\nquestion 1 .*ASSISTANT:\nanswer 1 .*Summarize the conversation above/s, "summary: transcript of the old part");
+    like($sreq->[1]{content}, qr/\A(?:The conversation:\n\n)?USER:\nquestion \d+ .*ASSISTANT:\nanswer \d+ .*Summarize the conversation above/s, "summary: transcript of the old part");
     unlike($out, qr/The user asked 8 things/, "summary: not printed");
     like($out, qr/\[context: summarizing \d+ older messages\.\.\.\].*\[context: summarized \d+ older messages, ~\d+ -> ~\d+ tokens\]/s, "summary: said so");
     my @msgs = ai::load_messages();
@@ -235,7 +235,7 @@ my $big_tool = sub {{role => 'user', content => "[BASH_7c48 RESULT_d170\n".("$_[
     # without a summary: AI_CONTEXT_SUMMARY=0, or the summary fails
     foreach my $case (['AI_CONTEXT_SUMMARY=0', {AI_CONTEXT_SUMMARY => 0}, 1], ['failing summary', {}, 2]){
         my ($name, $env, $requests) = @$case;
-        TestAI::setup(AI_CONTEXT_TOKENS => 6000, %$env);
+        TestAI::setup(AI_CONTEXT_TOKENS => 6000, %$env, AI_SUMMARY_CHUNKS => 1);
         ai::write_messages({role => 'system', content => 'sys'},
             map {({role => 'user', content => "q$_ ".("x y " x 400)}, {role => 'assistant', content => "a$_ ".("z " x 800)})} 1 .. 8);
         TestAI::mock_http(($requests == 2 ? (TestAI::fail(400, '{"error":{"message":"no"}}')) : ()), $ok->("answer"));
@@ -249,7 +249,7 @@ my $big_tool = sub {{role => 'user', content => "[BASH_7c48 RESULT_d170\n".("$_[
 }
 {
     # unknown context size: the "too long" error of the API starts it
-    TestAI::setup();
+    TestAI::setup(AI_SUMMARY_CHUNKS => 1, AI_SUMMARY_CHUNKS => 1);
     is(ai::context_limit(), 0, "reactive: context size unknown");
     ai::write_messages({role => 'system', content => 'sys'},
         map {({role => 'user', content => "q$_ ".("x y " x 400)}, {role => 'assistant', content => "a$_ ".("z " x 800)})} 1 .. 8);
@@ -275,7 +275,7 @@ my $big_tool = sub {{role => 'user', content => "[BASH_7c48 RESULT_d170\n".("$_[
 
 # /compact, and the context size from the API
 {
-    TestAI::setup();
+    TestAI::setup(AI_SUMMARY_CHUNKS => 1, AI_SUMMARY_CHUNKS => 1);
     ai::write_messages({role => 'system', content => 'sys'},
         map {({role => 'user', content => "q$_ ".("x y " x 200)}, {role => 'assistant', content => "a$_ ".("z " x 400)})} 1 .. 6);
     TestAI::mock_http($ok->("the summary"));

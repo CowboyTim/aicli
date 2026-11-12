@@ -15,7 +15,7 @@ use TestAI;
 
 # the setting: a session's file wins over AI_THINKING
 {
-    TestAI::setup(AI_THINKING => 'off');
+    TestAI::setup(AI_THINKING => 'off', AI_SUMMARY_CHUNKS => 1);
     is(ai::thinking_setting(), 'off', "setting: AI_THINKING");
     is(ai::thinking_text(), 'off (AI_THINKING)', "setting: where it comes from");
     ai::handle_command("/thinking on");
@@ -30,36 +30,36 @@ use TestAI;
     like($bad, qr/Usage: \/thinking/, "setting: a bad value is refused");
 }
 {
-    TestAI::setup();
+    TestAI::setup(AI_SUMMARY_CHUNKS => 1, AI_SUMMARY_CHUNKS => 1);
     is(ai::thinking_setting(), undef, "setting: nothing set is the server's default");
     is(ai::thinking_text(), 'server default (default)', "setting: said as the default");
 }
 
 # what the request says
 {
-    TestAI::setup(AI_LOCAL_SERVER => 'http://127.0.0.1:9/v1/', AI_THINKING => 'off', AI_MODEL => 'm');
+    TestAI::setup(AI_LOCAL_SERVER => 'http://127.0.0.1:9/v1/', AI_THINKING => 'off', AI_MODEL => 'm', AI_SUMMARY_CHUNKS => 1);
     my $req = $::JSON->decode(ai::build_request([{role => 'user', content => 'hi'}]));
     ok(exists $req->{chat_template_kwargs} && !$req->{chat_template_kwargs}{enable_thinking}, "request: thinking off for the server");
-    TestAI::setup(AI_LOCAL_SERVER => 'http://127.0.0.1:9/v1/', AI_THINKING => '2500', AI_MODEL => 'm');
+    TestAI::setup(AI_LOCAL_SERVER => 'http://127.0.0.1:9/v1/', AI_THINKING => '2500', AI_MODEL => 'm', AI_SUMMARY_CHUNKS => 1);
     $req = $::JSON->decode(ai::build_request([{role => 'user', content => 'hi'}]));
     is($req->{reasoning_budget}, 2500, "request: the budget as reasoning_budget");
     ok($req->{chat_template_kwargs}{enable_thinking}, "request: and thinking on");
-    TestAI::setup(AI_LOCAL_SERVER => 'http://127.0.0.1:9/v1/', AI_MODEL => 'm');
+    TestAI::setup(AI_LOCAL_SERVER => 'http://127.0.0.1:9/v1/', AI_MODEL => 'm', AI_SUMMARY_CHUNKS => 1);
     $req = $::JSON->decode(ai::build_request([{role => 'user', content => 'hi'}]));
     ok(!exists $req->{chat_template_kwargs} && !exists $req->{reasoning_budget}, "request: nothing sent when not set");
 
-    TestAI::setup(AI_API_KEY => 'nvapi-x', AI_LOCAL_SERVER => undef, AI_MODEL => 'nemo');
+    TestAI::setup(AI_API_KEY => 'nvapi-x', AI_LOCAL_SERVER => undef, AI_MODEL => 'nemo', AI_SUMMARY_CHUNKS => 1);
     $req = $::JSON->decode(ai::build_request([{role => 'user', content => 'hi'}]));
     ok($req->{chat_template_kwargs}{enable_thinking}, "request: nvidia keeps thinking on by default");
 
-    TestAI::setup(AI_API_KEY => 'sk-proj-x', AI_LOCAL_SERVER => undef, AI_THINKING => 'off', AI_MODEL => 'gpt');
+    TestAI::setup(AI_API_KEY => 'sk-proj-x', AI_LOCAL_SERVER => undef, AI_THINKING => 'off', AI_MODEL => 'gpt', AI_SUMMARY_CHUNKS => 1);
     $req = $::JSON->decode(ai::build_request([{role => 'user', content => 'hi'}]));
     ok(!exists $req->{chat_template_kwargs} && !exists $req->{reasoning_budget}, "request: openai is not sent the server's options");
 }
 
 # a long session: compactions keep the first request, are recorded, /context shows them
 {
-    TestAI::setup(AI_CONTEXT_TOKENS => 3000, AI_CONTEXT_SUMMARY => 1);
+    TestAI::setup(AI_CONTEXT_TOKENS => 3000, AI_CONTEXT_SUMMARY => 1, AI_SUMMARY_CHUNKS => 1);
     ai::append_messages({role => 'user', content => "FIRST: build the parser ".("x" x 300)});
     for my $i (1 .. 12){
         ai::append_messages({role => 'assistant', content => "step $i ".("y" x 400)},
@@ -98,15 +98,47 @@ use TestAI;
 
 # FastFlowLM (the NPU): one request at a time, so one sub-agent; native tool calls stay the default
 {
-    TestAI::setup(AI_LOCAL_SERVER => 'http://localhost:8001/v1', AI_PROVIDER => 'flm', AI_MODEL => 'qwen3:4b', AI_TOOL_CALLS => "native");
+    TestAI::setup(AI_LOCAL_SERVER => 'http://localhost:8001/v1', AI_PROVIDER => 'flm', AI_MODEL => 'qwen3:4b', AI_TOOL_CALLS => "native", AI_SUMMARY_CHUNKS => 1);
     is(ai::max_agents(), 1, "flm: one sub-agent at a time");
     ok(ai::native_calls(), "flm: native tool calls by default");
-    TestAI::setup(AI_LOCAL_SERVER => 'http://localhost:8001/v1', AI_PROVIDER => 'flm', AI_MAX_AGENTS => 3);
+    TestAI::setup(AI_LOCAL_SERVER => 'http://localhost:8001/v1', AI_PROVIDER => 'flm', AI_MAX_AGENTS => 3, AI_SUMMARY_CHUNKS => 1);
     is(ai::max_agents(), 3, "flm: AI_MAX_AGENTS wins");
-    TestAI::setup(AI_LOCAL_SERVER => 'http://localhost:8001/v1', AI_PROVIDER => 'flm', AI_TOOL_CALLS => 'text');
+    TestAI::setup(AI_LOCAL_SERVER => 'http://localhost:8001/v1', AI_PROVIDER => 'flm', AI_TOOL_CALLS => 'text', AI_SUMMARY_CHUNKS => 1);
     ok(!ai::native_calls(), "flm: AI_TOOL_CALLS=text still works");
-    TestAI::setup(AI_LOCAL_SERVER => 'http://127.0.0.1:9/v1/');
+    TestAI::setup(AI_LOCAL_SERVER => 'http://127.0.0.1:9/v1/', AI_SUMMARY_CHUNKS => 1);
     is(ai::max_agents(), 4, "other providers: four");
+}
+
+# a long older part is summarized in pieces, each one carrying the summary so far
+sub long_history {
+    ai::append_messages({role => 'user', content => "FIRST: build the parser ".("x" x 1500)});
+    for my $i (1 .. 12){
+        ai::append_messages({role => 'assistant', content => "step $i ".("y" x 1500)},
+                            {role => 'user', content => "go on $i ".("z" x 1500)});
+    }
+}
+{
+    TestAI::setup(AI_CONTEXT_TOKENS => 3000, AI_CONTEXT_SUMMARY => 1, AI_SUMMARY_CHUNKS => 3);
+    long_history();
+    TestAI::mock_http([TestAI::content("S1 the parser"), TestAI::done()],
+                      [TestAI::content("S2 more work"), TestAI::done()],
+                      [TestAI::content("S3 the end"), TestAI::done()]);
+    TestAI::capture {ai::compact_context(summarize => 1)};
+    is(scalar(@TestAI::REQUESTS), 3, "pieces: one request per piece, at most AI_SUMMARY_CHUNKS");
+    like(TestAI::sent_messages(1)->[1]{content}, qr/The summary of the conversation so far:\nS1 the parser/, "pieces: the second carries the first summary");
+    like(TestAI::sent_messages(2)->[1]{content}, qr/The summary of the conversation so far:\nS2 more work/, "pieces: the third carries the second");
+    like(TestAI::sent_messages(2)->[1]{content}, qr/Update the summary above/, "pieces: asked to update, not to start over");
+    my @msgs = ai::load_messages();
+    like($msgs[1]{content}, qr/\nS3 the end\n/, "pieces: the last summary is the one kept");
+}
+{
+    TestAI::setup(AI_CONTEXT_TOKENS => 3000, AI_CONTEXT_SUMMARY => 1, AI_SUMMARY_CHUNKS => 3, AI_RETRIES => 0);
+    long_history();
+    TestAI::mock_http([TestAI::content("S1 kept"), TestAI::done()], undef, undef);
+    TestAI::capture {ai::compact_context(summarize => 1)};
+    my @msgs = ai::load_messages();
+    like($msgs[1]{content}, qr/\nS1 kept\n/, "pieces: a piece that fails keeps the summary so far");
+    is(scalar(@TestAI::REQUESTS), 2, "pieces: nothing more is asked after the failure");
 }
 
 done_testing();

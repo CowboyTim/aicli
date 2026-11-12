@@ -1531,6 +1531,60 @@ sub record_compaction {
     return;
 }
 
+# The model's summary of some messages, written in pieces that fit a request:
+# each piece updates the summary so far, so nothing in the middle is cut away
+# the way one long request would cut it. The newest pieces count most: at most
+# AI_SUMMARY_CHUNKS pieces (default 8) are summarized, the oldest are left out.
+# Returns (summary, number of messages it covers); the summary is undef when
+# not even the first piece could be done.
+sub summarize_messages {
+    my ($msgs, $limit) = @_;
+    my $cpt  = load_usage()->{chars_per_token} || 3.5;
+    my $room = int(($limit || 12_000) * 0.3 * $cpt); # characters per request, in the window
+    $room = 4000 if $room < 4000;
+    my @chunks = ([]);
+    my $len = 0;
+    for my $m (@$msgs){
+        my $text = uc($m->{role} // 'user').":\n".($m->{content} // '');
+        if(length($text) > $room / 2){
+            # one huge message (a file, a long output): its start and its end
+            $text = substr($text, 0, int($room / 2) - 100)."\n[...]\n".substr($text, -100);
+        }
+        if(@{$chunks[-1]} and $len + length($text) > $room){
+            push @chunks, [];
+            $len = 0;
+        }
+        push @{$chunks[-1]}, $text;
+        $len += length($text);
+    }
+    my $max = $::ORIG_ENV{AI_SUMMARY_CHUNKS} // 8;
+    splice(@chunks, 0, @chunks - $max) if $max and @chunks > $max;
+
+    my ($summary, $covered) = (undef, 0);
+    for my $i (0 .. $#chunks){
+        my $so_far = defined $summary
+            ? "The summary of the conversation so far:\n$summary\n\nThe next part of the conversation:\n\n"
+            : "The conversation:\n\n";
+        my @req = (
+            {role => 'system', content => "You compact conversations between a user and a coding agent so that the work can continue with less context."},
+            {role => 'user',   content => $so_far.join("\n\n", @{$chunks[$i]})."\n\n---\n"
+                .(defined $summary ? "Update the summary above with the part before it: keep what still matters, add what changed. " : "Summarize the conversation above: ")
+                ."the goals of the user, the decisions, what was done (files, commands and their relevant results), the current state and what is left to do. Be specific, keep file names, identifiers and error messages. Only the summary, no preamble, no tool calls."},
+        );
+        my ($resp, $err, $info) = request_completion(\@req, quiet => 1);
+        return ($summary, $covered) if utils::aborted();
+        record_usage(\@req, $resp, $info) unless defined $err and !length($resp);
+        my $s = strip_thinking($resp) =~ s/\A\s+//r =~ s/\s+\z//r;
+        if(defined $err or !length($s)){
+            log::error("${colors::red_color}summary failed".(defined $err ? ": $err" : "")."${colors::reset_color}");
+            last; # what there is so far stays
+        }
+        $summary = $s;
+        $covered += scalar @{$chunks[$i]};
+    }
+    return ($summary, $covered);
+}
+
 sub compact_context {
     my (%o) = @_; # summarize => 1: always summarize, quiet => 1
     my @msgs   = load_messages();
@@ -1583,34 +1637,15 @@ sub compact_context {
         return 1;
     }
 
-    # 2. a summary of the older part, written by the model
-    my $summary;
+    # 2. a summary of the older part, written by the model, in pieces
+    my ($summary, $covered) = (undef, 0);
     if(($::ORIG_ENV{AI_CONTEXT_SUMMARY} // 1) ne '0'){
         print "${colors::cyan_color}[context: summarizing ".scalar(@head)." older messages...]${colors::reset_color}\n"
             unless $o{quiet};
-        my $cpt = load_usage()->{chars_per_token} || 3.5;
-        my $max = int($target * $cpt);
-        my $per = int($max / @phead);
-        $per = 2000 if $per < 2000;
-        my $transcript = join("\n\n", map {
-            my $c = $_->{content} // '';
-            $c = substr($c, 0, $per - 200)."\n[...]\n".substr($c, -150) if length($c) > $per;
-            uc($_->{role} // 'user').":\n$c";
-        } @phead);
-        # the task is at the start, the state at the end: cut in the middle
-        $transcript = substr($transcript, 0, int($max / 2))."\n[...]\n".substr($transcript, -int($max / 2))
-            if length($transcript) > $max;
-        my @req = (
-            {role => 'system', content => "You compact conversations between a user and a coding agent so that the work can continue with less context."},
-            {role => 'user',   content => "$transcript\n\n---\nSummarize the conversation above: the goals of the user, the decisions, what was done (files, commands and their relevant results), the current state and what is left to do. Be specific, keep file names, identifiers and error messages. Only the summary, no preamble, no tool calls."},
-        );
-        my ($resp, $err, $info) = request_completion(\@req, quiet => 1);
+        ($summary, $covered) = summarize_messages(\@phead, $limit);
         return 0 if utils::aborted();
-        record_usage(\@req, $resp, $info) unless defined $err and !length($resp);
-        $summary = strip_thinking($resp) =~ s/\A\s+//r =~ s/\s+\z//r;
-        if(defined $err or !length($summary)){
-            log::error("${colors::red_color}summary failed".(defined $err ? ": $err" : "")."${colors::reset_color}");
-            $summary = undef;
+        if(!defined $summary){
+            log::error("${colors::red_color}summary failed${colors::reset_color}");
         }
     }
 

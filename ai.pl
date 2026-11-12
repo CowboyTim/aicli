@@ -704,6 +704,12 @@ The reasoning of the model: C<on>, C<off>, or a token budget (for servers that
 take one, C<reasoning_budget>). Set per session with B</thinking>, which wins
 over this. Not set: the server decides. Sent to OpenAI-compatible servers only.
 
+=item B<AI_SUMMARY_CHUNKS>
+
+The older part of a long conversation is summarized in pieces that fit a request,
+each one updating the summary so far. At most this many pieces (the newest),
+default 8; the oldest are left out of the summary (they stay in the archive).
+
 =item B<AI_CONTEXT_SUMMARY>
 
 Set to 0 to drop old messages instead of having the model summarize them.
