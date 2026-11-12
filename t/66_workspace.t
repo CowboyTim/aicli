@@ -55,6 +55,37 @@ my $out_rx = qr/outside of the workspace \(\Q$tmp\E\/ws\): /;
     is(eval {tools::_path("")}, "", "empty stays empty (the tools complain themselves)");
 }
 
+# where a path leads: readlink by readlink
+{
+    my $r = sub {my $p = eval {tools::_resolve(@_)}; defined $p ? $p =~ s/^\Q$tmp\E//r : "died: $@"};
+    is($r->("in.txt"), "/ws/in.txt", "resolve: relative to the current directory");
+    is($r->("./sub//deep.txt"), "/ws/sub/deep.txt", "resolve: . and // are nothing");
+    is($r->("sub/../in.txt"), "/ws/in.txt", "resolve: .. drops a name");
+    is($r->("link_in"), "/ws/sub/deep.txt", "resolve: a relative link");
+    is($r->("link_out/secret.txt"), "/outside/secret.txt", "resolve: an absolute link in the middle");
+    is($r->("link_out/../ws/in.txt"), "/ws/in.txt", "resolve: .. after a link is the parent of where the link leads");
+    is($r->("link_nowhere"), "/outside/not-there", "resolve: a link to nowhere says where it would be");
+    is($r->("new/../link_out/z"), "/outside/z", "resolve: a link after names that do not exist");
+    is($r->("no/such/dir/file"), "/ws/no/such/dir/file", "resolve: what does not exist is taken by its name");
+    is($r->("link_file", 1), "/ws/link_file", "resolve: nofollow keeps the last name");
+    is($r->("link_out/secret.txt", 1), "/outside/secret.txt", "resolve: nofollow still follows the directories");
+    is(tools::_resolve("/../../etc/../tmp/."), "/tmp", "resolve: nothing is above /");
+    is(tools::_resolve("/"), "/", "resolve: /");
+    symlink("chain2", "chain1"); symlink("chain3", "chain2"); symlink("in.txt", "chain3");
+    is($r->("chain1"), "/ws/in.txt", "resolve: a chain of links");
+    symlink("loop_b", "loop_a"); symlink("loop_a", "loop_b");
+    like($r->("loop_a/x"), qr/died: too many symbolic links/, "resolve: links in a circle end");
+    eval {tools::_path("loop_a/x")};
+    like($@, $out_rx, "a circle of links is outside");
+    symlink("$tmp/ws/sub", "$tmp/outside/back_in");
+    symlink("$tmp/outside/back_in", "via_outside");
+    is($r->("via_outside/deep.txt"), "/ws/sub/deep.txt", "resolve: out and back in again");
+    is(eval {tools::_path("via_outside/deep.txt")}, "via_outside/deep.txt", "what ends up inside is inside, whatever the way");
+    symlink("$tmp/ws/fresh.txt", "link_new");
+    is(eval {tools::_path("link_new")}, "link_new", "a link to a file inside that does not exist yet is fine");
+    unlink(qw(chain1 chain2 chain3 loop_a loop_b via_outside link_new), "$tmp/outside/back_in");
+}
+
 # what is not
 {
     foreach my $p ("..", "../outside/secret.txt", "/etc/passwd", "$tmp/outside/secret.txt", "sub/../../outside/secret.txt",

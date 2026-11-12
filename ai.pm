@@ -154,11 +154,10 @@ sub set_workspace {
         return;
     }
     $dir = Cwd::cwd() unless length($dir // '');
-    my $real = (-d $dir) ? Cwd::realpath($dir) : undef;
-    die "workspace is not a directory: $dir\n" unless defined $real;
-    $WORKSPACE = $real;
-    @WORKSPACE_ALLOW = grep {defined} map {(-d $_) ? Cwd::realpath($_) : undef}
-        grep {length} split m/[\s,:]+/, $::ORIG_ENV{AI_WORKSPACE_ALLOW} // '';
+    die "workspace is not a directory: $dir\n" unless -d $dir;
+    $WORKSPACE = tools::_resolve($dir);
+    @WORKSPACE_ALLOW = map {tools::_resolve($_)} grep {length and -d $_}
+        split m/[\s,:]+/, $::ORIG_ENV{AI_WORKSPACE_ALLOW} // '';
     return $WORKSPACE;
 }
 
@@ -3111,14 +3110,43 @@ sub _slurp {
     return $content // "";
 }
 
+# Where a path really leads, as an absolute path without links, "." and "..".
+# Done here, name by name: a symbolic link (readlink) is replaced by what it
+# points to, ".." drops the name before it. That is text work on names that
+# were each looked at, never a pattern over the whole path: a pattern cannot
+# see links. What does not exist is taken as the name it is, so this also
+# says where a new file would be, or where a link to nowhere points.
+# With $nofollow the last name stays itself, link or not.
+sub _resolve {
+    my ($path, $nofollow) = @_;
+    utils::load_cpan("File::Spec");
+    my @todo = grep {length and $_ ne '.'} split m{/+}, File::Spec->rel2abs($path);
+    my (@done, $links);
+    while(@todo){
+        my $name = shift @todo;
+        if($name eq '..'){
+            pop @done; # @done has no links: the name before is the parent
+            next;
+        }
+        my $here = '/'.join('/', @done, $name);
+        if(-l $here and !($nofollow and !@todo)){
+            die "too many symbolic links: $path\n" if ++$links > 40;
+            my $target = readlink($here) // die "cannot read the link $here: $!\n";
+            @done = () if $target =~ m{\A/};
+            unshift @todo, grep {length and $_ ne '.'} split m{/+}, $target;
+            next;
+        }
+        push @done, $name;
+    }
+    return '/'.join('/', @done);
+}
+
 # The workspace: the file tools only touch what is inside $ai::WORKSPACE (and
 # the directories of AI_WORKSPACE_ALLOW). Returns the path as given (trimmed)
 # when it is inside, dies otherwise. What counts is where the path really
-# ends up: the part that exists is resolved by the system (symbolic links,
-# ".."), so a link in the workspace that points out of it is outside; a ".."
-# after a name that does not exist yet is taken out as text, and the result
-# is resolved again. With nofollow the last part is
-# taken as the entry itself, not what it links to (delete, move).
+# leads (_resolve): a link in the workspace that points out of it is outside.
+# With nofollow the last part is taken as the entry itself, not what it links
+# to (delete, move).
 # This holds the file tools back, not bash or perl: for those the container
 # is the fence.
 sub _path {
@@ -3127,41 +3155,9 @@ sub _path {
     $path = $o{default} if !length($path) and defined $o{default};
     my $root = $ai::WORKSPACE;
     return $path unless defined $root and length($path);
-    utils::load_cpan("File::Spec");
     my $outside = "outside of the workspace ($root): $path\n";
-    my $abs  = File::Spec->rel2abs($path);
-    my $last;
-    if($o{nofollow}){
-        ($abs, $last) = $abs =~ m{\A(.*)/+([^/]+)/*\z}s
-            or die $outside;
-        die $outside if $last eq '..' or $last eq '.';
-    }
-    my $real;
-    foreach my $round (1 .. 64){
-        my @parts = grep {length and $_ ne '.'} split m{/+}, $abs;
-        # the part that exists is resolved by the system: links, ..
-        my @rest;
-        my $dir = '/'.join('/', @parts);
-        until(-e $dir or -l $dir){
-            unshift @rest, pop @parts;
-            $dir = '/'.join('/', @parts);
-        }
-        $real = Cwd::realpath($dir);
-        die $outside unless defined $real and -e $real; # a link to nowhere
-        my ($up) = grep {$rest[$_] eq '..'} 0 .. $#rest;
-        if(!defined $up){
-            $real = join('/', ($real eq '/' ? '' : $real), @rest) || '/';
-            last;
-        }
-        # A .. in the part that does not exist: take it out as text, with the
-        # name before it. Then look again: what is left can exist, and be a
-        # link (new/../link). Text alone never decides.
-        splice(@rest, $up ? $up - 1 : 0, $up ? 2 : 1);
-        $real =~ s{/[^/]+\z}{} unless $up;
-        $abs = join('/', ($real eq '/' ? '' : $real), @rest) || '/';
-        die $outside if $round == 64;
-    }
-    $real = ($real eq '/' ? '' : $real)."/$last" if defined $last;
+    die $outside if $o{nofollow} and $path =~ m{(?:\A|/)\.\.?/*\z};
+    my $real = eval {_resolve($path, $o{nofollow})} // die $outside;
     foreach my $ok ($root, @ai::WORKSPACE_ALLOW){
         return $path if $ok eq '/' or $real eq $ok or index($real, "$ok/") == 0;
     }

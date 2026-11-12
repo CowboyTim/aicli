@@ -237,12 +237,13 @@ How they run:
 There is no confirmation step, by choice. The file tools are confined to the
 workspace (`$ai::WORKSPACE`, set by `ai::set_workspace()` at start from
 `AI_WORKSPACE` or the current directory; `@ai::WORKSPACE_ALLOW`).
-`tools::_path()` resolves the part of a path that exists with `realpath`
-(symlinks, `..`). A `..` after a name that does not exist yet is taken out as
-text, then the result is resolved again, until none is left: `new/../link`
-must still be seen as the link it is. It dies with "outside of the workspace"
-unless the result is under an allowed root. Text alone never decides: a regex
-over the path cannot see symlinks (`t/66_workspace.t` has the cases). The docker
+`tools::_resolve()` finds where a path really leads, name by name: a symbolic
+link is read with `readlink` and replaced by its target, `..` drops the name
+before it, a name that does not exist is kept as it is (so new files and
+links to nowhere resolve too). `tools::_path()` dies with "outside of the
+workspace" unless that place is under an allowed root. Never judge a path by
+a pattern over its text: a regex cannot see symlinks (`new/../link_out/x`),
+`t/66_workspace.t` has the cases. The docker
 container is still the sandbox for `bash` and `perl`.
 
 ## Commands
