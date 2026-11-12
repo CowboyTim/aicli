@@ -381,6 +381,7 @@ implemented (it needs AWS request signing and its own binary event stream).
 | `t/86_native_tools.t` | native tool calls: tools in the request, calls and results, pieces of arguments, errors, the text fallback, sub-agents |
 | `t/88_markdown.t` | markdown of the answer: headings, emphasis, code, lists, tables, streaming, the printer |
 | `t/89_context_thinking.t` | the reasoning setting, what the request says, the first request through compactions, `/context` |
+| `t/97_live.t` | a real model, only when `AI_LIVE_SERVER` is set (`AI_LIVE_MODEL`, optional `AI_LIVE_SEARXNG`): one answer, a native tool call, the thinking setting, search. Skipped otherwise |
 | `t/95_cli.t` | `-p` (one request, exit codes, stdin) and `-c` (continue per directory), as a process |
 | `t/85_web.t` | proxy selection, HTML to text, fetch, search (mocked HTTP layer), a real fetch, `/retry`, `/rewind` |
 | `t/90_prompt_display_undo.t` | project file and date in the prompt, byte-stable request prefix, brief display, diffs, `/undo` |
