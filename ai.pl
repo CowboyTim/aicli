@@ -307,8 +307,23 @@ the check, a path that ends up outside is refused. B<delete> and B<move> work
 on a link itself, not on its target. B<AI_WORKSPACE_ALLOW> adds directories,
 B</workspace> changes it while chatting.
 
-This is no sandbox: B<bash> and B<perl> are not held back by it. Use the
-container for that.
+=head1 SANDBOX
+
+B<bash>, B<perl> and B<grep> run in a forked process. Before the tool starts,
+that process confines itself with Landlock, a feature of the Linux kernel
+(5.13 or newer): it and everything it starts can only write in the workspace,
+B<AI_WORKSPACE_ALLOW>, the temp directory, a few devices like F</dev/null>,
+and the paths of B<AI_SANDBOX_WRITE>. Reading is not limited, unless
+B<AI_SANDBOX_READ> is set.
+
+No root is needed and nothing is mounted: this is not a container, the process
+sees the whole filesystem and gets "Permission denied" where it may not go. A
+confined process cannot gain privileges (no sudo). The network is not
+restricted. The chat process itself is never confined. B</workspace> shows
+the state.
+
+Without Landlock in the kernel the tools run unconfined (B<AI_SANDBOX=on>
+makes that an error).
 
 =head1 SUB-AGENTS
 
@@ -627,6 +642,23 @@ started in. C<none> for no limit.
 =item B<AI_WORKSPACE_ALLOW>
 
 More directories the file tools may use (space, comma or colon separated).
+
+=item B<AI_SANDBOX>
+
+The kernel sandbox for bash, perl and grep. C<auto> (default): used when the
+kernel has Landlock. C<on>: those tools fail when it has not. C<off>: not
+used.
+
+=item B<AI_SANDBOX_WRITE>
+
+More paths, files or directories, the sandboxed tools may write to, e.g.
+C</dev/ttyACM0 /sys /proc>.
+
+=item B<AI_SANDBOX_READ>
+
+Limit what the sandboxed tools can read and execute: C<system> for the system
+directories, the workspace and the temp directory, or a list of more paths on
+top of those. Default: everything can be read.
 
 =item B<AI_PROJECT_FILE>
 

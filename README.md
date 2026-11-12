@@ -43,6 +43,8 @@ framework.
   directory
 - **Scriptable**: `-p "..."` runs one request and exits with a status code
 - **Slash commands** with TAB completion, multi-line input, readline history
+- **Confined**: file tools only work in the workspace; `bash`, `perl` and
+  `grep` are held there by the kernel (Landlock), no root needed
 - **Docker wrapper** to keep what the model does inside a container
 
 ## Quick start
@@ -221,9 +223,38 @@ link itself, never on what it points to.
 `AI_WORKSPACE_ALLOW` names more directories, `/workspace <dir>` moves the
 workspace while you chat, `AI_WORKSPACE=none` switches the limit off.
 
-This keeps the file tools from wandering. It is not a sandbox: `bash` and
-`perl` run what the model writes and can reach whatever the user can. For
-those the container is the fence.
+### Sandbox for bash, perl and grep
+
+What the model runs through `bash`, `perl` and `grep` is a forked process, and
+that process is confined by the kernel with
+[Landlock](https://docs.kernel.org/userspace-api/landlock.html) before the
+tool starts. It, and everything it starts, can
+
+- **write** only in the workspace (and `AI_WORKSPACE_ALLOW`), in the temp
+  directory (`TMPDIR`, else `/tmp`), to `/dev/null` and a few such devices,
+  and where `AI_SANDBOX_WRITE` says,
+- **read and execute** everything. With `AI_SANDBOX_READ=system` only the
+  system directories (`/usr`, `/bin`, `/lib*`, `/etc`, `/opt`, `/proc`, `/sys`,
+  `/dev`, `/run`), the workspace and the temp directory; more paths can be
+  listed in that variable.
+
+```bash
+# flashing a board, poking at the kernel, a package cache
+AI_SANDBOX_WRITE="/dev/ttyACM0 /sys /proc $HOME/.cache" perl ai.pl
+```
+
+Landlock is not a container: nothing is mounted, no root is needed, the
+process sees the same filesystem and gets "Permission denied" where it may not
+go. It needs Linux 5.13 or newer and works inside docker too. `/workspace`
+shows whether it is active and what is allowed. Where the kernel does not have
+it the tools run unconfined; `AI_SANDBOX=on` refuses to run them instead,
+`AI_SANDBOX=off` switches it off. The chat process itself is never confined.
+
+Good to know: a confined process cannot gain privileges, so `sudo` and other
+setuid programs do not work in tools. Programs that write outside of the
+workspace (caches and config in `$HOME`: pip, npm, cpan) need their directory
+in `AI_SANDBOX_WRITE`. Network access is not restricted. On kernels before
+5.19 a file cannot be renamed into another directory.
 
 ### What you see, and taking it back
 
@@ -394,6 +425,9 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 | `AI_UNDO_MAX_SIZE` | files bigger than this (bytes) are changed without an undo copy | 8000000 |
 | `AI_WORKSPACE` | directory the file tools are confined to, `none` for no limit | start directory |
 | `AI_WORKSPACE_ALLOW` | more directories the file tools may use | |
+| `AI_SANDBOX` | kernel sandbox (Landlock) for bash/perl/grep: `auto` (when the kernel has it), `on` (or no tool runs), `off` | `auto` |
+| `AI_SANDBOX_WRITE` | more paths those tools may write to, e.g. `/dev/ttyACM0 /sys /proc` | |
+| `AI_SANDBOX_READ` | limit what they read: `system`, or more paths besides the system | read everything |
 | `AI_PROJECT_FILE` | project instruction files to add to the system prompt, empty for none | `AGENTS.md` |
 | `AI_PROJECT_FILE_MAX` | max bytes taken from such a file | 32768 |
 | `AI_PROMPT_DATE` | date in the system prompt: `none`, `year`, `month`, `day` or a `strftime` format | `month` |

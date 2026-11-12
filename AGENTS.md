@@ -31,7 +31,7 @@ These are requirements, not suggestions.
 - **File tools stay in the workspace**: every path a file tool takes from the
   model goes through `tools::_path()` first (`nofollow => 1` when the tool
   acts on the entry itself: delete, move). A new file tool that skips it is a
-  hole. `bash` and `perl` are not confined, the container is.
+  hole. Forked tools are confined by the kernel instead (`package sandbox`).
 - **File tools are Perl**: reading, writing, editing, deleting, moving,
   listing files is done in-process with Perl, never by shelling out. Only
   what the model explicitly asks a shell for (`bash`, `grep`) is a process.
@@ -243,8 +243,17 @@ before it, a name that does not exist is kept as it is (so new files and
 links to nowhere resolve too). `tools::_path()` dies with "outside of the
 workspace" unless that place is under an allowed root. Never judge a path by
 a pattern over its text: a regex cannot see symlinks (`new/../link_out/x`),
-`t/66_workspace.t` has the cases. The docker
-container is still the sandbox for `bash` and `perl`.
+`t/66_workspace.t` has the cases. 
+Forked tools (`bash`, `perl`, `grep`) are confined by the kernel:
+`ai::sandbox_child()` is a `@utils::CHILD_INIT` hook, it runs in the child of
+`utils::fork_child()` after the output is redirected and before the settings
+are wiped, and calls `sandbox::confine(ai::sandbox_policy())`. `package
+sandbox` (utils.pm) is Landlock through `syscall()`: create a ruleset for the
+write rights (and read rights with `AI_SANDBOX_READ`), allow each path (opened
+with `O_PATH`, file rules get only file rights), `prctl(NO_NEW_PRIVS)`,
+restrict. It is per process, inherited, and cannot be taken back, so it must
+only ever run in a forked child, never in the chat process. The policy is
+empty (no sandbox) for `AI_SANDBOX=off`, no workspace, or the workspace `/`.
 
 ## Commands
 
@@ -286,6 +295,7 @@ implemented.
 | `t/50_commands.t` | slash commands, input readers, completion |
 | `t/60_tools.t` | `fork_run`, environment, bash/perl/Safe/read/write/grep |
 | `t/65_file_tools.t` | lines, replace, the ed engine, edit, delete, move, mkdir, list |
+| `t/67_sandbox.t` | Landlock for forked tools: writes, reads, child processes, extra paths, fallbacks (skipped without kernel support) |
 | `t/66_workspace.t` | workspace confinement: `..`, absolute paths, symlinks, every file tool, `/workspace` |
 | `t/70_retry_usage_context.t` | retry/backoff, rate limits, usage, budget, context management |
 | `t/80_agents.t` | sub-agents (parallel, limits, errors, abort), the status line |

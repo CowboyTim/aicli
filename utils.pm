@@ -181,8 +181,6 @@ sub fork_child {
             close($read_pipe_fh);
             $SIG{$_} = 'DEFAULT' for qw(INT TERM QUIT HUP PIPE CHLD ALRM WINCH);
             %ENV = tool_env();
-            %::ORIG_ENV = ();
-            $_->() for @CHILD_INIT;
             POSIX::setsid() != -1
                 or (!$!{EPERM} and die "problem making new session/process group: $!\n");
             open(STDIN,  '<', '/dev/null')
@@ -194,6 +192,10 @@ sub fork_child {
             close($write_pipe_fh);
             STDOUT->autoflush(1);
             STDERR->autoflush(1);
+            # the hooks still see the settings, the tool will not; what they
+            # complain about is output of the tool
+            $_->() for @CHILD_INIT;
+            %::ORIG_ENV = ();
             # dup() sets $! as ioctl() is done in perl, so reset ERRNO
             $! = 0;
             &{$worker_sub}();
@@ -227,6 +229,89 @@ sub fork_run {
     loop::spawn($worker_sub, timeout => $o{timeout}, on_done => sub {@r = @_; $done = 1});
     loop::run(sub {$done});
     return wantarray ? @r : $r[0];
+}
+
+
+package sandbox;
+# Landlock: a process tells the kernel which parts of the filesystem it may
+# still use, for itself and for everything it starts, for good. No root is
+# needed and nothing is mounted: it is not a namespace, the process sees
+# everything as before, what is not allowed fails with "permission denied".
+# Linux 5.13 or newer; done with three system calls, from the forked child of
+# a tool, before the tool runs. The chat process itself is never restricted.
+
+use strict; use warnings;
+
+use POSIX ();
+
+# access rights for the filesystem, the kernel has them as bits
+my %FS = (
+    execute => 1 << 0, write_file => 1 << 1, read_file => 1 << 2, read_dir => 1 << 3,
+    remove_dir => 1 << 4, remove_file => 1 << 5, make_char => 1 << 6, make_dir => 1 << 7,
+    make_reg => 1 << 8, make_sock => 1 << 9, make_fifo => 1 << 10, make_block => 1 << 11,
+    make_sym => 1 << 12,
+    refer    => 1 << 13, # rename/link to another directory: kernel ABI 2
+    truncate => 1 << 14, # ABI 3
+);
+my @WRITE = qw(write_file remove_dir remove_file make_char make_dir make_reg make_sock make_fifo make_block make_sym);
+my @READ  = qw(execute read_file read_dir);
+# what makes sense for a single file, the rest is for directories
+my $FILE_RIGHTS = $FS{execute} | $FS{write_file} | $FS{read_file} | $FS{truncate};
+
+my ($SYS_CREATE, $SYS_ADD_RULE, $SYS_RESTRICT) = (444, 445, 446); # the same on every architecture
+my %SYS_PRCTL = (x86_64 => 157, aarch64 => 167, riscv64 => 167, armv7l => 172, i686 => 172);
+my $PR_SET_NO_NEW_PRIVS = 38;
+my $O_PATH_CLOEXEC = 0x200000 | 0x80000;
+
+our $ABI;
+
+# the Landlock version of this kernel, 0 when there is none (or it is off)
+sub abi {
+    return $ABI if defined $ABI;
+    my $v = defined $SYS_PRCTL{(POSIX::uname())[4]} ? syscall($SYS_CREATE, 0, 0, 1) : -1;
+    return $ABI = $v > 0 ? $v : 0;
+}
+
+# Confine this process: write => [paths that may be written to], and with
+# read => [paths] reading and executing is limited to those too (else it is
+# free). Paths that do not exist are skipped. Returns true when confined,
+# false when the kernel cannot do it, dies when it can but something failed:
+# a tool is not run half confined.
+sub confine {
+    my (%o) = @_;
+    my $abi = abi()
+        or return 0;
+    my $write = 0;
+    $write |= $FS{$_} for @WRITE, ($abi >= 2 ? 'refer' : ()), ($abi >= 3 ? 'truncate' : ());
+    my $read = 0;
+    $read |= $FS{$_} for @READ;
+    my $handled = $write | ($o{read} ? $read : 0);
+
+    my $attr = pack("Q", $handled);
+    my $ruleset = syscall($SYS_CREATE, $attr, length($attr), 0);
+    die "landlock: cannot create a ruleset: $!\n" if $ruleset < 0;
+    my $allow = sub {
+        my ($path, $rights) = @_;
+        sysopen(my $fh, $path, $O_PATH_CLOEXEC)
+            or return; # not there, nothing to allow
+        $rights &= $FILE_RIGHTS unless -d $fh;
+        return unless $rights;
+        my $rule = pack("Q l", $rights, fileno($fh));
+        syscall($SYS_ADD_RULE, $ruleset, 1, $rule, 0) == 0
+            or die "landlock: cannot allow $path: $!\n";
+        close($fh);
+    };
+    my %seen;
+    &{$allow}($_, $handled) for grep {defined and length and !$seen{"w$_"}++} @{$o{write} // []};
+    &{$allow}($_, $handled & $read) for grep {defined and length and !$seen{"r$_"}++} @{$o{read} // []};
+
+    # without this the kernel refuses: no setuid program may gain rights anymore
+    syscall($SYS_PRCTL{(POSIX::uname())[4]}, $PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0
+        or die "landlock: cannot set no_new_privs: $!\n";
+    syscall($SYS_RESTRICT, $ruleset, 0) == 0
+        or die "landlock: cannot restrict this process: $!\n";
+    POSIX::close($ruleset);
+    return 1;
 }
 
 

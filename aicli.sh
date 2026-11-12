@@ -24,6 +24,11 @@ if [ -f ~/.gitexcludes ]; then
     extra_opts="$extra_opts -v $fn:/workspace/.gitexcludes:ro $extra_opts"
 fi
 
+# every AI_* setting of this shell goes into the container
+for v in $(compgen -e | grep '^AI_'); do
+    extra_opts="-e $v $extra_opts"
+done
+
 ROCM_PATH=${ROCM_PATH:-~/therock-dist-linux-gfx1151-latest}
 ROCM_PATH=$(readlink -f "$ROCM_PATH")
 exec docker run --rm -it \

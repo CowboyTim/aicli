@@ -48,6 +48,8 @@ our %PROVIDERS = (
 
 # tool processes never get to see the API key
 push @utils::CHILD_INIT, sub {$api_key = undef};
+# and they are confined to the workspace by the kernel, where it can do that
+push @utils::CHILD_INIT, \&sandbox_child;
 
 sub chat_setup {
     my ($base_dir) = @_;
@@ -159,6 +161,50 @@ sub set_workspace {
     @WORKSPACE_ALLOW = map {tools::_resolve($_)} grep {length and -d $_}
         split m/[\s,:]+/, $::ORIG_ENV{AI_WORKSPACE_ALLOW} // '';
     return $WORKSPACE;
+}
+
+sub tmpdir {
+    return $::ORIG_ENV{TMPDIR} // $ENV{TMPDIR} // '/tmp';
+}
+
+# What the forked tools (bash, perl, grep) may do to the filesystem, for
+# sandbox::confine: (write => [...]) and, with AI_SANDBOX_READ, (read => [...]).
+# Empty when they are not confined: AI_SANDBOX=off, or no workspace.
+#   write: the workspace, AI_WORKSPACE_ALLOW, the temp directory, a few
+#          devices, and what AI_SANDBOX_WRITE names (/dev/ttyACM0, /sys, ...)
+#   read:  everything, unless AI_SANDBOX_READ is set: then only the system
+#          directories, the places above, and what it names
+sub sandbox_policy {
+    return if lc($::ORIG_ENV{AI_SANDBOX} // 'auto') =~ m/^(?:off|no|none|0)$/;
+    return if !defined $WORKSPACE or $WORKSPACE eq '/';
+    my $list = sub {grep {length} split m/[\s,:]+/, $_[0] // ''};
+    my @write = ($WORKSPACE, @WORKSPACE_ALLOW, tmpdir(),
+        qw(/dev/null /dev/zero /dev/full /dev/tty /dev/ptmx /dev/pts /dev/shm),
+        &{$list}($::ORIG_ENV{AI_SANDBOX_WRITE}));
+    my %p = (write => \@write);
+    if(length($::ORIG_ENV{AI_SANDBOX_READ} // '')){
+        $p{read} = [qw(/usr /bin /sbin /lib /lib32 /lib64 /libx32 /etc /opt /proc /sys /dev /run),
+            grep {$_ ne 'system'} &{$list}($::ORIG_ENV{AI_SANDBOX_READ})];
+    }
+    return %p;
+}
+
+# is the sandbox there, and wanted: 'on', 'off', or 'unavailable'
+sub sandbox_state {
+    my %p = sandbox_policy()
+        or return 'off';
+    return sandbox::abi() ? 'on' : 'unavailable';
+}
+
+# in the forked child of a tool, before the tool runs
+sub sandbox_child {
+    my %p = sandbox_policy()
+        or return;
+    return if sandbox::confine(%p);
+    # the kernel cannot: fine, unless it was asked for
+    die "no sandbox: this kernel has no landlock (AI_SANDBOX=".$::ORIG_ENV{AI_SANDBOX}.")\n"
+        if lc($::ORIG_ENV{AI_SANDBOX} // 'auto') =~ m/^(?:on|yes|1|require)$/;
+    return;
 }
 
 sub new_session_id {
@@ -1442,8 +1488,12 @@ sub project_instructions {
 # so the prefix cache of the API keeps working.
 sub prompt_context {
     my $r = project_instructions();
-    $r .= "\n\nWorkspace: $WORKSPACE\nThe file tools only work inside this directory.\n"
-        if defined $WORKSPACE and $WORKSPACE ne '/';
+    if(defined $WORKSPACE and $WORKSPACE ne '/'){
+        $r .= "\n\nWorkspace: $WORKSPACE\nThe file tools only work inside this directory.\n";
+        $r .= "bash, perl and grep can ".($::ORIG_ENV{AI_SANDBOX_READ} ? "only read the system and this directory" : "read everything")
+             .", but only write in this directory and in ".tmpdir().".\n"
+            if sandbox_state() eq 'on';
+    }
     my $date = prompt_date();
     $r .= "\n\nCurrent date: $date\n" if length($date);
     return $r;
@@ -1842,6 +1892,14 @@ our @COMMANDS;
             }
             print "Workspace: ".($WORKSPACE // 'none, the file tools can go anywhere')."\n";
             print "Also allowed: @WORKSPACE_ALLOW\n" if @WORKSPACE_ALLOW;
+            my $state = sandbox_state();
+            my %p = sandbox_policy();
+            print "Sandbox for bash, perl, grep: "
+                .($state eq 'on' ? "landlock (kernel ABI ".sandbox::abi().")\n"
+                    ."  write: ".join(' ', grep {-e $_} @{$p{write}})."\n"
+                    ."  read:  ".($p{read} ? join(' ', grep {-e $_} @{$p{read}})." + the above" : "everything")."\n"
+                : $state eq 'unavailable' ? "not available, this kernel has no landlock\n"
+                : "off\n");
             return 0;
         },
     },
@@ -3025,7 +3083,7 @@ sub agent_f2a8 {
 sub bash_7c48 {
     my ($t_args) = @_;
     utils::load_cpan("File::Temp");
-    my ($fh, $fn) = File::Temp::tempfile("aicli_bash_XXXXXXXX", TMPDIR => 1);
+    my ($fh, $fn) = File::Temp::tempfile("aicli_bash_XXXXXXXX", DIR => ai::tmpdir());
     print {$fh} $t_args->[0] // '';
     if(!close($fh)){
         my $err = $!;
