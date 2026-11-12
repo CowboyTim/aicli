@@ -231,6 +231,17 @@ The script is written to a temp file, a forked child process exec()s bash on it.
 The code is eval()ed in a forked child process. With B<AI_PERL_SAFE> it runs
 in a L<Safe> compartment instead.
 
+=item B<fetch>
+
+Get a web page or file by its URL (http and https). HTML is turned into text,
+links are kept as C<[text](url)>. See B<WEB AND PROXIES>.
+
+=item B<search>
+
+Search the web through a SearXNG instance (B<AI_SEARXNG_URL>), the result is a
+list of titles, URLs and snippets. The model is only told about this tool
+when the variable is set.
+
 =item B<agent>
 
 Give a task to a sub-agent, see B<SUB-AGENTS>.
@@ -267,6 +278,24 @@ The start of a conversation is never rewritten afterwards: each request is the
 previous one plus the new messages, byte for byte, so that the prompt (prefix)
 cache of the API or of a local server keeps working. Only context management
 changes older messages, when the context window is nearly full.
+
+=head1 WEB AND PROXIES
+
+B<fetch> and B<search> are HTTP requests in the event loop of the program,
+like the requests to the model: they don't block anything, several can run at
+once, they end at B<AI_WEB_TIMEOUT> or on ctrl-C, and a page is cut at
+B<AI_WEB_MAX_SIZE>. The API key is never sent with them.
+
+Each kind of request has its own proxy: B<AI_PROXY> for the LLM API,
+B<AI_WEB_PROXY> for B<fetch> (both fall back to B<HTTPS_PROXY> and
+B<HTTP_PROXY>), B<AI_SEARXNG_PROXY> for B<search> (no fallback, the instance
+is asked directly). A proxy is anything curl takes, e.g.
+C<http://host:3128>, C<socks5h://host:1080>, C<http://user:pass@host:3128>.
+The value C<none> means no proxy, whatever the environment says. B<NO_PROXY>
+is honoured.
+
+The SearXNG instance has to allow the JSON format (settings.yml:
+C<search: formats: [html, json]>).
 
 =head1 SUB-AGENTS
 
@@ -336,6 +365,16 @@ move, mkdir), C<list> shows the changes that can be undone.
 
 Show the token usage and the context size of the session, C<reset> starts
 counting again.
+
+=item B</retry>
+
+Ask the last request again: its answer and what the tools did for it are taken
+out of the conversation first (and kept in F<chat.archive>).
+
+=item B</rewind> [n]
+
+Take the last exchange, or the last n, out of the conversation: what you said
+and everything that followed.
 
 =item B</compact>
 
@@ -617,15 +656,41 @@ Enable or disable debug mode.
 
 =item B<AI_PROXY>
 
-Proxy URL for HTTP/HTTPS requests (e.g., http://proxy:8080).
+Proxy for the requests to the LLM API (e.g. http://proxy:8080,
+socks5h://proxy:1080). C<none> for no proxy.
 
-=item B<HTTPS_PROXY>
+=item B<AI_WEB_PROXY>
 
-Fallback proxy URL if AI_PROXY not set.
+Proxy for the B<fetch> tool. C<none> for no proxy.
 
-=item B<HTTP_PROXY>
+=item B<HTTPS_PROXY>, B<HTTP_PROXY>
 
-Fallback proxy URL if AI_PROXY and HTTPS_PROXY not set.
+Used for both when B<AI_PROXY> or B<AI_WEB_PROXY> is not set.
+
+=item B<NO_PROXY>
+
+Hosts that are reached without a proxy.
+
+=item B<AI_SEARXNG_URL>
+
+URL of the SearXNG instance for the B<search> tool, e.g. http://searx:8888
+
+=item B<AI_SEARXNG_PROXY>
+
+Proxy to reach the SearXNG instance. Default: none.
+
+=item B<AI_SEARCH_RESULTS>
+
+Number of results of a search. Default: 8
+
+=item B<AI_WEB_TIMEOUT>, B<AI_WEB_MAX_SIZE>
+
+Seconds a web request may take, and the number of bytes after which a page is
+cut. Default: 30, 2000000
+
+=item B<AI_WEB_USER_AGENT>, B<AI_WEB_LANGUAGE>
+
+User-Agent and Accept-Language headers of B<fetch>.
 
 =back
 

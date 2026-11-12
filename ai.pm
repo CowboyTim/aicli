@@ -440,7 +440,12 @@ sub execute_tool_async {
         return &{$cb}("", truncate_output("[ERROR] problem running tool '$tool': $err"));
     }
     return &{$cb}(truncate_output($ret // ""), undef) unless ref($ret) eq 'tools::job';
-    loop::spawn($ret->{worker}, timeout => $ret->{timeout}, on_done => sub {
+    # a child process (worker), or whatever registers itself in the loop (start)
+    my $start = $ret->{start} // sub {
+        my ($done) = @_;
+        loop::spawn($ret->{worker}, timeout => $ret->{timeout}, on_done => $done);
+    };
+    &{$start}(sub {
         my $out = eval {&{$ret->{finish}}(@_)};
         if($@){
             chomp(my $err = $@);
@@ -655,6 +660,53 @@ sub new_printer {
         ($last, $ends_nl) = ('', 1);
     };
     return $p;
+}
+
+# A web page as text: no scripts and styles, links as [text](url), headings
+# and list items marked, blocks on their own lines.
+sub html_to_text {
+    my ($html, $content_type) = @_;
+    my ($charset) = ($content_type // '') =~ m/charset\s*=\s*["']?([\w.:-]+)/i;
+    ($charset) = $html =~ m/<meta[^>]+charset\s*=\s*["']?([\w.:-]+)/i unless $charset;
+    if($charset and $charset !~ m/^utf-?8$/i){
+        $html = eval {Encode::decode($charset, $html)} // $html;
+    } else {
+        utf8::decode($html);
+    }
+    my ($title) = $html =~ m{<title\b[^>]*>(.*?)</title\s*>}is;
+    $html =~ s/<!--.*?-->//gs;
+    $html =~ s{<(script|style|noscript|svg|head|title|template|iframe)\b.*?</\1\s*>}{ }gis;
+    $html =~ s{<a\b[^>]*?\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>(.*?)</a\s*>}{
+        my ($href, $text) = ($1 // $2 // $3, $4);
+        $text =~ s/<[^>]+>//g;
+        $text =~ s/\s+/ /g;
+        ($href =~ m/^(?:#|javascript:)/i or $text !~ m/\S/) ? $text : "[$text]($href)";
+    }gise;
+    $html =~ s{<h([1-6])\b[^>]*>}{"\n\n".('#' x $1).' '}gie;
+    $html =~ s{<li\b[^>]*>}{\n- }gi;
+    $html =~ s{<(?:br|hr)\b[^>]*>|</?(?:p|div|tr|table|ul|ol|pre|blockquote|section|article|header|footer|nav|form|h[1-6])\b[^>]*>}{\n}gi;
+    $html =~ s{</t[dh]\s*>}{ | }gi;
+    $html =~ s/<[^>]+>//g;
+    my %ent = (amp => '&', lt => '<', gt => '>', quot => '"', apos => "'", nbsp => ' ',
+        mdash => "\x{2014}", ndash => "\x{2013}", hellip => "\x{2026}", copy => "\x{a9}", laquo => "\x{ab}", raquo => "\x{bb}");
+    my $entity = sub {
+        my ($e) = @_;
+        return chr(hex($1)) if $e =~ m/^#x([0-9a-f]+)$/i;
+        return chr($1) if $e =~ m/^#(\d+)$/;
+        return $ent{lc $e} // "&$e;";
+    };
+    foreach my $t ($html, $title){
+        next unless defined $t;
+        $t =~ s/&(#x[0-9a-f]+|#\d+|\w+);/$entity->($1)/gie;
+        $t =~ s/\r//g;
+        $t =~ s/[ \t\x{a0}]+/ /g;
+        $t =~ s/ ?\n ?/\n/g;
+        $t =~ s/\n{3,}/\n\n/g;
+        $t =~ s/\A\s+//;
+        $t =~ s/\s+\z//;
+    }
+    $title =~ s/\s+/ /g if defined $title;
+    return to_bytes((length($title // '') ? "Title: $title\n\n" : "").$html."\n");
 }
 
 # how tool calls are shown: "brief" (one line per call, the first lines of the
@@ -1110,14 +1162,7 @@ sub compact_context {
         return if $o{quiet};
         print "${colors::cyan_color}[context: $how, ~$before -> ~".estimate_tokens(@new)." tokens]${colors::reset_color}\n";
     };
-    my $archive = sub {
-        my (@gone) = @_;
-        return unless @gone;
-        open(my $fh, '>>', "$AI_SESSION_DIR/chat.archive")
-            or die "Failed to write to $AI_SESSION_DIR/chat.archive: $!\n";
-        print {$fh} $::JSON->encode($_)."\n" for @gone;
-        close($fh);
-    };
+    my $archive = \&archive_messages;
 
     # 1. old tool output
     my ($pruned, @phead) = prune_tool_results(@head);
@@ -1179,6 +1224,43 @@ sub compact_context {
     write_messages(@new);
     &{$say}((defined $summary ? "summarized" : "dropped")." ".scalar(@head)." older messages", @new);
     return 1;
+}
+
+# messages that leave the conversation are kept in "chat.archive"
+sub archive_messages {
+    my (@gone) = @_;
+    return unless @gone;
+    open(my $fh, '>>', "$AI_SESSION_DIR/chat.archive")
+        or die "Failed to write to $AI_SESSION_DIR/chat.archive: $!\n";
+    print {$fh} $::JSON->encode($_)."\n" for @gone;
+    close($fh);
+    return;
+}
+
+# something the user said: not a tool result, not a note of the context management
+sub is_user_input {
+    my ($m) = @_;
+    return 0 unless ($m->{role} // '') eq 'user' and !is_tool_result($m);
+    return 0 if ($m->{content} // '') =~ m/\A\[(?:Summary of the conversation so far|The older messages of this conversation)/;
+    return 1;
+}
+
+# Take the last $n exchanges out of the conversation: the last thing the user
+# said and all that followed. Only the end changes, what a cache has of the
+# start stays valid. Returns the removed messages, oldest first.
+sub rewind_chat {
+    my ($n) = @_;
+    my @msgs = load_messages();
+    my @gone;
+    foreach (1 .. ($n || 1)){
+        my ($i) = grep {is_user_input($msgs[$_])} reverse 0 .. $#msgs;
+        last unless defined $i;
+        unshift @gone, splice(@msgs, $i);
+    }
+    return unless @gone;
+    archive_messages(@gone);
+    write_messages(@msgs);
+    return @gone;
 }
 
 # before a request: compact when the conversation gets close to the limit
@@ -1801,6 +1883,41 @@ our @COMMANDS;
             return 0;
         },
         complete => sub {return +{reset => sub {0}}},
+    },
+    '/retry' => {
+        help => 'ask the last request again: its answer and tool runs are dropped',
+        run  => sub {
+            my @gone = rewind_chat(1);
+            if(!@gone){
+                print "Nothing to retry.\n";
+                return 0;
+            }
+            local $BUSY = 1;
+            $::ABORT = 0;
+            chat_completion(to_bytes($gone[0]{content}));
+            $::ABORT = 0;
+            return 0;
+        },
+    },
+    '/rewind' => {
+        usage => '/rewind [n]',
+        help  => 'take the last exchange (or n) out of the conversation',
+        run   => sub {
+            my ($args) = @_;
+            if(length($args) and $args !~ m/^[1-9]\d*$/){
+                print "Usage: /rewind [n]\n";
+                return 0;
+            }
+            my @gone = rewind_chat($args || 1);
+            if(!@gone){
+                print "Nothing to rewind.\n";
+                return 0;
+            }
+            my @inputs = grep {is_user_input($_)} @gone;
+            print "Removed ".scalar(@inputs)." exchange".(@inputs == 1 ? "" : "s")." (".scalar(@gone)." messages), back to before:\n";
+            print to_bytes(clip_lines($inputs[0]{content}, 2, "  "));
+            return 0;
+        },
     },
     '/compact' => {
         help => 'summarize the older messages to free context',
@@ -2515,7 +2632,7 @@ sub prompt {
         "description: $tools::TOOLS->{$_}{description}\n".
         "properties:\n"._kv_print($tools::TOOLS->{$_}{properties}, 1).
         ($tools::TOOLS->{$_}{example} ? "example: ```\n$tools::TOOLS->{$_}{example}```\n" : "")
-    } grep {!$exclude{$_}} sort keys %{$tools::TOOLS});
+    } grep {!$exclude{$_} and tools::available($_)} sort keys %{$tools::TOOLS});
     $list .= "\n";
     log::info("TOOLS SECTION>>$list<<");
     return $list;
@@ -2687,6 +2804,24 @@ EOb
         },
         required => ["task"],
     },
+    fetch => {
+        description => "get a web page or file by its URL (http or https). HTML comes back as text, with links as [text](url)",
+        syntax => "///FETCH_6e1b+EO_c93a\n{{url}}\nEO_c93a[LENGTH({{url}})]\nFETCH_6e1b",
+        properties  => {
+            "url" => {type => "string", description => "The URL"},
+        },
+        required => ["url"],
+    },
+    search => {
+        description => "search the web: gives titles, URLs and a line of text for the best results. Use 'fetch' to read one",
+        syntax => "///SEARCH_d4a7+EO_15be\n{{query}}\nEO_15be[LENGTH({{query}})]\nSEARCH_d4a7",
+        properties  => {
+            "query" => {type => "string", description => "What to search for"},
+        },
+        required => ["query"],
+        # only with a SearXNG instance to ask
+        available => sub {length($::ORIG_ENV{AI_SEARXNG_URL} // '') ? 1 : 0},
+    },
     list => {
         description => "list a directory: type (d, f, l), size and name of every entry",
         syntax => "///LIST_a41d+EO_6c08\n{{path}}\nEO_6c08[LENGTH({{path}})]\nLIST_a41d",
@@ -2715,6 +2850,14 @@ sub rx {
     $TOOLS_RX;
 }
 
+# is a tool there to be used (and to be told about in the prompt)
+sub available {
+    my ($name) = @_;
+    my $t = $TOOLS->{$name}
+        or return 0;
+    return $t->{available} ? ($t->{available}->() ? 1 : 0) : 1;
+}
+
 our $ASYNC; # true: _run hands back a job for the event loop instead of waiting
 
 # Run a worker in a fork, give back its output. Dies with the reason and the
@@ -2736,6 +2879,97 @@ sub _run {
     return bless({worker => $worker_sub, timeout => $timeout, finish => $finish}, 'tools::job')
         if $ASYNC;
     return &{$finish}(utils::fork_run($worker_sub, timeout => $timeout));
+}
+
+# An HTTP request of a tool, in the event loop: waited for by the main agent,
+# a job for a sub-agent (like _run for children). $finish gets the request
+# when it is over and returns the result or dies. Web tools have their own
+# proxy (utils::proxy_for('web')), not the one of the LLM API.
+sub _http {
+    my ($finish, %req) = @_;
+    $req{proxy}   = utils::proxy_for('web') // '' unless exists $req{proxy};
+    $req{timeout} //= $::ORIG_ENV{AI_WEB_TIMEOUT} // 30;
+    $req{connect_timeout} //= 10;
+    $req{follow}  //= 5;
+    $req{max_size} //= $::ORIG_ENV{AI_WEB_MAX_SIZE} // 2_000_000;
+    $req{headers} //= [
+        "User-Agent: ".($::ORIG_ENV{AI_WEB_USER_AGENT} // "Mozilla/5.0 (compatible; aicli)"),
+        "Accept: text/html,application/xhtml+xml,application/json,text/plain;q=0.9,*/*;q=0.5",
+        "Accept-Language: ".($::ORIG_ENV{AI_WEB_LANGUAGE} // "en"),
+    ];
+    my $start = sub {
+        my ($done) = @_;
+        loop::http(%req, on_done => $done);
+    };
+    return bless({start => $start, finish => $finish}, 'tools::job')
+        if $ASYNC;
+    my ($over, $r);
+    &{$start}(sub {($r, $over) = ($_[0], 1)});
+    loop::run(sub {$over});
+    return &{$finish}($r);
+}
+
+# what went wrong with a web request, dies; a body cut at max_size is fine
+sub _http_check {
+    my ($r) = @_;
+    return if !defined $r->{error} or $r->{too_big};
+    my $body = $r->{body} // '';
+    $body =~ s/\s+/ /g;
+    die "$r->{error}".($r->{code} ? "" : " ($r->{url})").(length($body) ? ": ".substr($body, 0, 300) : "")."\n";
+}
+
+# fetch: a page of the web as text
+sub fetch_6e1b {
+    my ($t_args) = @_;
+    my $url = utils::trim($t_args->[0] // '');
+    $url = "https://$url" if $url =~ m{^[\w.-]+\.[a-z]{2,}(?:[/:?]|$)}i and $url !~ m{^\w+://};
+    die "need an http or https URL\n" unless $url =~ m{^https?://[^\s/]+}i and $url !~ m/\s/;
+    return _http(sub {
+        my ($r) = @_;
+        _http_check($r);
+        my $type = $r->{headers}{'content-type'} // '';
+        die "not a text: $type\n"
+            if $type =~ m{^\s*(?:image|audio|video|font)/|application/(?:octet-stream|pdf|zip|gzip|x-tar)}i;
+        my $body = $r->{body};
+        $body = ai::html_to_text($body, $type)
+            if $type =~ m/html/i or (!length($type) and $body =~ m/\A\s*<(?:!doctype|html)\b/i);
+        return "URL: $r->{url_final}\n\n$body"
+            .($r->{too_big} ? "\n[... cut here, there is more than $r->{max_size} bytes ...]\n" : "");
+    }, url => $url);
+}
+
+# search: ask a SearXNG instance (AI_SEARXNG_URL), it must allow format=json.
+# It is yours and near: no proxy, unless AI_SEARXNG_PROXY says so.
+sub search_d4a7 {
+    my ($t_args) = @_;
+    my $query = utils::trim($t_args->[0] // '') =~ s/\s+/ /gr;
+    die "no query\n" unless length($query);
+    my $base = $::ORIG_ENV{AI_SEARXNG_URL} // '';
+    die "no search engine is set up (AI_SEARXNG_URL)\n" unless length($base);
+    $base =~ s{/+\z}{};
+    $base =~ s{/search\z}{};
+    my $proxy = $::ORIG_ENV{AI_SEARXNG_PROXY} // '';
+    $proxy = '' if $proxy =~ m/^(?:none|off|direct|no)$/i;
+    my $max = $::ORIG_ENV{AI_SEARCH_RESULTS} // 8;
+    my $q = $query =~ s/([^A-Za-z0-9_.~-])/sprintf("%%%02X", ord($1))/ger;
+    return _http(sub {
+        my ($r) = @_;
+        die "the search engine refuses format=json, enable it in the SearXNG settings (search: formats: [html, json])\n"
+            if $r->{code} == 403;
+        _http_check($r);
+        my $data = eval {JSON::XS->new->utf8->decode($r->{body})};
+        die "the search engine did not answer with JSON\n" unless ref($data) eq 'HASH';
+        my @results = grep {ref($_) eq 'HASH' and length($_->{url} // '')} @{$data->{results} // []};
+        return "no results for: $query\n" unless @results;
+        splice(@results, $max) if $max and @results > $max;
+        my $n = 0;
+        return join("\n", map {
+            my ($title, $text) = map {($_ // '') =~ s/\s+/ /gr =~ s/^ | $//gr} $_->{title}, $_->{content};
+            $text = substr($text, 0, 300)."..." if length($text) > 300;
+            ai::to_bytes(++$n.". $title\n   $_->{url}\n".(length($text) ? "   $text\n" : ""));
+        } @results);
+    }, url => "$base/search?q=$q&format=json", proxy => $proxy, follow => 2,
+       headers => ["Accept: application/json", "User-Agent: aicli"]);
 }
 
 # agent: a sub-agent works on the task, see package agent. (Several calls in

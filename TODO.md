@@ -169,6 +169,7 @@ This file outlines potential improvements and features for the AI coding agent (
 - `ai.pl` drops privileges to a fixed uid/gid 1000, the `UID` passed by `aicli.sh` is not used.
 - Every start without `AI_SESSION` or `-c` creates a new `session-<uuid>` directory, they are never cleaned up.
 - A native tool to find files by name (the model uses bash for that now).
+- Try `AI_PROXY`, `AI_WEB_PROXY` and the `search` tool against a real proxy and SearXNG instance: only tested with a mocked HTTP layer.
 - Providers named in older docs but not implemented: OpenAI, Groq, Anthropic, Bedrock.
 - Readline history is read once at start, not per session on `/session switch`.
 
@@ -197,3 +198,5 @@ This file outlines potential improvements and features for the AI coding agent (
 - [x] Project instructions (AGENTS.md) and a coarse date in the system prompt, request prefix stays byte-stable
 - [x] Brief tool display, diffs for file changes, `/undo`
 - [x] `-c` continues the last session of the directory, `-p` runs one request and exits with a status
+- [x] `/retry` and `/rewind` for the conversation
+- [x] Web tools: `fetch` and `search` (SearXNG) as async HTTP, separate proxies for the LLM API, the web and SearXNG

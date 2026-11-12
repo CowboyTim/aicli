@@ -129,6 +129,8 @@ the model:
 | `/prompt [name]` | list the prompt templates, or switch the system prompt |
 | `/undo [list]` | take back the last file change a tool made, `list` shows them |
 | `/usage [reset]` | token usage and context size of this session |
+| `/retry` | ask the last request again, its answer and tool runs are dropped |
+| `/rewind [n]` | take the last exchange (or n) out of the conversation |
 | `/compact` | summarize the older messages now, to free context |
 | `/system <text>` | add a system message |
 | `/files [regex]` | add matching files of the current directory to the conversation (`.aiignore` is respected) |
@@ -185,6 +187,8 @@ or `[WRITE_edf5 ERROR_9a78 ... ERROR_9a78]`.
 | `grep` | search files | `exec grep -rn` in a forked child, no shell |
 | `bash` | a shell script | temp file, `exec bash` in a forked child |
 | `perl` | Perl code | `eval` in a forked child, or `Safe->reval` with `AI_PERL_SAFE` |
+| `fetch` | a web page as text, links as `[text](url)` | async HTTP in the event loop |
+| `search` | web search through your SearXNG instance | async HTTP, only offered with `AI_SEARXNG_URL` |
 | `agent` | give a task to a sub-agent | a second conversation in the event loop |
 
 File tools never start a process. `replace` and `edit` write through a temp
@@ -245,6 +249,29 @@ keys): nothing at the start of the conversation changes, so prompt/prefix
 caches keep working. A changed `AGENTS.md` or a new month only show up in a
 new session, or after `/clear` or `/prompt`. The one thing that rewrites
 history is context compaction, and only when the window is nearly full.
+
+### Web and proxies
+
+`fetch` gets a URL (http/https only) and turns HTML into text. `search` asks a
+SearXNG instance and returns titles, URLs and snippets; set
+`AI_SEARXNG_URL=http://your-searxng:8888` and allow the JSON format in its
+settings (`search: formats: [html, json]`). Without that variable the model is
+not told about `search`. Both are plain requests in the event loop: several
+can be in flight at once (sub-agents), they have a timeout and a size limit,
+and ctrl-C ends them.
+
+There are separate proxies, each takes anything curl understands
+(`http://host:3128`, `socks5h://host:1080`, `http://user:pass@host:3128`):
+
+| For | Variable | Falls back to |
+|-----|----------|---------------|
+| the LLM API | `AI_PROXY` | `HTTPS_PROXY`, `HTTP_PROXY` |
+| `fetch` | `AI_WEB_PROXY` | `HTTPS_PROXY`, `HTTP_PROXY` |
+| `search` (SearXNG) | `AI_SEARXNG_PROXY` | none: it is asked directly |
+
+`none` as a value means no proxy even when the environment has one, e.g.
+`AI_PROXY=none` for a local model server next to `AI_WEB_PROXY=http://...`.
+`NO_PROXY` is honoured. The API key is never sent with web requests.
 
 ### Sub-agents
 
@@ -358,7 +385,15 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 | `AI_RAW` | use `/v1/completions` with a prompt built here (qwen only) | off |
 | `AI_DIR` | base directory | `~/.aicli` |
 | `AI_PS1`, `AI_PS2` | input prompts | |
-| `AI_PROXY` / `HTTPS_PROXY` / `HTTP_PROXY`, `NO_PROXY` | proxy | |
+| `AI_PROXY` | proxy for the LLM API, `none` for no proxy | `HTTPS_PROXY`, `HTTP_PROXY` |
+| `AI_WEB_PROXY` | proxy for `fetch`, `none` for no proxy | `HTTPS_PROXY`, `HTTP_PROXY` |
+| `NO_PROXY` | hosts that are reached without proxy | |
+| `AI_SEARXNG_URL` | SearXNG instance for the `search` tool | no search |
+| `AI_SEARXNG_PROXY` | proxy to reach the SearXNG instance | direct |
+| `AI_SEARCH_RESULTS` | results per search | 8 |
+| `AI_WEB_TIMEOUT` | seconds for a web request | 30 |
+| `AI_WEB_MAX_SIZE` | max bytes of a fetched page, the rest is cut | 2000000 |
+| `AI_WEB_USER_AGENT`, `AI_WEB_LANGUAGE` | User-Agent and Accept-Language of `fetch` | |
 | `DEBUG`, `AI_LOG` | debug logging, and where to | 0, stdout |
 
 `perl ai.pl --help` and `perldoc ai.pl` have the full reference.

@@ -23,8 +23,14 @@ use_ok("ai");
 
     # every tool: name, syntax, description, properties - sorted by name
     my @names = $p =~ m/^name: (\w+)$/mg;
-    is_deeply(\@names, [sort keys %$tools::TOOLS], "all tools listed, sorted");
-    foreach my $name (sort keys %$tools::TOOLS){
+    my @available = grep {tools::available($_)} sort keys %$tools::TOOLS;
+    is_deeply(\@names, \@available, "all available tools listed, sorted");
+    ok(!grep({$_ eq 'search'} @names), "search is not offered without a search engine");
+    {
+        local $::ORIG_ENV{AI_SEARXNG_URL} = "http://searx.example";
+        like(prompt::coder::prompt(), qr/^name: search$/m, "search is offered with AI_SEARXNG_URL");
+    }
+    foreach my $name (@available){
         my $t = $tools::TOOLS->{$name};
         like($p, qr/^name: $name\ntool: ```\n\Q$t->{syntax}\E\n```\ndescription: \Q$t->{description}\E\nproperties:\n/m, "$name: syntax and description");
         like($p, qr/^ $_:\n  description: \Q$t->{properties}{$_}{description}\E\n  type: string\n/m, "$name: property $_")

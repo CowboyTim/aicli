@@ -58,6 +58,19 @@ sub http {
     return $$response;
 }
 
+# The proxy for a kind of request, undef for none:
+#   'ai'   the LLM API:           AI_PROXY,     else HTTPS_PROXY / HTTP_PROXY
+#   'web'  the web tools (fetch): AI_WEB_PROXY, else HTTPS_PROXY / HTTP_PROXY
+# "none" (or empty) in the AI_* variable means no proxy, whatever the
+# environment says. Anything curl takes: http://, socks5h://, user:pass@.
+sub proxy_for {
+    my ($kind) = @_;
+    my $own = $kind eq 'web' ? 'AI_WEB_PROXY' : 'AI_PROXY';
+    my ($p) = grep {defined} @::ORIG_ENV{$own, qw(HTTPS_PROXY https_proxy HTTP_PROXY http_proxy)};
+    return if !defined $p or $p =~ m/^(?:|none|off|direct|no)$/i;
+    return $p;
+}
+
 # true when the user asked to stop the current turn (ctrl-C while busy)
 sub aborted {
     return $::ABORT ? 1 : 0;
@@ -247,21 +260,29 @@ sub _multi {
 # Start an HTTP request: method, url, data, api_key
 #   on_data: curl write callback for the body (else it is kept in {body})
 #   on_done: called with the request when it is over; then {code} is the HTTP
-#            status, {headers} the response headers (lowercased names) and
-#            {error} is set unless it was a 200
+#            status, {headers} the response headers (lowercased names),
+#            {url_final} where redirects ended and {error} is set unless it
+#            was a 200
+#   proxy:   the proxy to use, '' for none; without it: utils::proxy_for('ai')
+#   headers: request headers, instead of the ones for the JSON API
+#   timeout, connect_timeout: in seconds, default none
+#   follow:  follow that many redirects
+#   max_size: stop when the body gets bigger ({too_big} is set, {body} has
+#            what came until then)
 sub http {
     my (%r) = @_;
     my $req = {%r, code => 0, error => undef, headers => {}, body => ''};
     $req->{data} //= '';
     my $ch = $req->{ch} = curl->new();
     $ch->setopt(curl::CURLOPT_VERBOSE(), $::DEBUG?1:0);
-    if(my $proxy = $::ORIG_ENV{AI_PROXY} // $::ORIG_ENV{HTTPS_PROXY} // $::ORIG_ENV{HTTP_PROXY}){
-        $ch->setopt(curl::CURLOPT_PROXY(), $proxy);
-        if(my $no_proxy = $::ORIG_ENV{NO_PROXY} // $::ORIG_ENV{no_proxy}){
-            eval {$ch->setopt(curl::CURLOPT_NOPROXY(), $no_proxy)};
-        }
+    # the proxy is always set here, also to "none": libcurl would look at the
+    # environment itself otherwise
+    my $proxy = exists $r{proxy} ? $r{proxy} : utils::proxy_for('ai');
+    $ch->setopt(curl::CURLOPT_PROXY(), $proxy // '');
+    if(length($proxy // '') and defined(my $no_proxy = $::ORIG_ENV{NO_PROXY} // $::ORIG_ENV{no_proxy})){
+        eval {$ch->setopt(curl::CURLOPT_NOPROXY(), $no_proxy)};
     }
-    $ch->setopt(curl::CURLOPT_HTTPHEADER(), [
+    $ch->setopt(curl::CURLOPT_HTTPHEADER(), $req->{headers_out} = $r{headers} // [
         "Accept: application/json",
         "Content-Type: application/json",
         "User-Agent: AI Chat/0.1",
@@ -271,10 +292,23 @@ sub http {
             "Authorization: Bearer $req->{api_key}",
         ):())
     ]);
+    $req->{headers} = {};
+    eval {$ch->setopt(curl::CURLOPT_TIMEOUT(), $r{timeout})} if $r{timeout};
+    eval {$ch->setopt(curl::CURLOPT_CONNECTTIMEOUT(), $r{connect_timeout})} if $r{connect_timeout};
+    if($r{follow}){
+        eval {
+            $ch->setopt(curl::CURLOPT_FOLLOWLOCATION(), 1);
+            $ch->setopt(curl::CURLOPT_MAXREDIRS(), $r{follow});
+        };
+    }
     $ch->setopt(curl::CURLOPT_WRITEFUNCTION(), $req->{on_data} // sub {
         my ($h, $chunk) = @_;
         $chunk //= $h; # WWW::Curl::Easy: <data>, <user_ref>, Net::Curl::Easy: <handle>, <data>
         $req->{body} .= $chunk;
+        if($r{max_size} and length($req->{body}) > $r{max_size}){
+            $req->{too_big} = 1;
+            return 0; # ends the transfer
+        }
         return length($chunk);
     });
     # response headers, the rate limits are in there
@@ -324,6 +358,7 @@ sub _http_done {
     }
     chomp($err) if defined $err;
     $req->{code} = eval {$req->{ch}->getinfo(curl::CURLINFO_HTTP_CODE())} // 0;
+    $req->{url_final} = eval {$req->{ch}->getinfo(curl::CURLINFO_EFFECTIVE_URL())} // $req->{url};
     $req->{code} = 0 if defined $err;
     $req->{error} = $err // ($req->{code} != 200 ? "HTTP status $req->{code}" : undef);
     delete $req->{ch};

@@ -138,6 +138,21 @@ A callback can start a child whose pipe gets the fd number of a socket closed
 in the same round: `step()` only reads what it selected on, and pipes are
 non-blocking. Keep it that way.
 
+## Web tools and proxies
+
+`tools::_http($finish, %request)` is to HTTP what `_run` is to children: it
+waits for the main agent, and with `$tools::ASYNC` returns a `tools::job`
+whose `start` registers the request in the loop. `execute_tool_async()` runs
+either kind of job. `fetch` turns HTML into text with `ai::html_to_text()`;
+`search` asks SearXNG (`AI_SEARXNG_URL`, `format=json`) and is only
+`tools::available()` (and in the prompt) when that is set.
+
+Proxies: `utils::proxy_for('ai')` (`AI_PROXY`) is what `loop::http` uses
+unless a request names its own `proxy`; web tools pass
+`utils::proxy_for('web')` (`AI_WEB_PROXY`), search passes `AI_SEARXNG_PROXY` or
+none. `loop::http` always sets the proxy option, also to empty, so libcurl
+never reads the environment on its own. Web requests carry no API key.
+
 ## Sub-agents
 
 `package agent`. `agent::launch($task)` creates one (queued when
@@ -212,6 +227,7 @@ How they run:
 | grep | `_run` → `exec grep -rn -e <pattern> -- <path>` |
 | bash | temp file, `_run` → `exec bash <file>` |
 | perl | `_run` → `eval` in package `aicli::tool`, or `Safe->reval` (`AI_PERL_SAFE`) |
+| fetch, search | `tools::_http` → `loop::http` (web proxy, timeout, size limit, redirects) |
 | agent | `agent::launch` + `agent::wait` |
 
 There is no confirmation step and no path restriction, by choice: the docker
@@ -223,7 +239,9 @@ One table, `@ai::COMMANDS` (`run`, `help`, `usage`, `complete`), drives
 execution (`handle_command()`), `/help` and TAB completion
 (`setup_commands()` builds `$ai::cmds` from it). Add a command there and
 nowhere else. `handle_command()` returns undef for chat text, 0 for a handled
-command, 1 to leave; a command line never reaches the LLM.
+command, 1 to leave; a command line never reaches the LLM. `/retry` and
+`/rewind` use `rewind_chat()`: it only cuts the end of the conversation (to
+`chat.archive`), the start stays as it is.
 
 ## Sessions
 
@@ -258,6 +276,7 @@ implemented.
 | `t/70_retry_usage_context.t` | retry/backoff, rate limits, usage, budget, context management |
 | `t/80_agents.t` | sub-agents (parallel, limits, errors, abort), the status line |
 | `t/95_cli.t` | `-p` (one request, exit codes, stdin) and `-c` (continue per directory), as a process |
+| `t/85_web.t` | proxy selection, HTML to text, fetch, search (mocked HTTP layer), a real fetch, `/retry`, `/rewind` |
 | `t/90_prompt_display_undo.t` | project file and date in the prompt, byte-stable request prefix, brief display, diffs, `/undo` |
 
 `TestAI::mock_http` scripts the main agent (`utils::http`),
@@ -265,7 +284,8 @@ implemented.
 
 ## Known gaps
 
-See TODO.md. The bigger ones: `Net::Curl` is the preferred curl module but the
+See TODO.md. The proxies and the SearXNG search have only been tested with a
+mocked HTTP layer, never against a real proxy or instance. The bigger ones: `Net::Curl` is the preferred curl module but the
 tests have only run with `WWW::Curl` since the event loop exists; sub-agents
 have no context management; no tool confirmation or allow-list (by choice);
 the privilege drop in `ai.pl` uses a fixed uid/gid (1000).
