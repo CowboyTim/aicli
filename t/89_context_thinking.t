@@ -141,4 +141,40 @@ sub long_history {
     is(scalar(@TestAI::REQUESTS), 2, "pieces: nothing more is asked after the failure");
 }
 
+# automatic compaction: after the answer that takes the conversation over the
+# threshold, not when the next message is sent; not for -p, not when switched off
+sub small_history {
+    for my $i (1 .. 4){
+        ai::append_messages({role => 'user', content => "question $i ".("q" x 800)},
+                            {role => 'assistant', content => "answer $i ".("a" x 800)});
+    }
+}
+{
+    TestAI::setup(AI_PROMPT_TEMPLATE => "default", AI_CONTEXT_TOKENS => 3000, AI_CONTEXT_SUMMARY => 1, AI_SUMMARY_CHUNKS => 1);
+    small_history();
+    TestAI::mock_http([TestAI::content("BIG ANSWER ".("b" x 3000)), TestAI::done()],
+                      [TestAI::content("SUMMARY NOW"), TestAI::done()]);
+    my $out = TestAI::capture {ai::chat_completion("one more thing")};
+    my $at_answer = index($out, "BIG ANSWER");
+    my $at_compact = index($out, "[context: summarized");
+    ok($at_compact > $at_answer && $at_answer >= 0, "auto: compacted after the answer that went over");
+    is(scalar(@TestAI::REQUESTS), 2, "auto: one request for the answer, one for the summary");
+    like($TestAI::REQUESTS[0]{data}, qr/one more thing/, "auto: the first request is the answer, not a summary before it");
+    like((ai::load_messages())[1]{content}, qr/SUMMARY NOW/, "auto: the summary is in the conversation");
+}
+{
+    TestAI::setup(AI_PROMPT_TEMPLATE => "default", AI_CONTEXT_TOKENS => 3000, AI_CONTEXT_SUMMARY => 1, AI_SUMMARY_CHUNKS => 1, AI_AUTO_COMPACT => 0);
+    small_history();
+    TestAI::mock_http([TestAI::content("BIG ANSWER ".("b" x 3000)), TestAI::done()]);
+    my $out = TestAI::capture {ai::chat_completion("one more thing")};
+    unlike($out, qr/\[context: summarized/, "auto: AI_AUTO_COMPACT=0 leaves it");
+}
+{
+    TestAI::setup(AI_PROMPT_TEMPLATE => "default", AI_CONTEXT_TOKENS => 3000, AI_CONTEXT_SUMMARY => 1, AI_SUMMARY_CHUNKS => 1);
+    small_history();
+    TestAI::mock_http([TestAI::content("BIG ANSWER ".("b" x 3000)), TestAI::done()]);
+    my $out = do { local $ai::ONE_SHOT = 1; TestAI::capture {ai::chat_completion("one more thing")} };
+    unlike($out, qr/\[context: summarized/, "auto: not after -p (one request and out)");
+}
+
 done_testing();

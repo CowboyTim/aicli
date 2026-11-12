@@ -401,8 +401,10 @@ The numbers come from the API (`stream_options.include_usage`); when it does
 not report them they are estimated and marked with `~`. `AI_TOKEN_BUDGET`
 stops a session that used that many tokens (`/usage reset` to go on).
 
-Before a request that would use more than 80% of the context window
-(`AI_CONTEXT_THRESHOLD`), the conversation is compacted:
+When the conversation is over 80% of the context window (`AI_CONTEXT_THRESHOLD`)
+after an answer, it is compacted right then, between the turns (`AI_AUTO_COMPACT=0`
+to wait until the next request needs it). The same happens before a request that
+would be over it. The compaction:
 
 1. the output of old tool calls is cut to its first and last lines,
 2. if that is not enough, the older messages are replaced by a summary the
@@ -450,6 +452,7 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 | `AI_CONTEXT_THRESHOLD` | compact when the conversation is over this part of the window | 0.8 |
 | `AI_CONTEXT_SUMMARY` | 0: drop old messages instead of summarizing them | 1 |
 | `AI_SUMMARY_CHUNKS` | most pieces the older part is summarized in, one request each | 8 |
+| `AI_AUTO_COMPACT` | compact right after an answer when the conversation is over the threshold; 0: only before a request | 1 |
 | `AI_THINKING` | the reasoning of the model: `on`, `off` or a token budget; `/thinking` sets it per session | server decides |
 | `AI_TOKEN_BUDGET` | max tokens a session may use | no limit |
 | `AI_USAGE` | 0: don't ask the API for token usage | 1 |

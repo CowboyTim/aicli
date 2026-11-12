@@ -445,6 +445,7 @@ sub malformed_error {
 # request is a raw prompt (AI_RAW, the client writes the template) or the API
 # is Anthropic (its own format, not used yet). Then the tools are sent in the
 # request and the model's calls come back in tool_calls.
+our $ONE_SHOT = 0; # set by one_shot(): -p
 our $IN_AGENT = 0; # set while a sub-agent builds its request
 # the calls the server made itself, from the stream: each has an id (its result
 # refers to it), the arguments are complete
@@ -1806,6 +1807,9 @@ sub chat_completion {
         append_messages(@{$r // []});
         last unless $newturns;
     }
+    # between the turns: a conversation over the threshold is made smaller now,
+    # not when the next message is sent (not for -p, which exits)
+    manage_context() if $ok and !utils::aborted() and !$ONE_SHOT and ($::ORIG_ENV{AI_AUTO_COMPACT} // 1);
     return utils::aborted() ? 0 : $ok;
 }
 
@@ -2937,6 +2941,7 @@ sub one_shot {
     start_status_line();
     local $SIG{INT} = sub {$::ABORT = 1};
     local $BUSY = 1;
+    local $ONE_SHOT = 1; # one request and out: no compaction afterwards
     my $ok = eval {chat_completion($prompt)};
     if($@){
         log::error(${colors::red_color}.($@ =~ s/\s+\z//r).${colors::reset_color});

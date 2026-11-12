@@ -704,6 +704,12 @@ The reasoning of the model: C<on>, C<off>, or a token budget (for servers that
 take one, C<reasoning_budget>). Set per session with B</thinking>, which wins
 over this. Not set: the server decides. Sent to OpenAI-compatible servers only.
 
+=item B<AI_AUTO_COMPACT>
+
+Compact the conversation right after an answer when it is over the threshold
+(B<AI_CONTEXT_THRESHOLD>), so that the work happens between the turns. Not with
+B<-p>. Set to 0 to compact only before a request that needs it. Default: 1
+
 =item B<AI_SUMMARY_CHUNKS>
 
 The older part of a long conversation is summarized in pieces that fit a request,
