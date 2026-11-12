@@ -4,6 +4,7 @@ use strict; use warnings;
 
 use utils;
 use tui;
+use md;
 
 use Cwd ();
 use Encode ();
@@ -427,6 +428,12 @@ sub parse_tool_calls {
 sub malformed_error {
     my ($c) = @_;
     return "[ERROR] no tool named '$c->{tool}', nothing was executed." unless $c->{t};
+    if($c->{native}){
+        # a call of the API: say what the arguments are, not the text syntax
+        my %required = map {($_ => 1)} @{$c->{t}{required} // []};
+        my $args = join(', ', map {"\"$_\": string".($required{$_} ? ' (required)' : '')} tools::arg_names($c->{t}));
+        return "[ERROR] bad arguments for '".lc($c->{tool})."', nothing was executed. The arguments are a JSON object: {$args}";
+    }
     return "[ERROR] malformed tool call for '$c->{tool}', nothing was executed. Expected syntax:\n$c->{t}{syntax}";
 }
 
@@ -774,6 +781,7 @@ sub new_stream {
 # Shows thinking and answer in their own color while they stream in
 sub new_printer {
     my ($out, %o) = @_;
+    my $out_arg = $out; # a printer that was given its output (a test, a pipe) gets no colors of the markdown
     $out //= sub {$TUI->clear(); print $_[0]};
     my $show_thinking = ($::ORIG_ENV{AI_SHOW_THINKING} // 1) ? 1 : 0;
     my ($last, $ends_nl) = ('', 1);
@@ -816,9 +824,33 @@ sub new_printer {
         }
         return $vis;
     };
+    # markdown is drawn for the terminal only: a pipe gets the text as it is
+    my $md = (($::ORIG_ENV{AI_MARKDOWN} // ((-t STDOUT and !defined $out_arg) ? 1 : 0)) ? 1 : 0)
+        ? md->new(base => $colors::green_color) : undef;
     my $p = {};
     my $show = sub {
         my ($kind, $text) = @_;
+        if($md){
+            if($kind eq 'text'){
+                my $drawn = $md->feed($text);
+                return unless length $drawn;
+                if($last ne 'text'){
+                    # the same spacing as below: a line of its own, a blank line after thinking
+                    $drawn =~ s/\A\n+//;
+                    return unless length $drawn;
+                    &{$out}("\n") unless $ends_nl;
+                    &{$out}("\n") if length $last;
+                }
+                &{$out}(to_bytes($drawn));
+                ($last, $ends_nl) = ('text', $drawn =~ m/\n\z/ ? 1 : 0);
+                return;
+            }
+            # the answer ends before thinking: the line that is open is drawn first
+            if($last eq 'text' and length(my $rest = $md->flush)){
+                &{$out}(to_bytes($rest));
+                $ends_nl = $rest =~ m/\n\z/ ? 1 : 0;
+            }
+        }
         if($last ne $kind){
             # thinking and answer each start on a line of their own, without
             # the empty lines models put in between
@@ -844,6 +876,10 @@ sub new_printer {
         # a held back line that never became a tool call
         &{$show}('text', $hold) if length($hold) and !defined $in_tool;
         ($bol, $hold, $in_tool) = (1, '', undef);
+        if($md and length(my $rest = $md->flush)){
+            &{$out}(to_bytes($rest));
+            $ends_nl = $rest =~ m/\n\z/ ? 1 : 0;
+        }
         &{$out}("\n") unless $ends_nl;
         ($last, $ends_nl) = ('', 1);
     };
