@@ -19,7 +19,7 @@ plan(skip_all => "needs Net::Curl or WWW::Curl")
 
 my $url = FakeLLM::start();
 my $tmp = TestAI::setup(AI_LOCAL_SERVER => $url, AI_API_KEY => 'sk-e2e', AI_MODEL => 'fake-1');
-my ($Y, $G, $R) = ($colors::yellow_color1, $colors::green_color, $colors::reset_color);
+my ($Y, $G, $R, $T) = ($colors::yellow_color1, $colors::green_color, $colors::reset_color, $colors::think_color);
 
 # the whole loop: thinking, tool call, tool result, final answer
 {
@@ -28,7 +28,7 @@ my ($Y, $G, $R) = ($colors::yellow_color1, $colors::green_color, $colors::reset_
     is(TestAI::roles(@msgs), "system,user,assistant,user,assistant", "loop: conversation complete");
     is($msgs[3]{content}, "[BASH_7c48 RESULT_d170\ne2e-42\n\nRESULT_d170]", "loop: the tool ran");
     is($msgs[4]{content}, "The tool said: e2e-42 (messages: 4, model: fake-1, auth: Bearer sk-e2e)", "loop: the model got result, history, model and key");
-    like($out, qr/\A\Q${Y}The user wants ${R}${Y}a command.${R}\E\n\Q${G}I will run\E/, "loop: thinking shown before the answer");
+    like($out, qr/\A\Q${T}The user wants ${R}${T}a command.${R}\E\n\n\Q${G}I will run\E/, "loop: thinking shown before the answer");
     like($out, qr/\Q${G}The tool said: e2e-42\E/, "loop: final answer shown");
 }
 

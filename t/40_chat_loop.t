@@ -12,7 +12,7 @@ $::DEBUG = ($ENV{DEBUG}//"0") == "1"?1:0;
 use ai;
 use TestAI;
 
-my ($Y, $G, $R) = ($colors::yellow_color1, $colors::green_color, $colors::reset_color);
+my ($Y, $G, $R, $T) = ($colors::yellow_color1, $colors::green_color, $colors::reset_color, $colors::think_color);
 my $bash = sub {"///BASH_7c48+EO_dfd7\n$_[0]\nEO_dfd7\nBASH_7c48\n"};
 
 # a plain answer
@@ -115,7 +115,7 @@ my $bash = sub {"///BASH_7c48+EO_dfd7\n$_[0]\nEO_dfd7\nBASH_7c48\n"};
         TestAI::content("\n\nThe answer"), TestAI::content(" is 4."), TestAI::done(),
     ]);
     my $out = TestAI::capture {ai::chat_completion("2+2?")};
-    is($out, "${Y}Let me ${R}${Y}think.${R}\n${G}The answer${R}${G} is 4.${R}\n", "thinking: reasoning in its own color, then the answer");
+    is($out, "${T}Let me ${R}${T}think.${R}\n\n${G}The answer${R}${G} is 4.${R}\n", "thinking: reasoning in its own color, then the answer");
     is((ai::load_messages())[2]{content}, "The answer is 4.", "thinking: only the answer is saved");
 
     # <think> tags inside the content, split over deltas
@@ -125,7 +125,7 @@ my $bash = sub {"///BASH_7c48+EO_dfd7\n$_[0]\nEO_dfd7\nBASH_7c48\n"};
     ]);
     $out = TestAI::capture {ai::chat_completion("and now?")};
     unlike($out, qr/think>/, "think tags: tags are not shown");
-    is($out, "${Y}hm, a ${R}${Y}tool?${R}\n${G}No <b>tool</b>${R}${G} needed ${R}${G}<${R}\n", "think tags: colored by state");
+    is($out, "${T}hm, a ${R}${T}tool?${R}\n\n${G}No <b>tool</b>${R}${G} needed ${R}${G}<${R}\n", "think tags: colored by state");
     is((ai::load_messages())[-1]{content}, "No <b>tool</b> needed <", "think tags: thinking not saved");
 
     # tools mentioned while thinking don't run
@@ -155,7 +155,7 @@ my $bash = sub {"///BASH_7c48+EO_dfd7\n$_[0]\nEO_dfd7\nBASH_7c48\n"};
     is($msgs[1]{content}, "utf8 \x{263a}", "sse: user text saved as text");
     is($msgs[2]{content}, "caf\x{e9} \x{263a} ok", "sse: answer reassembled, as text");
     like($out, qr/caf\xc3\xa9 \xe2\x98\xba/, "sse: printed as UTF-8");
-    like($out, qr/\Q${Y}r${R}\E/, "sse: 'reasoning' key shown as thinking");
+    like($out, qr/\Q${T}r${R}\E/, "sse: 'reasoning' key shown as thinking");
 
     TestAI::mock_http([TestAI::content("fine"), TestAI::done()]);
     TestAI::capture {ai::chat_completion("again")};

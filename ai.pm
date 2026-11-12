@@ -761,8 +761,9 @@ sub new_printer {
             $text =~ s/\A\n+//;
             return unless length($text);
             &{$out}("\n") unless $ends_nl;
+            &{$out}("\n") if length $last; # a blank line between thinking and answer
         }
-        my $color = $kind eq 'think' ? $colors::yellow_color1 : $colors::green_color;
+        my $color = $kind eq 'think' ? $colors::think_color : $colors::green_color;
         &{$out}($color.to_bytes($text).$colors::reset_color);
         $last    = $kind;
         $ends_nl = $text =~ m/\n\z/ ? 1 : 0;
@@ -3978,6 +3979,7 @@ package colors;
 our $red_color     = "\033[0;31m";
 our $green_color   = "\033[0;32m";
 our $yellow_color1 = "\033[0;33m";
+our $think_color  = "\033[38;5;136m"; # thinking: a darker gold than the yellow of the tool lines
 our $blue_color1   = "\033[0;34m";
 our $blue_color2   = "\033[38;5;25;1m";
 our $blue_color3   = "\033[38;5;13;1m";
