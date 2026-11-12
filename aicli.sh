@@ -28,6 +28,8 @@ fi
 HOST_RUNTIME=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
 if [ -S "$HOST_RUNTIME/pipewire-0" ]; then
     extra_opts="-v $HOST_RUNTIME/pipewire-0:$HOST_RUNTIME/pipewire-0 -e XDG_RUNTIME_DIR=$HOST_RUNTIME $extra_opts"
+else
+    echo "aicli.sh: no PipeWire socket at $HOST_RUNTIME/pipewire-0, /voice cannot record (start PipeWire, or set XDG_RUNTIME_DIR)" >&2
 fi
 
 # every AI_* setting of this shell goes into the container
