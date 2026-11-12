@@ -28,18 +28,34 @@ $::DEBUG = $::ORIG_ENV{DEBUG} || 0;
 {
     no warnings 'once';
     require Getopt::Long;
-    my ($help, $continue);
-    if(!Getopt::Long::GetOptions(
-        'help|?'     => \$help,
+    my ($help, $man, $continue);
+    my $ok = Getopt::Long::GetOptions(
+        'help|h|?'    => \$help,
+        'man'         => \$man,
         'debug'      => \$::DEBUG,
         'continue|c' => \$continue,
         'prompt|p=s' => \$::PROMPT,
-    ) or $help){
-        local $ENV{PAGER} = $::ORIG_ENV{PAGER} // 'less';
+    );
+    if(!$ok or $help or $man){
+        # usage (-h, -help) or the whole manual (-man) from the POD of this file;
+        # a wrong option gets the usage on stderr and exit 2
         local $0 = $orig_dollar0;
         require Pod::Usage;
-        Pod::Usage::pod2usage(-input => "$FindBin::Bin/ai.pl", -verbose => 1, -exitval => 'NOEXIT', -output => \*STDOUT);
-        exit 0;
+        my $input = "$FindBin::Bin/ai.pl";
+        if($man){
+            # the manual through the pager, when there is a terminal
+            my $pager;
+            if(-t STDOUT and length(my $p = $::ORIG_ENV{PAGER} // 'less')){
+                open($pager, '|-', $p) or undef $pager;
+            }
+            Pod::Usage::pod2usage(-input => $input, -verbose => 2, -noperldoc => 1, -exitval => 'NOEXIT',
+                -output => ($pager // \*STDOUT));
+            close($pager) if $pager;
+            exit 0;
+        }
+        Pod::Usage::pod2usage(-input => $input, -verbose => 1, -exitval => 'NOEXIT',
+            -output => ($ok ? \*STDOUT : \*STDERR));
+        exit($ok ? 0 : 2);
     }
     $::ORIG_ENV{AI_CONTINUE} = 1 if $continue;
 }
@@ -126,7 +142,8 @@ ai.pl - AI chat and coding agent for the command line
 ai.pl [options]
 
  Options:
-   -help            brief help message
+   -h, -help        brief help message
+   -man             the whole manual
    -debug           enable debug mode
    -c, -continue    continue the session last used in this directory
    -p, -prompt TEXT one request, then exit ("-" reads it from stdin)
@@ -142,9 +159,13 @@ ai.pl [options]
 
 =over 8
 
-=item B<-help>
+=item B<-h>, B<-help>
 
-Print a brief help message and exits.
+Print a brief help message and exit. A wrong option prints it on stderr and exits 2.
+
+=item B<-man>
+
+The whole manual (this text) and exit: through the pager on a terminal.
 
 =item B<-debug>
 

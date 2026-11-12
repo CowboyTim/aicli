@@ -490,7 +490,7 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 | `DEBUG`, `AI_LOG` | debug logging, and a file for it | 0, stderr |
 | `AI_UID`, `AI_GID`, `AI_GROUPS` | started as root (docker): the user, group and supplementary groups to become | `UID`/`GID`, else 1000; the groups of the process |
 
-`perl ai.pl --help` and `perldoc ai.pl` have the full reference.
+`perl ai.pl --help` and `ai.pl -man` have the full reference.
 
 ## Project structure
 

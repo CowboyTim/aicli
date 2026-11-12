@@ -90,5 +90,14 @@ like($out, qr/\* session-/, "provider detected from the key prefix");
 $out = `$^X ./ai.pl --help 2>&1`;
 is($?, 0, "--help: exit 0");
 like($out, qr/Usage:.*ai\.pl \[options\]/s, "--help: usage shown");
+$out = `$^X ./ai.pl -h 2>&1`;
+is($?, 0, "-h: exit 0");
+like($out, qr/Usage:.*ai\.pl \[options\]/s, "-h: usage shown");
+$out = `$^X ./ai.pl --man 2>&1 < /dev/null`;
+is($?, 0, "--man: exit 0");
+like($out, qr/NAME.*SYNOPSIS.*OPTIONS.*ENVIRONMENT VARIABLES/s, "--man: the whole manual");
+$out = `$^X ./ai.pl --no-such-option 2>&1`;
+is($? >> 8, 2, "unknown option: exit 2");
+like($out, qr/Unknown option.*Usage:/s, "unknown option: the usage is shown");
 
 done_testing();
