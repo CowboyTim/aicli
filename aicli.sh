@@ -40,6 +40,8 @@ exec docker run --rm -it \
     -e HTTPS_PROXY \
     -e TMPDIR=/tmp \
     -e UID=${EUID} \
+    -e GID=$(id -g) \
+    -e AI_GROUPS="${AI_GROUPS:-983 986 992 109}" \
     -e LOGNAME \
     -e BDIR="${BDIR}" \
     -e CDIR="/workdir/${BDIR}" \

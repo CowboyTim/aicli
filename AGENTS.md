@@ -11,6 +11,10 @@ small and Perl-ish: `fork()`, `exec()`, `eval`/`Safe`, `select()`, libcurl.
 
 These are requirements, not suggestions.
 
+- **No branches unless explicitly asked.** Work on `main`: commit there and
+  push there. Don't create a feature branch, a pull request or a worktree on
+  your own, also not "to be safe". When a branch was asked for and is merged,
+  delete it, locally and on the remote.
 - **No Perl threads.** Never `use threads`, `threads::shared`, `Thread::Queue`
   or anything built on ithreads.
 - **Fork only when needed**: to run something that must be isolated from the
@@ -57,15 +61,38 @@ These are requirements, not suggestions.
   `WWW::Curl`), `Term::ReadLine::Gnu`. `Data::UUID` is optional. Ask before
   adding a CPAN module.
 - **Keep the docs in sync**: README.md, the POD in `ai.pl` and this file
-  describe what the code does, not what is planned (that is TODO.md).
+  describe what the code does, not what is planned (that is TODO.md). Notes
+  for whoever works on this next go here, in "Status", not in a file of their
+  own (there was a MEMORY.md, it is part of this file now).
+- **stdout is the conversation**: messages, errors and the debug log go to
+  stderr through `log::error` / `log::info` (`AI_LOG` for a file), never
+  `print`. `ai.pl -p` in a pipe must give the answer and nothing else.
 - **Tests**: `prove -I. t` must pass. Add tests with every change, the LLM is
   scripted (`t/lib/TestAI.pm`) or faked (`t/lib/FakeLLM.pm`).
+
+## Status
+
+What this file replaces: MEMORY.md, the notes of an earlier session (September
+2025) that described a single-file `ai.pl`. That is long gone:
+
+- November 2026: the chat loop was rebuilt (tool results reach the model, one
+  command table), then grown into what is described below: event loop,
+  sub-agents, status line, retries, token usage, context management, file
+  tools in Perl, web tools, workspace and kernel sandbox, `-c`/`-p`.
+- Everything has tests (`prove -I. t`), but against a scripted or fake LLM.
+  Not yet done by anyone: a session with a real model, the tests in the
+  Alpine image (`Net::Curl`), a real proxy and SearXNG instance, the
+  privilege drop as root in docker with a user other than 1000.
+- What is open is in TODO.md ("Open, found while fixing the agent loop"),
+  what is settled in its "Completed Items".
 
 ## Layout
 
 - **ai.pl** – entry point. Moves `%ENV` to `%::ORIG_ENV` (so nothing leaks to
   children), parses options (`-c` sets `AI_CONTINUE`, `-p` is one request via
-  `ai::one_shot()`), drops root privileges, then
+  `ai::one_shot()`), drops root privileges (to `utils::privilege_plan()`:
+  `AI_UID`/`UID`, `AI_GID`/`GID`, `AI_GROUPS` or the groups it has; the base
+  directory is chowned, with its content when the owner changes), then
   `ai::chat_setup(); ai::setup_commands(); ai::chat_loop();`. Holds the POD.
 - **ai.pm** – several packages in one file:
   - `ai` – setup/providers, chat state, agent loop, streaming, retry, token
@@ -288,6 +315,7 @@ implemented.
 | file | covers |
 |------|--------|
 | `t/10_sessions.t` | `ai.pl` as a process: sessions, startup checks, `--help` |
+| `t/15_logging_privileges.t` | stdout/stderr/`AI_LOG`, who to become when started as root |
 | `t/20_response_tool_handling.t` | tool call parsing on real model output |
 | `t/30_prompt.t` | generated tools prompt, examples parse |
 | `t/40_chat_loop.t` | agent loop, streaming, thinking, errors, abort (scripted LLM) |
@@ -312,4 +340,4 @@ See TODO.md. The proxies and the SearXNG search have only been tested with a
 mocked HTTP layer, never against a real proxy or instance. The bigger ones: `Net::Curl` is the preferred curl module but the
 tests have only run with `WWW::Curl` since the event loop exists; sub-agents
 have no context management; no tool confirmation or allow-list (by choice);
-the privilege drop in `ai.pl` uses a fixed uid/gid (1000).
+the privilege drop itself (as root) is not covered by a test, only the plan.

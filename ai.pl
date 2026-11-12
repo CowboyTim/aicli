@@ -50,33 +50,44 @@ my $BASE_DIR = $::ORIG_ENV{AI_DIR} // (glob('~/.aicli'))[0];
     or mkdir $BASE_DIR
     or die "Failed to create $BASE_DIR: $!\n";
 if($< == 0){
-    my $UID = 1000;
-    my $GID = 1000;
-    my $target_uid = $ENV{UID} // $UID;
+    # we are root (docker): become the user the environment names, see
+    # utils::privilege_plan: AI_UID/UID, AI_GID/GID, AI_GROUPS
+    require utils;
+    my $plan = utils::privilege_plan(\%::ORIG_ENV, [split m/ /, $)]);
+    my ($UID, $GID) = @{$plan}{qw(uid gid)};
 
-    # we were root, chown the dirs properly, and drop privileges
+    # chown the dirs properly. The base dir is ours, all of it changes hands
+    # when it belonged to someone else (a volume from an earlier run as
+    # another user); of the home directory only the directory itself.
+    my @owner = (stat($BASE_DIR))[4, 5];
     chown($UID, $GID, $BASE_DIR)
         or die "Error chown to $UID:$GID for $BASE_DIR: $!\n";
-
-    chown($UID, $GID, $::ORIG_ENV{HOME})
-        or die "Error chown to $UID:$GID for $::ORIG_ENV{HOME}: $!\n";
+    utils::chown_tree($BASE_DIR, $UID, $GID)
+        if $owner[0] != $UID or $owner[1] != $GID;
+    if(length($::ORIG_ENV{HOME} // '') and -d $::ORIG_ENV{HOME}){
+        chown($UID, $GID, $::ORIG_ENV{HOME})
+            or die "Error chown to $UID:$GID for $::ORIG_ENV{HOME}: $!\n";
+    }
 
     # now drop privileges
     local $! = 0;
-    # drop to GID
-    $) = "$GID 983 986 992 109";
+    # drop to GID, and to the supplementary groups: always a list, or root's
+    # own groups would stay
+    $) = join(' ', $GID, (@{$plan->{groups}} ? @{$plan->{groups}} : $GID));
     die "[ERROR] setting EGID to $GID: $!\n"
         if $!;
-    $( = $);
-    die "[ERROR] setting RGID to $): $!\n"
+    $( = $GID;
+    die "[ERROR] setting RGID to $GID: $!\n"
         if $!;
     # drop to UID
-    $> = $target_uid;
-    die "[ERROR] setting EUID to $target_uid: $!\n"
+    $> = $UID;
+    die "[ERROR] setting EUID to $UID: $!\n"
         if $!;
-    $< = $>;
-    die "[ERROR] setting RUID to $>: $!\n"
+    $< = $UID;
+    die "[ERROR] setting RUID to $UID: $!\n"
         if $!;
+    die "[ERROR] still not $UID:$GID after dropping privileges\n"
+        unless $< == $UID and $> == $UID and $( + 0 == $GID and $) + 0 == $GID;
 }
 
 # Final safety check: ensure we're not running as root
@@ -706,7 +717,17 @@ Prompt and continuation prompt of the input line.
 
 =item B<AI_LOG>
 
-File for log output. Default: stdout
+File for the debug log. Without it debug messages go to stderr. Errors always
+go to stderr (and to this file): stdout is only the conversation.
+
+=item B<AI_UID>, B<AI_GID>, B<AI_GROUPS>
+
+Only when started as root (in a container): the user id, group id and
+supplementary group ids to run as. B<UID> and B<GID> are used when B<AI_UID>
+and B<AI_GID> are not set, 1000 when nothing is. Without B<AI_GROUPS> the
+supplementary groups of the process are kept (docker C<--group-add>). ai.pl
+never runs as root: 0 is not accepted. The base directory is given to that
+user.
 
 =item B<DEBUG>
 

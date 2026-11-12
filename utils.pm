@@ -71,6 +71,42 @@ sub proxy_for {
     return $p;
 }
 
+# Who to run as when started as root (in docker): the user, group and
+# supplementary groups the environment names, so that files in a mounted
+# project belong to who started the container.
+#   user:   AI_UID, else UID, else 1000
+#   group:  AI_GID, else GID, else 1000
+#   groups: AI_GROUPS (numbers), else the groups the process has now
+#           (docker --group-add), without root's
+# Root is never an answer: 0 and what is not a number are ignored.
+sub privilege_plan {
+    my ($env, $current_groups) = @_;
+    my $id = sub {
+        my ($v) = @_;
+        return (defined $v and $v =~ m/\A\d+\z/ and $v > 0) ? $v + 0 : undef;
+    };
+    my $uid = $id->($env->{AI_UID}) // $id->($env->{UID}) // 1000;
+    my $gid = $id->($env->{AI_GID}) // $id->($env->{GID}) // 1000;
+    my @groups = defined $env->{AI_GROUPS}
+        ? split(m/[\s,:]+/, $env->{AI_GROUPS})
+        : @{$current_groups // []};
+    my %seen = ($gid => 1);
+    @groups = grep {defined $id->($_) and !$seen{$_}++} @groups;
+    return {uid => $uid, gid => $gid, groups => [map {$_ + 0} @groups]};
+}
+
+# give a directory and all in it to a user; links are left alone, what cannot
+# be changed (a read-only mount) is skipped
+sub chown_tree {
+    my ($dir, $uid, $gid) = @_;
+    load_cpan("File::Find");
+    File::Find::find({no_chdir => 1, wanted => sub {
+        return if -l $File::Find::name;
+        chown($uid, $gid, $File::Find::name);
+    }}, $dir);
+    return;
+}
+
 # true when the user asked to stop the current turn (ctrl-C while busy)
 sub aborted {
     return $::ABORT ? 1 : 0;
@@ -115,27 +151,45 @@ BEGIN {
 
 
 package log;
+# Messages for the person at the terminal, never part of the answer: they go
+# to stderr, so that stdout is the conversation and nothing else (ai.pl -p in
+# a pipe). Debug messages (info) go to the file AI_LOG instead when that is
+# set, errors go to stderr and to that file.
 
 use strict; use warnings;
+
+our $before_print; # called before something is written to the terminal (status line)
+
+sub _write {
+    my ($line, $to_terminal) = @_;
+    my $file = $::ORIG_ENV{AI_LOG};
+    if(length($file // '')){
+        if(open(my $lfh, '>>', $file)){
+            print {$lfh} $line;
+            close($lfh);
+        } else {
+            $to_terminal = 1; # better there than nowhere
+        }
+    } else {
+        $to_terminal = 1;
+    }
+    return unless $to_terminal;
+    $before_print->() if $before_print;
+    STDOUT->flush(); # keep the order with what was printed before
+    print STDERR $line;
+    return;
+}
 
 sub info {
     my ($message) = @_;
     return unless $::DEBUG;
-    my $LOG_FILE = $::ORIG_ENV{AI_LOG} // "&STDOUT";
-    my $lfh;
-    open($lfh, ">>$LOG_FILE") or open($lfh, ">&STDERR") or return;
-    print {$lfh} "INFO: [$$]: ".scalar(localtime()).": $message\n";
-    close $lfh or die "Failed to close dup/file $LOG_FILE: $!\n";
+    _write("INFO: [$$]: ".scalar(localtime()).": $message\n", 0);
     return;
 }
 
 sub error {
     my ($message) = @_;
-    my $LOG_FILE = $::ORIG_ENV{AI_LOG} // "&STDOUT";
-    my $lfh;
-    open($lfh, ">>$LOG_FILE") or open($lfh, ">&STDERR") or return;
-    print {$lfh} "ERROR: [$$]: ".scalar(localtime()).": $message\n";
-    close $lfh or die "Failed to close dup/file $LOG_FILE: $!\n";
+    _write("ERROR: [$$]: ".scalar(localtime()).": $message\n", 1);
     return;
 }
 

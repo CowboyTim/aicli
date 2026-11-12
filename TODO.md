@@ -166,7 +166,7 @@ This file outlines potential improvements and features for the AI coding agent (
 - Sub-agents: context management of their own, a way to look at what one is doing while it runs.
 - Status line: token counts per agent, a real multi-pane TUI on top of `tui.pm`.
 - Tool confirmation / allow-list: not wanted for now, the container is the sandbox.
-- `ai.pl` drops privileges to a fixed uid/gid 1000, the `UID` passed by `aicli.sh` is not used.
+- Run the docker wrapper as a user other than 1000 once: the privilege drop now follows `UID`/`GID` (`AI_UID`, `AI_GID`, `AI_GROUPS`), only the plan is tested.
 - Every start without `AI_SESSION` or `-c` creates a new `session-<uuid>` directory, they are never cleaned up.
 - A native tool to find files by name (the model uses bash for that now).
 - Try `AI_PROXY`, `AI_WEB_PROXY` and the `search` tool against a real proxy and SearXNG instance: only tested with a mocked HTTP layer.
@@ -202,3 +202,6 @@ This file outlines potential improvements and features for the AI coding agent (
 - [x] Web tools: `fetch` and `search` (SearXNG) as async HTTP, separate proxies for the LLM API, the web and SearXNG
 - [x] Workspace: the file tools are confined to the start directory (`AI_WORKSPACE`), `..` and symlinks resolved
 - [x] Kernel sandbox (Landlock) for bash/perl/grep: writes only in the workspace, `AI_SANDBOX_WRITE`/`AI_SANDBOX_READ`
+- [x] Messages, errors and the debug log go to stderr, stdout is the conversation
+- [x] Privilege drop from the environment: `AI_UID`/`UID`, `AI_GID`/`GID`, `AI_GROUPS`
+- [x] MEMORY.md merged into AGENTS.md ("Status"), work happens on `main`

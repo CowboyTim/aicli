@@ -2312,6 +2312,7 @@ sub input_stdin {
 # the status line, animated by the event loop
 sub start_status_line {
     $TUI = tui->new();
+    $log::before_print = sub {$TUI->clear()};
     $loop::on_tick = sub {$TUI->tick()};
     $loop::on_idle = sub {$TUI->clear()};
     return;

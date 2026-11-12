@@ -62,7 +62,10 @@ cd ~/my-project
 
 `aicli.sh` mounts the current directory, and is set up for a local llama.cpp
 server on an AMD ROCm machine: adjust it (`AI_LOCAL_SERVER`, `AI_MODEL`, the
-`--device` options) to your setup.
+`--device` options) to your setup. Every `AI_*` variable of your shell is
+passed into the container. In there `ai.pl` starts as root and at once becomes
+you (`UID`/`GID` of the host, `AI_GROUPS` for device groups), so files in the
+mounted project keep their owner; it never runs as root.
 
 ### Direct
 
@@ -116,6 +119,9 @@ modules from CPAN you need a compiler plus the libcurl and readline headers
 (`curl-dev readline-dev` / `libcurl4-openssl-dev libreadline-dev`).
 
 ## Usage
+
+Answers, tool output and command output are on stdout; errors, retries' error
+lines and the debug log (`--debug`) are on stderr.
 
 Type to chat. A line that starts with `/` is a command and is never sent to
 the model:
@@ -448,7 +454,8 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 | `AI_WEB_TIMEOUT` | seconds for a web request | 30 |
 | `AI_WEB_MAX_SIZE` | max bytes of a fetched page, the rest is cut | 2000000 |
 | `AI_WEB_USER_AGENT`, `AI_WEB_LANGUAGE` | User-Agent and Accept-Language of `fetch` | |
-| `DEBUG`, `AI_LOG` | debug logging, and where to | 0, stdout |
+| `DEBUG`, `AI_LOG` | debug logging, and a file for it | 0, stderr |
+| `AI_UID`, `AI_GID`, `AI_GROUPS` | started as root (docker): the user, group and supplementary groups to become | `UID`/`GID`, else 1000; the groups of the process |
 
 `perl ai.pl --help` and `perldoc ai.pl` have the full reference.
 
