@@ -132,7 +132,9 @@ the model:
 | `/exit`, `/quit` | leave (also ctrl-D) |
 | `/clear` | forget the conversation, keep the system prompt |
 | `/session [list]` | list the sessions |
-| `/session create\|delete\|switch <name>`, `/session rename <old> <new>` | manage sessions, `/session <name>` switches too |
+| `/session create\|delete\|switch <name>` | manage sessions, `/session <name>` switches too; deleting the current one continues in a new, empty session |
+| `/session rename [<old>] <new>` | rename a session, with one name the current one |
+| `/session reset` | start the current session over: conversation, archive, token counters, undo journal and agent transcripts go, its name, prompt, model and input history stay |
 | `/model [name]` | list the models of the API, or set the model of this session |
 | `/prompt [name]` | list the prompt templates, or switch the system prompt |
 | `/undo [list]` | take back the last file change a tool made, `list` shows them |
@@ -150,7 +152,9 @@ the model:
 
 Keys: TAB completes commands, shift-enter starts multi-line input (an empty
 line sends it). **Ctrl-C while the model answers or a tool runs stops that
-turn** and returns to the prompt; ctrl-C at the prompt leaves.
+turn** and returns to the prompt; ctrl-C at the prompt leaves. With input from
+a pipe it is the same: ctrl-C (SIGINT) stops the turn and the next line is
+read, a second one, or one while nothing runs, ends the program (exit 130).
 
 ## How it works
 
@@ -346,10 +350,11 @@ A sub-agent is not a process and not a thread. It is a small state machine:
 its request is a curl handle, its bash/perl/grep tools are forked children,
 and all of them sit in the same `select()` loop as everything else. Its
 thinking and tool calls are not printed, the status line shows what each agent
-is doing. Transcripts are kept in `sessions/<name>/agents/`. Sub-agents retry
-API errors like the main loop, count for the token usage of the session, and
-stop on ctrl-C. They have no context management of their own: give them tasks
-that fit.
+is doing and how many tokens it used. Transcripts are kept in
+`sessions/<name>/agents/`. Sub-agents retry API errors like the main loop,
+count for the token usage of the session, and stop on ctrl-C. They watch
+their own context window: the output of their older tool calls is cut, then
+their oldest steps are dropped; the task always stays.
 
 ### Errors, retries, rate limits
 

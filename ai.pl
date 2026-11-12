@@ -178,7 +178,10 @@ API, the answer is streamed to the terminal, the tool calls in the answer are
 executed, their results are appended to the conversation, and the conversation
 is sent again. This repeats until an answer has no tool call (or B<AI_MAX_TURNS>
 is reached). Ctrl-C while this is going on stops the turn and returns to the
-prompt, ctrl-C or ctrl-D at the prompt leaves the chat.
+prompt, ctrl-C or ctrl-D at the prompt leaves the chat. With input from a pipe
+SIGINT does the same: it stops the turn and the next line is read; a second
+one, or one while nothing runs, ends the program with exit code 130. SIGTERM
+stops the turn and ends the program.
 
 Input is read with readline when on a terminal (history, completion of
 commands with TAB, shift-enter for multi-line input, an empty line sends it).
@@ -346,8 +349,11 @@ answer work at the same time, at most B<AI_MAX_AGENTS>.
 
 A sub-agent is neither a process nor a thread: its request is one more curl
 handle and its tools are forked children in the one select() loop of the
-program. What it thinks and does is not printed, the status line shows it. Its
-conversation is saved in the F<agents/> directory of the session.
+program. What it thinks and does is not printed, the status line shows it,
+with the tokens it used. Its conversation is saved in the F<agents/> directory
+of the session. An agent keeps its own conversation within the context
+window: the output of older tool calls is cut, then its oldest steps are
+dropped, the task stays.
 
 =head1 RETRIES, USAGE, CONTEXT
 
@@ -450,8 +456,14 @@ Manage chat sessions.
   /session                 - List all sessions
   /session list            - List all sessions
   /session create <name>   - Create a new session and switch to it
-  /session delete <name>   - Delete a session
+  /session delete <name>   - Delete a session; when it is the current one,
+                             a new, empty session takes its place
+  /session reset           - Start the current session over: conversation,
+                             archive, token counters, undo journal and agent
+                             transcripts are removed, its name, system
+                             prompt, model and input history stay
   /session rename <old> <new> - Rename a session
+  /session rename <new>    - Rename the current session
   /session switch <name>   - Switch to a session
   /session <name>          - Switch to a session (shortcut)
 

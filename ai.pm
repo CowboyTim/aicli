@@ -1581,14 +1581,29 @@ sub delete_session {
         print "Session '$name' does not exist.\n";
         return;
     }
-    if ($name eq $AI_SESSION) {
-        print "Cannot delete the current session.\n";
-        return;
-    }
     utils::load_cpan("File::Path");
     File::Path::remove_tree("$SESSIONS_DIR/$name");
     print "Deleted session '$name'.\n";
+    if ($name eq $AI_SESSION) {
+        # there is always a session to chat in: a new, empty one
+        my $new = "session-".new_session_id();
+        init_session($new);
+        use_session($new);
+        print "Switched to session: $new\n";
+    }
     refresh_session_completions();
+}
+
+# Start the current session over: the conversation, what was archived of it,
+# the token counters, the undo journal and the transcripts of sub-agents are
+# gone. Its name, system prompt, model and input history stay.
+sub reset_session {
+    utils::load_cpan("File::Path");
+    File::Path::remove_tree("$AI_SESSION_DIR/$_") for qw(undo agents);
+    unlink(map {"$AI_SESSION_DIR/$_"} qw(chat.archive usage chat.tmp usage.tmp));
+    reset_chat();
+    print "Session '$AI_SESSION' reset.\n";
+    return;
 }
 
 sub rename_session {
@@ -1908,7 +1923,7 @@ our @COMMANDS;
         run  => sub {print Cwd::cwd()."\n"; 0},
     },
     '/session' => {
-        usage => '/session [list|create|delete|rename|switch] [name]',
+        usage => '/session [list|create|delete|rename|switch|reset] [name]',
         help  => 'manage sessions, "/session <name>" switches',
         run   => sub {
             my ($args) = @_;
@@ -1921,6 +1936,10 @@ our @COMMANDS;
                 create_session($rest);
             } elsif ($sub eq 'delete' and length($rest)) {
                 delete_session($rest);
+            } elsif ($sub eq 'reset' and $rest eq '') {
+                reset_session();
+            } elsif ($sub eq 'rename' and $rest =~ m/^(\S+)$/) {
+                rename_session($AI_SESSION, $1); # one name: the current session
             } elsif ($sub eq 'rename' and $rest =~ m/^(\S+)\s+(\S+)$/) {
                 rename_session($1, $2);
             } elsif ($sub eq 'switch' and length($rest)) {
@@ -1937,6 +1956,7 @@ our @COMMANDS;
             return {
                 'list'   => sub {0},
                 'create' => sub {0},
+                'reset'  => sub {0},
                 'delete' => {map {($_, sub {0})} @$s},
                 'rename' => {map {($_, sub {0})} @$s},
                 'switch' => {map {($_, sub {0})} @$s},
@@ -2344,6 +2364,20 @@ sub chat_loop {
     $::LOOP = 1;
     my $input_cli_sub = -t STDIN ? input_terminal() : input_stdin();
     start_status_line();
+    # Input from a pipe or file: there is no readline to catch the signals.
+    # ctrl-C (INT) stops the turn that runs and the next line is read; a
+    # second one while that is still stopping, or one while nothing runs,
+    # ends the program. TERM always ends it, after the turn was stopped.
+    local @SIG{qw(INT TERM)} = (sub {
+        my ($sig) = @_;
+        if($BUSY and !$::ABORT){
+            $::ABORT = 1;
+            $::LOOP  = 0 if $sig eq 'TERM';
+            return;
+        }
+        cleanup_chat();
+        exit($sig eq 'TERM' ? 143 : 130);
+    }) x 2 unless -t STDIN;
     while($::LOOP){
         log::info("Waiting for user input...");
         $::ABORT = 0;
@@ -2439,7 +2473,10 @@ sub wait {
 
 sub status {
     my ($self) = @_;
-    return "agent $self->{id}: $self->{activity}".($self->{turns} ? ", turn $self->{turns}" : "");
+    my $t = $self->{tokens} // 0;
+    return "agent $self->{id}: $self->{activity}"
+        .($self->{turns} ? ", turn $self->{turns}" : "")
+        .($t >= 10_000 ? sprintf(", %dk tok", $t / 1000) : $t >= 1000 ? sprintf(", %.1fk tok", $t / 1000) : $t ? ", $t tok" : "");
 }
 
 sub start {
@@ -2455,6 +2492,7 @@ sub request {
     my $budget = $::ORIG_ENV{AI_TOKEN_BUDGET};
     return $self->finish(undef, "token budget used up (AI_TOKEN_BUDGET)")
         if $budget and (ai::load_usage()->{total_tokens} // 0) >= $budget;
+    $self->compact();
     my $json = do {
         local $ai::SESSION_MODEL = $::ORIG_ENV{AI_AGENT_MODEL} || $ai::SESSION_MODEL;
         ai::build_request($self->{msgs});
@@ -2493,11 +2531,16 @@ sub request {
 
 sub response {
     my ($self, $resp, $err, $info) = @_;
-    ai::record_usage($self->{msgs}, $resp, $info)
-        if !defined $err or length($resp);
+    if(!defined $err or length($resp)){
+        my ($in, $out) = ai::record_usage($self->{msgs}, $resp, $info);
+        $self->{tokens} += $in + $out;
+    }
     my $answer = ai::strip_thinking($resp) =~ s/\A\s+//r;
     if(defined $err){
         return $self->finish(undef, "interrupted") if utils::aborted();
+        # too long for the model: make room, once, and ask again
+        return $self->request()
+            if $info->{context} and !length($answer) and !$self->{context_retry}++ and $self->compact(1);
         my $retries = $::ORIG_ENV{AI_RETRIES} // 4;
         if(!length($answer) and $info->{retryable} and $self->{attempt} < $retries){
             my $wait = ai::retry_delay(++$self->{attempt}, $info->{wait});
@@ -2520,6 +2563,43 @@ sub response {
     $self->{queue} = \@calls;
     $self->next_tool();
     return;
+}
+
+# Keep the conversation of the agent within the context window: when it is
+# over the threshold (or $force), the output of its older tool calls is cut,
+# and if that is not enough its oldest steps are dropped. The system prompt
+# and the task always stay, so do the last two messages. No summary is asked
+# for: an agent has one task and that is still there.
+# Returns true when something was removed.
+sub compact {
+    my ($self, $force) = @_;
+    my @m = @{$self->{msgs}};
+    return 0 if @m <= 4;
+    my $limit  = ai::context_limit();
+    my $before = ai::estimate_tokens(@m);
+    return 0 unless $force or ($limit and $before > $limit * ($::ORIG_ENV{AI_CONTEXT_THRESHOLD} // 0.8));
+    my $target = int(($limit || $before) * 0.5);
+    my @head = @m[0, 1];
+    my @last = @m[-2, -1];
+    my ($pruned, @mid) = ai::prune_tool_results(@m[2 .. $#m - 2]);
+    my $dropped = 0;
+    while(@mid and ai::estimate_tokens(@head, @mid, @last) > $target){
+        shift @mid;
+        $dropped++;
+    }
+    # what is kept starts with something the agent said
+    while(@mid and ($mid[0]{role} // '') ne 'assistant'){
+        shift @mid;
+        $dropped++;
+    }
+    return 0 unless $pruned or $dropped;
+    my @note = $dropped
+        ? ({role => 'user', content => "[$dropped earlier steps of your work on this task were removed to save context. Go on from what follows.]"})
+        : ();
+    $self->{msgs} = [@head, @note, @mid, @last];
+    $self->{compacted}++;
+    log::info("agent $self->{id}: context ~$before -> ~".ai::estimate_tokens(@{$self->{msgs}})." tokens");
+    return 1;
 }
 
 # run the tool calls of the last answer one after the other, then ask again

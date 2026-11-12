@@ -140,7 +140,9 @@ conversation lives only in memory.
 `$::ABORT` is set by ctrl-C while a turn runs (`$ai::BUSY`). `loop::step()`
 sees it and stops everything that is registered: transfers end with error
 "interrupted", children are killed (process group), timers fire with a true
-argument. `$::LOOP = 0` ends the chat.
+argument. `$::LOOP = 0` ends the chat. Without a terminal (`chat_loop` with
+piped input) the same is done by a plain signal handler: INT stops the turn,
+a second INT or one while idle exits 130, TERM stops the turn and exits.
 
 Strings: messages are text (decoded) in memory and in JSON. The terminal,
 files and tools work with bytes: `ai::to_text()` / `ai::to_bytes()` at the
@@ -192,8 +194,12 @@ are done, then `{result}` / `{error}` are set. A sub-agent has its own message
 list (system prompt from `ai::subagent_prompt()`: session prompt + tools
 without `agent`), retries like the main loop, counts into the usage of the
 session, writes its transcript to `agents/` in the session directory, and
-shows up in the status line. It has no context management, and cannot start
-agents.
+shows up in the status line with its tokens (`agent::status`). It keeps its
+own messages within the context window (`agent::compact`, before every
+request and once after a "context too long" error): old tool output is
+pruned, then the oldest steps are dropped with a note; system prompt, task
+and the last two messages stay. No summary request, so it never has to wait.
+It cannot start agents.
 
 ## System prompt
 
@@ -297,7 +303,9 @@ command, 1 to leave; a command line never reaches the LLM. `/retry` and
 `$AI_DIR/sessions/<name>/` with `chat` (conversation), `prompt` + `template`
 (system prompt and the template it came from), `model`, `history` (readline).
 Names match `^[A-Za-z0-9_][A-Za-z0-9_.-]*$`, checked by
-`valid_session_name()` everywhere a name comes in. `use_session()` notes the
+`valid_session_name()` everywhere a name comes in. There is always a current
+session: `delete_session()` of the current one moves on to a new, empty one,
+`reset_session()` empties it in place. `use_session()` notes the
 working directory in `cwd`; `last_session()` finds the most recent session of
 a directory for `-c`. `chat_completion()` returns true when the turn ended
 with an answer, `one_shot()` makes the exit code of `-p` out of that.
@@ -338,6 +346,7 @@ implemented.
 
 See TODO.md. The proxies and the SearXNG search have only been tested with a
 mocked HTTP layer, never against a real proxy or instance. The bigger ones: `Net::Curl` is the preferred curl module but the
-tests have only run with `WWW::Curl` since the event loop exists; sub-agents
-have no context management; no tool confirmation or allow-list (by choice);
+tests have only run with `WWW::Curl` since the event loop exists; old
+sessions are never removed (plan in TODO.md); no tool confirmation or
+allow-list (by choice);
 the privilege drop itself (as root) is not covered by a test, only the plan.

@@ -159,6 +159,67 @@ sub run_calls {
     }
 }
 
+# an agent watches its own context window, and counts its tokens
+{
+    my $tmp = TestAI::setup(AI_CONTEXT_TOKENS => 6000, AI_MAX_TURNS => 20);
+    chdir($tmp) or die $!;
+    my (@sizes, @status, $spent);
+    TestAI::mock_agent_http(sub {
+        my ($msgs) = @_;
+        push @sizes, ai::estimate_tokens(@$msgs);
+        push @status, (values %agent::RUNNING)[0]->status();
+        # the API reports what the request really is, like a real one
+        $spent += $sizes[-1] + 5;
+        my $reply = @sizes > 8 ? "all read" : "step ".scalar(@sizes)."\n".$bash->("seq 1 600");
+        return [TestAI::content($reply), TestAI::usage($sizes[-1], 5), TestAI::done()];
+    });
+    my ($r) = run_calls($agent->("read a lot"));
+    is($r->[0]{content}, "[AGENT_f2a8 RESULT_d170\nall read\nRESULT_d170]", "context: the agent gets to the end");
+    is(scalar(@sizes), 9, "context: 9 requests");
+    ok(!grep({$_ > 6000 * 0.8} @sizes), "context: no request over the threshold (biggest: ".(sort {$b <=> $a} @sizes)[0]." of 6000)");
+    my $last = $TestAI::AGENT_REQUESTS[-1]{messages};
+    is($last->[0]{role}, "system", "context: the system prompt stays");
+    is($last->[1]{content}, "read a lot", "context: the task stays");
+    my $all = join("\n", map {$_->{content}} @$last);
+    like($all, qr/characters of old tool output removed to save context|earlier steps of your work on this task were removed/, "context: old tool output was cut or old steps dropped");
+    like($last->[-1]{content}, qr/\A\[BASH_7c48 RESULT_d170\n1\n2\n.*\n600\n/s, "context: the newest result is whole");
+    unlike($status[0], qr/tok/, "tokens: nothing yet at the first request");
+    my $first = $sizes[0] + 5;
+    my $shown = sprintf("%.1fk", $first / 1000);
+    like($status[1], qr/, turn 1, \Q$shown\E tok\z/, "tokens: counted in the status line after the first answer");
+    like($status[-1], qr/, turn 8, \d+k tok\z/, "tokens: and summed up");
+    is(ai::load_usage()->{total_tokens}, $spent, "tokens: all of it is in the usage of the session");
+
+    my $a = agent->new("x");
+    is($a->compact(), 0, "compact: nothing to do for a new agent");
+    is($a->compact(1), 0, "compact: also not when forced, with only the task there");
+    $a->{tokens} = 1234;
+    like($a->status(), qr/1\.2k tok/, "tokens: thousands");
+    $a->{tokens} = 45_678;
+    like($a->status(), qr/45k tok/, "tokens: many thousands");
+}
+{
+    # the size of the window is not known: the error of the API starts it
+    my $tmp = TestAI::setup(AI_MAX_TURNS => 20);
+    chdir($tmp) or die $!;
+    my $refused = 0;
+    TestAI::mock_agent_http(sub {
+        my ($msgs) = @_;
+        my $turns = grep {$_->{role} eq 'assistant'} @$msgs;
+        return $say->("step\n".$bash->("seq 1 400")) if $turns < 3 and !$refused;
+        return {code => 400, body => '{"error":{"message":"the request exceeds the available context size"}}'} unless $refused++;
+        return $say->("done with ".scalar(@$msgs)." messages");
+    });
+    my ($r) = run_calls($agent->("too much"));
+    like($r->[0]{content}, qr/RESULT_d170\ndone with \d+ messages/, "context error: the agent makes room and goes on");
+    my ($before, $after) = map {ai::estimate_tokens(@{$_->{messages}})} @TestAI::AGENT_REQUESTS[-2, -1];
+    ok($after < $before, "context error: the next request is smaller ($before -> $after tokens)");
+    TestAI::mock_agent_http(sub {{code => 400, body => '{"error":{"message":"maximum context length is 5 tokens"}}'}});
+    ($r) = run_calls($agent->("hopeless"));
+    like($r->[0]{content}, qr/agent \d+ failed: ERROR: maximum context length/, "context error: with nothing to remove it is an error");
+    is(scalar(@TestAI::AGENT_REQUESTS), 1, "context error: and not asked again");
+}
+
 # ctrl-C: requests, tools and queued agents all stop
 {
     my $tmp = TestAI::setup(AI_MAX_AGENTS => 2);

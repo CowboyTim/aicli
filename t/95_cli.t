@@ -4,6 +4,8 @@ use strict; use warnings;
 
 use Test::More;
 use FindBin;
+use POSIX ();
+use Time::HiRes ();
 use lib "$FindBin::Bin/..", "$FindBin::Bin/lib";
 no warnings 'once';
 
@@ -145,6 +147,76 @@ SKIP: {
         ($out, $rc) = $ai->("proj", "-c -p 'go'");
         like($out, qr/\(messages: 4,/, "AI_SESSION: wins over -c");
         ok(-d "$tmp/cli/sessions/named", "AI_SESSION: that session");
+    }
+
+    # input from a pipe: ctrl-C stops the turn, not the program
+    {
+        my $run = sub {
+            my ($script) = @_; # sub($to_ai, $pid)
+            pipe(my $rd, my $wr) or die $!;
+            my $pid = fork() // die $!;
+            if(!$pid){
+                close($wr);
+                open(STDIN, '<&', $rd) or die $!;
+                open(STDOUT, '>', "$tmp/int.out") or die $!;
+                open(STDERR, '>&', \*STDOUT) or die $!;
+                chdir("$tmp/proj") or die $!;
+                exec($^X, "$TestAI::ROOT/ai.pl") or POSIX::_exit(127);
+            }
+            close($rd);
+            $wr->autoflush(1);
+            $script->($wr, $pid);
+            close($wr);
+            local $SIG{ALRM} = sub {kill('KILL', $pid)};
+            alarm(20);
+            waitpid($pid, 0);
+            alarm(0);
+            my $status = $?;
+            my $text = ai::slurp("$tmp/int.out") =~ s/\e\[[0-9;]*m//gr;
+            return ($text, $status >> 8, $status & 127);
+        };
+        my $t0 = Time::HiRes::time();
+        my ($text, $code, $sig) = $run->(sub {
+            my ($to, $pid) = @_;
+            print {$to} "slow please\n";
+            select(undef, undef, undef, 1.5);
+            kill('INT', $pid);
+            select(undef, undef, undef, 0.5);
+            print {$to} "go\n";
+        });
+        like($text, qr/let me think for a long time\n?\[interrupted\]/, "pipe: ctrl-C stops the turn that runs");
+        like($text, qr/\[interrupted\].*The tool said: e2e-42/s, "pipe: and the next line is read and answered");
+        is_deeply([$code, $sig], [0, 0], "pipe: the program ends normally");
+        ok(Time::HiRes::time() - $t0 < 15, "pipe: without waiting for the slow answer");
+
+        ($text, $code, $sig) = $run->(sub {
+            my ($to, $pid) = @_;
+            select(undef, undef, undef, 1.5);
+            kill('INT', $pid);
+            select(undef, undef, undef, 1);
+        });
+        is_deeply([$code, $sig], [130, 0], "pipe: ctrl-C while nothing runs ends the program, exit 130");
+
+        ($text, $code, $sig) = $run->(sub {
+            my ($to, $pid) = @_;
+            print {$to} "slow please\nnever read\n";
+            select(undef, undef, undef, 1.5);
+            kill('TERM', $pid);
+            select(undef, undef, undef, 1);
+        });
+        like($text, qr/\[interrupted\]/, "pipe: TERM stops the turn");
+        unlike($text, qr/never read|e2e-42/, "pipe: and reads no more");
+        is($sig, 0, "pipe: TERM is not a crash");
+
+        ($text, $code, $sig) = $run->(sub {
+            my ($to, $pid) = @_;
+            print {$to} "slow please\n";
+            select(undef, undef, undef, 1.5);
+            kill('INT', $pid);
+            kill('INT', $pid);
+            select(undef, undef, undef, 1);
+        });
+        ok($code == 130 || $text =~ m/\[interrupted\]/, "pipe: ctrl-C twice gets out for sure");
     }
 
     ($out, $rc) = $ai->("proj", "-p ''");

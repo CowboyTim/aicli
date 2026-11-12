@@ -78,8 +78,49 @@ sub cmd {
     like($out, qr/Renamed session 'work-1' to 'work-2'/, "rename: done");
     is($ai::AI_SESSION, "work-2", "rename: current session follows");
     ok(-d "$tmp/aicli/sessions/work-2" && !-d "$tmp/aicli/sessions/work-1", "rename: on disk");
-    ($r, $out) = cmd("/session delete work-2");
-    like($out, qr/Cannot delete the current session/, "delete: not the current one");
+    # the current session can be deleted too: a new, empty one takes its place
+    ($r, $out) = cmd("/session create doomed");
+    ai::append_messages({role => 'user', content => 'soon gone'});
+    ($r, $out) = cmd("/session delete doomed");
+    like($out, qr/\ADeleted session 'doomed'\.\nSwitched to session: (session-\S+)\n\z/, "delete: the current one, a new session takes over");
+    my ($fresh) = $out =~ m/Switched to session: (\S+)/;
+    ok(!-d "$tmp/aicli/sessions/doomed", "delete current: gone from disk");
+    is($ai::AI_SESSION, $fresh, "delete current: the new one is current");
+    is(TestAI::roles(ai::load_messages()), "system", "delete current: and empty");
+    like((ai::load_messages())[0]{content}, qr/LIST OF TOOLS/, "delete current: with its system prompt");
+    cmd("/session test");
+    cmd("/session delete $fresh");
+
+    # rename with one name renames the current session
+    cmd("/session work-2");
+    ($r, $out) = cmd("/session rename work-3");
+    like($out, qr/Renamed session 'work-2' to 'work-3'/, "rename: one name is the new name of the current session");
+    is($ai::AI_SESSION, "work-3", "rename current: it is still the current one");
+    cmd("/session rename work-3 work-2");
+    like((cmd("/session rename test"))[1], qr/Session 'test' already exists/, "rename: not onto an existing one");
+    like((cmd("/session rename ../x"))[1], qr/Invalid session name/, "rename: names are checked");
+
+    # reset: the session starts over, its name, prompt, model and history stay
+    ai::append_messages({role => 'user', content => 'q'}, {role => 'assistant', content => 'a'});
+    ai::archive_messages({role => 'user', content => 'old'});
+    ai::save_usage({total_tokens => 99, requests => 3});
+    ai::execute_tool("write", "WRITE_edf5", ["$tmp/reset-me.txt", "x"]);
+    @tools::CHANGES = ();
+    mkdir "$tmp/aicli/sessions/work-2/agents";
+    ai::spew("$tmp/aicli/sessions/work-2/agents/1.chat", "{}");
+    ai::spew("$tmp/aicli/sessions/work-2/history", "typed before\n");
+    ($r, $out) = cmd("/session reset");
+    like($out, qr/Session 'work-2' reset\./, "reset: said so");
+    is($ai::AI_SESSION, "work-2", "reset: same session");
+    is(TestAI::roles(ai::load_messages()), "system", "reset: the conversation is gone");
+    is_deeply(ai::load_usage(), {}, "reset: the token counters too");
+    is(scalar(ai::undo_journal()), 0, "reset: and the undo journal");
+    ok(!-e "$tmp/aicli/sessions/work-2/chat.archive" && !-d "$tmp/aicli/sessions/work-2/agents" && !-d "$tmp/aicli/sessions/work-2/undo", "reset: archive, agent transcripts and undo copies are removed");
+    is($ai::SESSION_MODEL, "m-1", "reset: the model stays");
+    is(ai::slurp("$tmp/aicli/sessions/work-2/history"), "typed before\n", "reset: the input history stays");
+    ok(-e "$tmp/reset-me.txt", "reset: files in the project are not touched");
+    like((cmd("/session reset now"))[1], qr/does not exist/, "reset: takes no name");
+    unlink("$tmp/reset-me.txt");
     cmd("/session test");
     ($r, $out) = cmd("/session delete work-2");
     like($out, qr/Deleted session 'work-2'/, "delete: done");
