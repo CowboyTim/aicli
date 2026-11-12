@@ -107,6 +107,7 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   `utils::fork_run()`, `utils::wait_abortable()`), `utils::fork_child()`,
   `utils::tool_env()`, packages `curl` (Net::Curl/WWW::Curl shim) and `log`.
 - **md.pm** – `md`: markdown of the answer, line by line as it streams (`new_printer()` uses it on a terminal)
+- **/voice** (in `ai.pm`, section "Speech"): `voice_record()` runs the recorder as a child (`loop::spawn`), stopped with SIGINT by a timer; `transcribe()` sends the recording as multipart/form-data (`multipart_body()`) to AI_ASR_URL.
 - **tui.pm** – `tui`: the screen. Two modes: `bar` (default when the terminal
   is big enough, at least 7 rows and 20 columns): a footer of two lines at
   the bottom, activity (`set`/`unset` items with spinner and elapsed time)
@@ -382,6 +383,7 @@ Other APIs are reached through an OpenAI compatible gateway, such as LiteLLM or 
 | `t/88_markdown.t` | markdown of the answer: headings, emphasis, code, lists, tables, streaming, the printer |
 | `t/89_context_thinking.t` | the reasoning setting, what the request says, the first request through compactions, `/context` |
 | `t/97_live.t` | a real model, only when `AI_LIVE_SERVER` is set (`AI_LIVE_MODEL`, optional `AI_LIVE_SEARXNG`): one answer, a native tool call, the thinking setting, search. Skipped otherwise |
+| `t/98_voice.t` | speech: the multipart upload, the recorder child stopped by SIGINT, the text of the recognizer, `/voice` |
 | `t/95_cli.t` | `-p` (one request, exit codes, stdin) and `-c` (continue per directory), as a process |
 | `t/85_web.t` | proxy selection, HTML to text, fetch, search (mocked HTTP layer), a real fetch, `/retry`, `/rewind` |
 | `t/90_prompt_display_undo.t` | project file and date in the prompt, byte-stable request prefix, brief display, diffs, `/undo` |

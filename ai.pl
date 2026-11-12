@@ -449,6 +449,12 @@ and everything that followed.
 
 Summarize the older messages now, to free context.
 
+=item B</voice> [seconds]
+
+Record from the microphone for a few seconds (B<AI_VOICE_SECONDS>, 5 by default),
+recognize the speech with the recognizer of B<AI_ASR_URL> and send the text as the
+request. The recording is made by B<AI_RECORDER> (pw-record), as a child process.
+
 =item B</context> [summary]
 
 How full the context is (tokens against the window), the number of archived
@@ -709,6 +715,14 @@ over this. Not set: the server decides. Sent to OpenAI-compatible servers only.
 Compact the conversation right after an answer when it is over the threshold
 (B<AI_CONTEXT_THRESHOLD>), so that the work happens between the turns. Not with
 B<-p>. Set to 0 to compact only before a request that needs it. Default: 1
+
+=item B<AI_RECORDER>, B<AI_ASR_URL>, B<AI_ASR_MODEL>, B<AI_VOICE_SECONDS>
+
+Speech for B</voice>: the recorder program (C<pw-record>: PipeWire, its socket is
+shared with the container), the OpenAI compatible transcription endpoint (for
+FastFlowLM on the NPU: C<http://localhost:52625/v1/audio/transcriptions>, no
+default), the model name it expects (C<whisper-large-v3-turbo>), and the default
+length of a recording in seconds (5).
 
 =item B<AI_SUMMARY_CHUNKS>
 

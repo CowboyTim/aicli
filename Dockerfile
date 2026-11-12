@@ -17,6 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         lua5.4 luarocks \
         build-essential clang libssl-dev libperl-dev \
         strace \
+        pipewire-bin \
     && rm -rf /var/lib/apt/lists/*
 
 # ai.pl

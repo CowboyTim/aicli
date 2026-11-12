@@ -2613,6 +2613,25 @@ our @COMMANDS;
         },
         complete => sub {return +{map {($_ => sub {0})} qw(on off default)}},
     },
+    '/voice' => {
+        usage => '/voice [seconds]',
+        help  => 'record from the microphone (AI_VOICE_SECONDS, 5 by default), recognize it (AI_ASR_URL) and send it as the request',
+        run   => sub {
+            my ($args) = @_;
+            my $secs = ($args // '') =~ m/^\s*(\d+(?:\.\d+)?)\s*$/ ? $1 : ($::ORIG_ENV{AI_VOICE_SECONDS} // 5);
+            local $BUSY = 1;
+            my $text = voice_once($secs);
+            if(!defined $text){
+                print "Nothing heard.\n" unless utils::aborted();
+                $::ABORT = 0;
+                return 0;
+            }
+            print "${colors::blue_color3}heard:${colors::reset_color} $text\n";
+            chat_completion(to_text($text));
+            $::ABORT = 0;
+            return 0;
+        },
+    },
     '/compact' => {
         help => 'summarize the older messages to free context',
         run  => sub {
@@ -2930,6 +2949,106 @@ sub start_status_line {
 
 # One request and done (ai.pl -p): returns the exit code, 0 when the model
 # answered, 1 on an error, 130 when interrupted.
+# Speech: the microphone is recorded by a recorder (AI_RECORDER, pw-record by
+# default) started as a child, the recording goes to the speech recognizer
+# (AI_ASR_URL, an OpenAI compatible /v1/audio/transcriptions, e.g. FastFlowLM on
+# the NPU), and the text is the next request.
+
+# the path of a program: as it is when it has a slash, else searched in PATH
+sub find_program {
+    my ($name) = @_;
+    return $name if $name =~ m{/} and -x $name;
+    for my $dir (split /:/, $::ORIG_ENV{PATH} // '/usr/local/bin:/usr/bin:/bin') {
+        return "$dir/$name" if length($dir) and -x "$dir/$name";
+    }
+    return;
+}
+
+# record $seconds of audio into $file: the recorder runs as a child in the event
+# loop, and gets SIGINT when the time is up (that is how it finishes the file).
+# Returns true when the recording is there.
+sub voice_record {
+    my ($file, $seconds) = @_;
+    my $rec = $::ORIG_ENV{AI_RECORDER} // 'pw-record';
+    my $bin = find_program($rec)
+        or do { log::error("no recorder: $rec is not installed (AI_RECORDER)"); return 0 };
+    unlink $file;
+    my $done = 0;
+    my $job = loop::spawn(sub {
+        exec {$bin} ($rec, '--rate', '16000', '--channels', '1', '--format', 's16', $file)
+            or die "cannot run $bin: $!\n";
+    }, on_done => sub {$done = 1});
+    loop::timer($seconds, sub {
+        return if $done;
+        kill('INT', -$job->{pid}, $job->{pid}); # the recorder finishes the file
+        loop::timer(3, sub {kill('KILL', -$job->{pid}, $job->{pid}) unless $done});
+    });
+    loop::run(sub {$done or utils::aborted()});
+    return 0 if utils::aborted();
+    return -s $file ? 1 : 0;
+}
+
+# a multipart/form-data body; each part is [name, value, filename, content type]
+sub multipart_body {
+    my ($boundary, @parts) = @_;
+    my $body = '';
+    for my $p (@parts){
+        my ($name, $value, $filename, $type) = @$p;
+        $body .= "--$boundary\r\n";
+        $body .= qq{Content-Disposition: form-data; name="$name"} . (defined $filename ? qq{; filename="$filename"} : '') . "\r\n";
+        $body .= "Content-Type: $type\r\n" if $type;
+        $body .= "\r\n$value\r\n";
+    }
+    return $body."--$boundary--\r\n";
+}
+
+# the text of a recording, from the speech recognizer; undef when it failed
+sub transcribe {
+    my ($file) = @_;
+    my $url = $::ORIG_ENV{AI_ASR_URL}
+        or do { log::error("no speech recognizer set: AI_ASR_URL (e.g. http://localhost:52625/v1/audio/transcriptions)"); return };
+    open(my $fh, '<:raw', $file) or do { log::error("cannot read $file: $!"); return };
+    my $wav = do { local $/; <$fh> };
+    close($fh);
+    my $boundary = 'aicli'.int(rand(1e9)).'x'.int(rand(1e9));
+    my $body = multipart_body($boundary,
+        ['model', $::ORIG_ENV{AI_ASR_MODEL} // 'whisper-large-v3-turbo'],
+        ['response_format', 'json'],
+        ['file', $wav, 'voice.wav', 'audio/wav']);
+    my $resp = '';
+    utils::http('post', $url, $body, undef, sub {
+        my ($ch, $raw) = @_;
+        $raw //= $ch;
+        $resp .= $raw;
+        return length($raw);
+    }, [
+        "Content-Type: multipart/form-data; boundary=$boundary",
+        "Accept: application/json",
+        "User-Agent: AI Chat/0.1",
+    ]);
+    if(utils::aborted()){
+        return;
+    }
+    my $d = eval {$::JSON->decode($resp)};
+    if(ref($d) ne 'HASH' or !defined $d->{text}){
+        log::error("${colors::red_color}no text from the speech recognizer: ".($resp =~ s/\s+/ /gr).$colors::reset_color);
+        return;
+    }
+    my $text = $d->{text} =~ s/\A\s+|\s+\z//gr;
+    return $text;
+}
+
+# one utterance: record, transcribe. Returns the text, undef when there is none
+sub voice_once {
+    my ($seconds) = @_;
+    my $file = "$AI_SESSION_DIR/voice.wav";
+    print "${colors::cyan_color}[recording $seconds s]${colors::reset_color}\n";
+    return unless voice_record($file, $seconds);
+    my $text = transcribe($file);
+    return unless defined $text and length $text;
+    return $text;
+}
+
 sub one_shot {
     my ($prompt) = @_;
     $::LOOP  = 1;

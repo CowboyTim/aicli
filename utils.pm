@@ -220,7 +220,7 @@ our @CHILD_INIT;
 # (API key!). AI_TOOL_ENV can name extra variables to pass through.
 sub tool_env {
     my %src = (%ENV, %::ORIG_ENV);
-    my @keep = (qw(PATH HOME LOGNAME USER SHELL TERM LANG LC_ALL TZ TMPDIR SSH_AUTH_SOCK),
+    my @keep = (qw(PATH HOME LOGNAME USER SHELL TERM LANG LC_ALL TZ TMPDIR SSH_AUTH_SOCK XDG_RUNTIME_DIR PIPEWIRE_REMOTE),
         (grep {m/^GIT_/} keys %src),
         (grep {length} split m/[\s,]+/, $src{AI_TOOL_ENV} // ''));
     my %e = map {($_ => $src{$_})} grep {defined $src{$_} and !m/^AI_/} @keep;

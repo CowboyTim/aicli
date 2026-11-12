@@ -149,6 +149,7 @@ the model:
 | `/retry` | ask the last request again, its answer and tool runs are dropped |
 | `/rewind [n]` | take the last exchange (or n) out of the conversation |
 | `/compact` | summarize the older messages now, to free context |
+| `/voice [seconds]` | record from the microphone, recognize it (`AI_ASR_URL`) and send it as the request |
 | `/context [summary]` | how full the context is, its compactions and the thinking setting; `summary` shows the last summary of the older messages |
 | `/thinking [on\|off\|<tokens>\|default]` | the reasoning of the model for this session |
 | `/system <text>` | add a system message |
@@ -452,6 +453,10 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 | `AI_CONTEXT_THRESHOLD` | compact when the conversation is over this part of the window | 0.8 |
 | `AI_CONTEXT_SUMMARY` | 0: drop old messages instead of summarizing them | 1 |
 | `AI_SUMMARY_CHUNKS` | most pieces the older part is summarized in, one request each | 8 |
+| `AI_RECORDER` | recorder program for `/voice` (pw-record, PipeWire) | pw-record |
+| `AI_ASR_URL` | OpenAI compatible transcription endpoint for `/voice` (FastFlowLM: `http://localhost:52625/v1/audio/transcriptions`) | none: no voice |
+| `AI_ASR_MODEL` | model name sent to the transcription endpoint | whisper-large-v3-turbo |
+| `AI_VOICE_SECONDS` | length of a `/voice` recording, in seconds | 5 |
 | `AI_AUTO_COMPACT` | compact right after an answer when the conversation is over the threshold; 0: only before a request | 1 |
 | `AI_THINKING` | the reasoning of the model: `on`, `off` or a token budget; `/thinking` sets it per session | server decides |
 | `AI_TOKEN_BUDGET` | max tokens a session may use | no limit |

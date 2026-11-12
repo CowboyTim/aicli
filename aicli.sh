@@ -24,6 +24,12 @@ if [ -f ~/.gitexcludes ]; then
     extra_opts="$extra_opts -v $fn:/workspace/.gitexcludes:ro $extra_opts"
 fi
 
+# the microphone: only the PipeWire socket is shared (pw-record in the container)
+HOST_RUNTIME=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+if [ -S "$HOST_RUNTIME/pipewire-0" ]; then
+    extra_opts="-v $HOST_RUNTIME/pipewire-0:$HOST_RUNTIME/pipewire-0 -e XDG_RUNTIME_DIR=$HOST_RUNTIME $extra_opts"
+fi
+
 # every AI_* setting of this shell goes into the container
 for v in $(compgen -e | grep '^AI_'); do
     extra_opts="-e $v $extra_opts"
