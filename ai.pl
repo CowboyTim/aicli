@@ -28,10 +28,12 @@ $::DEBUG = $::ORIG_ENV{DEBUG} || 0;
 {
     no warnings 'once';
     require Getopt::Long;
-    my $help;
+    my ($help, $continue);
     if(!Getopt::Long::GetOptions(
-        'help|?' => \$help,
-        'debug'  => \$::DEBUG,
+        'help|?'     => \$help,
+        'debug'      => \$::DEBUG,
+        'continue|c' => \$continue,
+        'prompt|p=s' => \$::PROMPT,
     ) or $help){
         local $ENV{PAGER} = $::ORIG_ENV{PAGER} // 'less';
         local $0 = $orig_dollar0;
@@ -39,6 +41,7 @@ $::DEBUG = $::ORIG_ENV{DEBUG} || 0;
         Pod::Usage::pod2usage(-input => "$FindBin::Bin/ai.pl", -verbose => 1, -exitval => 'NOEXIT', -output => \*STDOUT);
         exit 0;
     }
+    $::ORIG_ENV{AI_CONTINUE} = 1 if $continue;
 }
 
 # init/setup
@@ -91,6 +94,13 @@ require ai;
 
 ai::chat_setup($BASE_DIR);
 ai::setup_commands();
+if(defined $::PROMPT){
+    # one request and out: -p "text", or -p - for all of stdin
+    $::PROMPT = do {local $/; <STDIN>} if $::PROMPT eq '-';
+    my $rc = ai::one_shot($::PROMPT);
+    ai::cleanup_chat();
+    exit $rc;
+}
 ai::chat_loop();
 ai::cleanup_chat();
 
@@ -107,8 +117,12 @@ ai.pl [options]
  Options:
    -help            brief help message
    -debug           enable debug mode
+   -c, -continue    continue the session last used in this directory
+   -p, -prompt TEXT one request, then exit ("-" reads it from stdin)
 
  Examples:
+   ai.pl -c
+   ai.pl -p "why does the build fail?" && echo answered
    AI_API_KEY=csk-... ai.pl
    AI_LOCAL_SERVER=http://localhost:8080 AI_PROMPT_TEMPLATE=coder ai.pl
    echo "what is in this directory?" | AI_SESSION=demo ai.pl
@@ -124,6 +138,20 @@ Print a brief help message and exits.
 =item B<-debug>
 
 Enable debug mode.
+
+=item B<-c>, B<-continue>
+
+Continue the session that was last used in the current directory, instead of
+starting a new one. A new session is started when there is none. B<AI_SESSION>
+wins when it is set.
+
+=item B<-p> I<text>, B<-prompt> I<text>
+
+Not interactive: send I<text> as one request, let the model work on it (tools
+included) and exit. C<-> as I<text> reads the request from stdin, all of it.
+The exit code is 0 when the model answered, 1 when the request ended with an
+error (also: turn limit, token budget) and 130 when it was interrupted.
+Together with B<-c> this continues a session one request at a time.
 
 =back
 
@@ -617,7 +645,8 @@ Readline init file.
 
 One directory per session: C<chat> (the conversation, one JSON message per
 line), C<chat.archive> (messages removed by context management), C<prompt> and
-C<template> (system prompt), C<model>, C<usage> (token counters), C<history>
+C<template> (system prompt), C<model>, C<usage> (token counters), C<cwd> (the directory it was last used in, for
+B<-continue>), C<history>
 (input history), C<agents/> (conversations of sub-agents), C<undo/> (journal
 and copies for B</undo>).
 

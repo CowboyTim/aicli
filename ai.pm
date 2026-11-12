@@ -79,6 +79,9 @@ sub chat_setup {
         // "$FindBin::Bin/ai/$AI_PROMPT_TEMPLATE";
     $AI_SESSION = $::ORIG_ENV{AI_SESSION}
         // $::ORIG_ENV{AI_PROMPT_DEFAULT};
+    # --continue: go on where this directory left off
+    $AI_SESSION = last_session()
+        if !length($AI_SESSION // '') and $::ORIG_ENV{AI_CONTINUE};
     $AI_SESSION = "session-".new_session_id()
         unless length($AI_SESSION // '');
     if(!valid_session_name($AI_SESSION)){
@@ -165,7 +168,24 @@ sub use_session {
     $PROMPT_FILE    = "$AI_SESSION_DIR/prompt";
     $STATUS_FILE    = "$AI_SESSION_DIR/chat";
     $SESSION_MODEL  = read_session_model() || $::ORIG_ENV{AI_MODEL};
+    # where it is used, for --continue
+    eval {spew("$AI_SESSION_DIR/cwd", Cwd::cwd()."\n")} if -d $AI_SESSION_DIR;
     return;
+}
+
+# the session that was last used in a directory (default: this one), if any
+sub last_session {
+    my ($dir) = @_;
+    $dir //= Cwd::cwd();
+    my ($best, $best_t);
+    foreach my $s (@{get_sessions()}){
+        my $cwd = slurp("$SESSIONS_DIR/$s/cwd") // next;
+        chomp $cwd;
+        next unless $cwd eq $dir;
+        my $t = (stat("$SESSIONS_DIR/$s/chat"))[9] // next;
+        ($best, $best_t) = ($s, $t) if !defined $best_t or $t > $best_t;
+    }
+    return $best;
 }
 
 sub clean_model_name {
@@ -1186,11 +1206,13 @@ sub retry_delay {
 # The agent loop: send the conversation, show the answer, run the tools the
 # model asked for, send the results back, until the model has nothing left to
 # run. Every step is appended to the chat file, each request is built from it.
+# Returns true when the turn ended with an answer, false on an error.
 sub chat_completion {
     my ($input) = @_;
     log::info("User input: $input");
-    return if over_budget();
+    return 0 if over_budget();
     append_messages({role => 'user', content => to_text($input)});
+    my $ok = 1; # false when the turn ended with an error
 
     my $max_turns = $::ORIG_ENV{AI_MAX_TURNS} // 50;
     my $retries   = $::ORIG_ENV{AI_RETRIES} // 4;
@@ -1201,9 +1223,13 @@ sub chat_completion {
         last if utils::aborted();
         if($max_turns and ++$turn > $max_turns){
             log::error("${colors::red_color}stopped after $max_turns tool turns (AI_MAX_TURNS)${colors::reset_color}");
+            $ok = 0;
             last;
         }
-        last if $turn > 1 and over_budget();
+        if($turn > 1 and over_budget()){
+            $ok = 0;
+            last;
+        }
         manage_context();
 
         my (@msgs, $resp, $err, $info);
@@ -1240,6 +1266,7 @@ sub chat_completion {
                 if ($::ORIG_ENV{AI_SHOW_USAGE} // 1);
         }
         if(defined $err){
+            $ok = 0;
             if(utils::aborted()){
                 print "${colors::red_color}[interrupted]${colors::reset_color}\n";
             } else {
@@ -1254,7 +1281,7 @@ sub chat_completion {
         append_messages(@{$r // []});
         last unless $newturns;
     }
-    return;
+    return utils::aborted() ? 0 : $ok;
 }
 
 #------------------------------------------------------------------------------
@@ -2071,13 +2098,40 @@ sub input_stdin {
     };
 }
 
-sub chat_loop {
-    $::LOOP = 1;
-    my $input_cli_sub = -t STDIN ? input_terminal() : input_stdin();
-    # the status line, animated by the event loop
+# the status line, animated by the event loop
+sub start_status_line {
     $TUI = tui->new();
     $loop::on_tick = sub {$TUI->tick()};
     $loop::on_idle = sub {$TUI->clear()};
+    return;
+}
+
+# One request and done (ai.pl -p): returns the exit code, 0 when the model
+# answered, 1 on an error, 130 when interrupted.
+sub one_shot {
+    my ($prompt) = @_;
+    $::LOOP  = 1;
+    $::ABORT = 0;
+    if(!defined $prompt or $prompt !~ m/\S/){
+        log::error("no prompt");
+        return 1;
+    }
+    start_status_line();
+    local $SIG{INT} = sub {$::ABORT = 1};
+    local $BUSY = 1;
+    my $ok = eval {chat_completion($prompt)};
+    if($@){
+        log::error(${colors::red_color}.($@ =~ s/\s+\z//r).${colors::reset_color});
+        return 1;
+    }
+    return 130 if utils::aborted();
+    return $ok ? 0 : 1;
+}
+
+sub chat_loop {
+    $::LOOP = 1;
+    my $input_cli_sub = -t STDIN ? input_terminal() : input_stdin();
+    start_status_line();
     while($::LOOP){
         log::info("Waiting for user input...");
         $::ABORT = 0;

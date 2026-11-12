@@ -39,7 +39,9 @@ framework.
 - **Providers**: Cerebras, OpenRouter, NVIDIA, Lemonade, and any OpenAI
   compatible local server (llama.cpp, ...)
 - **Sessions**: every conversation is a directory with its history, system
-  prompt, model and usage
+  prompt, model and usage; `-c` continues the last one of the current
+  directory
+- **Scriptable**: `-p "..."` runs one request and exits with a status code
 - **Slash commands** with TAB completion, multi-line input, readline history
 - **Docker wrapper** to keep what the model does inside a container
 
@@ -79,11 +81,23 @@ or with a local server:
 AI_LOCAL_SERVER=http://localhost:8080 AI_PROMPT_TEMPLATE=coder perl ai.pl
 ```
 
-Not interactive, one request per line of stdin:
+Pick up where you left off in this directory:
 
 ```bash
-echo "which files here are bigger than 1MB?" | AI_SESSION=demo perl ai.pl
+perl ai.pl -c
 ```
+
+Not interactive, one request and an exit code (0 answered, 1 error, 130
+interrupted); `-p -` reads the request from stdin, `-c` continues the session
+of the directory one request at a time:
+
+```bash
+perl ai.pl -p "which files here are bigger than 1MB?"
+git diff | perl ai.pl -p - > review.txt
+perl ai.pl -c -p "now fix the first one" && make test
+```
+
+Without `-p`, piped stdin is read as one request per line.
 
 ### Perl modules
 

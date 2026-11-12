@@ -60,7 +60,8 @@ These are requirements, not suggestions.
 ## Layout
 
 - **ai.pl** – entry point. Moves `%ENV` to `%::ORIG_ENV` (so nothing leaks to
-  children), parses options, drops root privileges, then
+  children), parses options (`-c` sets `AI_CONTINUE`, `-p` is one request via
+  `ai::one_shot()`), drops root privileges, then
   `ai::chat_setup(); ai::setup_commands(); ai::chat_loop();`. Holds the POD.
 - **ai.pm** – several packages in one file:
   - `ai` – setup/providers, chat state, agent loop, streaming, retry, token
@@ -229,7 +230,10 @@ command, 1 to leave; a command line never reaches the LLM.
 `$AI_DIR/sessions/<name>/` with `chat` (conversation), `prompt` + `template`
 (system prompt and the template it came from), `model`, `history` (readline).
 Names match `^[A-Za-z0-9_][A-Za-z0-9_.-]*$`, checked by
-`valid_session_name()` everywhere a name comes in.
+`valid_session_name()` everywhere a name comes in. `use_session()` notes the
+working directory in `cwd`; `last_session()` finds the most recent session of
+a directory for `-c`. `chat_completion()` returns true when the turn ended
+with an answer, `one_shot()` makes the exit code of `-p` out of that.
 
 ## Providers
 
@@ -253,6 +257,7 @@ implemented.
 | `t/65_file_tools.t` | lines, replace, the ed engine, edit, delete, move, mkdir, list |
 | `t/70_retry_usage_context.t` | retry/backoff, rate limits, usage, budget, context management |
 | `t/80_agents.t` | sub-agents (parallel, limits, errors, abort), the status line |
+| `t/95_cli.t` | `-p` (one request, exit codes, stdin) and `-c` (continue per directory), as a process |
 | `t/90_prompt_display_undo.t` | project file and date in the prompt, byte-stable request prefix, brief display, diffs, `/undo` |
 
 `TestAI::mock_http` scripts the main agent (`utils::http`),
