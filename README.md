@@ -213,7 +213,7 @@ There is no confirmation before a tool runs. Run it in the container.
 The file tools (`read`, `lines`, `write`, `replace`, `edit`, `delete`, `move`,
 `mkdir`, `list`, and the path of `grep`) only work inside the workspace: the
 directory `ai.pl` was started in, or `AI_WORKSPACE`. A path is judged by where
-it really ends up: `..` and symbolic links are resolved first, so
+it really ends up: symbolic links and `..` are resolved first, so
 `../other/file`, `/etc/passwd` and a link in the workspace that points out of
 it are all refused, and the model is told so. `delete` and `move` act on a
 link itself, never on what it points to.

@@ -95,7 +95,16 @@ my $out_rx = qr/outside of the workspace \(\Q$tmp\E\/ws\): /;
     # and inside everything works as before
     is((tool("read", "in.txt"))[0], "inside\n", "read inside");
     is((tool("read", "link_in"))[0], "deep\n", "read through a link that stays inside");
-    like((tool("write", "sub/new/../w.txt", "w"))[1], qr/outside of the workspace/, ".. after a directory that does not exist is refused, to be safe");
+    # .. after names that do not exist is resolved as text
+    is(eval {tools::_path($_)}, $_, "inside: '$_'") for "sub/new/../w.txt", "a/b/c/../../../in.txt", "new/..", "x/y/../../sub/z/../deep.txt";
+    foreach my $p ("new/../..", "a/b/../../../outside/x", "x/../../ws-other/y", "new/../link_out/z", "new/../link_out", "a/b/../../link_file", "n/../sub/../link_out/x/../y",
+                   "a/../../../../../../../../etc/passwd"){
+        eval {tools::_path($p)};
+        like($@, $out_rx, "outside: '$p'");
+    }
+    like((tool("mkdir", "new/../link_out/made"))[1], qr/outside of the workspace/, "mkdir cannot be talked through a link that way");
+    ok(!-e "$tmp/outside/made" && !-e "new", "and nothing was created");
+    like((tool("write", "sub/new/../w2.txt", "w"))[1], qr/Cannot write to sub\/new\/\.\.\/w2\.txt/, "such a path is judged right, the system then says the directory is missing");
     is((tool("write", "sub/w.txt", "w\n"))[1], undef, "write inside");
     is((tool("mkdir", "a/b"))[1], undef, "mkdir inside");
     is((tool("move", "sub/w.txt", "a/b"))[0], "[OK] moved sub/w.txt to a/b/w.txt", "move inside");
