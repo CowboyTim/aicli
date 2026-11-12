@@ -355,8 +355,8 @@ compatible streaming APIs: cerebras, openrouter, nvidia, openai, lemonade, and `
 for `AI_LOCAL_SERVER`. `anthropic` is the Messages API: `provider::anthropic`
 has its own `req()` and `headers()` (the `x-api-key` header, see
 `provider_headers()`), and `ai::new_stream()` reads its events (`message_start`,
-`content_block_delta`, `message_delta` for the usage). Bedrock is not
-implemented (it needs AWS request signing and its own binary event stream).
+`content_block_delta`, `message_delta` for the usage).
+Other APIs are reached through an OpenAI compatible gateway, such as LiteLLM or OpenRouter.
 
 ## Tests
 

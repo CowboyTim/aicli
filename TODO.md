@@ -168,7 +168,7 @@ This file outlines potential improvements and features for the AI coding agent (
 - Run the docker wrapper as a user other than 1000 once: the privilege drop now follows `UID`/`GID` (`AI_UID`, `AI_GID`, `AI_GROUPS`), only the plan is tested.
 - A native tool to find files by name (the model uses bash for that now).
 - Try `AI_PROXY`, `AI_WEB_PROXY` and the `search` tool against a real proxy and SearXNG instance: only tested with a mocked HTTP layer.
-- Providers not implemented: Bedrock (needs AWS signing and a binary event stream).
+- Not planned: Bedrock and other providers one by one. Use LiteLLM or OpenRouter as the OpenAI compatible endpoint for those.
 - The readline prompt (`ai.pm`, `prompt_term1`/`prompt_term2`) still uses `►`, `❲`, `❳` and `│` regardless of `AI_GLYPHS`; those are ambiguous-width too.
 - Footer checked in tmux 3.4 only; kitty and other terminals not run yet (the escapes are standard, the emoji and wide-character widths may differ per terminal).
 

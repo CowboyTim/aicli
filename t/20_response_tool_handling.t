@@ -64,7 +64,7 @@ AI-CLI is an interactive command-line chat interface for interacting with variou
 
 ## Features
 
-- **Multi-provider Support**: Works with Cerebras, OpenRouter, OpenAI, Groq, Anthropic, Bedrock, and local servers (like llama.cpp via Lemonade/ROCm)
+- **Multi-provider Support**: Works with Cerebras, OpenRouter, NVIDIA, OpenAI, Anthropic, and local servers (like llama.cpp via Lemonade/ROCm)
 - **Streaming & Non-streaming Modes**: Real-time token output with Server-Sent Events (SSE) parsing
 - **Built-in Tools**:
   - `/bash` - Execute bash commands
@@ -142,7 +142,7 @@ Configuration is primarily done through environment variables:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `AI_API_KEY` | API key for your chosen provider | (required) |
-| `AI_PROVIDER` | Provider name (cerebras, openrouter, openai, groq, anthropic, bedrock, lemonade) | auto-detected from key |
+| `AI_PROVIDER` | Provider name (cerebras, openrouter, nvidia, openai, anthropic, lemonade) | auto-detected from key |
 | `AI_MODEL` | Model identifier | provider-dependent |
 | `AI_TOKENS` | Max tokens per response | 8192 |
 | `AI_TEMPERATURE` | Sampling temperature | 0 |
