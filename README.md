@@ -25,6 +25,8 @@ framework.
   the context used, the speed (pp and tg tokens/s) and the cache. Drawn from
   that same loop, with VT100 escapes and no extra module. On a terminal too
   small for it, or with `AI_STATUS=line`, it is one line at the cursor
+- **Markdown**: the answer is drawn with headings, bold, code, lists and tables
+  on a terminal (`AI_MARKDOWN`)
 - **Readable tool runs**: one line per tool call and the first lines of its
   result instead of the raw call; file changes are shown as a diff, and
   `/undo` takes them back
@@ -465,6 +467,7 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 | `AI_TOOL_MAX_OUTPUT` | max bytes of a tool result, the middle is cut out | 65536 |
 | `AI_TOOL_ENV` | extra environment variables to pass to tools | |
 | `AI_PERL_SAFE` | perl tool in a `Safe` compartment: `1`, or extra opcodes like `:filesys_read` | off |
+| `AI_MARKDOWN` | draw the markdown of the answer (on a terminal only); 0 keeps it as written | on a terminal |
 | `AI_TOOL_CALLS` | `native`: tools sent with the request, calls as the server parses them; `text`: the tool syntax in the prompt | native |
 | `AI_RAW` | use `/v1/completions` with a prompt built here (qwen only) | off |
 | `AI_DIR` | base directory | `~/.aicli` |

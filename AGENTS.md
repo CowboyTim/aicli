@@ -106,6 +106,7 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   `step`, `run`), the waits on top of it (`utils::http()`,
   `utils::fork_run()`, `utils::wait_abortable()`), `utils::fork_child()`,
   `utils::tool_env()`, packages `curl` (Net::Curl/WWW::Curl shim) and `log`.
+- **md.pm** – `md`: markdown of the answer, line by line as it streams (`new_printer()` uses it on a terminal)
 - **tui.pm** – `tui`: the screen. Two modes: `bar` (default when the terminal
   is big enough, at least 7 rows and 20 columns): a footer of two lines at
   the bottom, activity (`set`/`unset` items with spinner and elapsed time)

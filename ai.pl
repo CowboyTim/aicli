@@ -600,6 +600,13 @@ Maximum number of tokens for a completion. Default: 100000
 
 Sampling settings. Defaults: 0.6, 0.95, 20, 0.0
 
+=item B<AI_MARKDOWN>
+
+Draw the markdown of the answer for the terminal: headings, bold, italic,
+code, lists, quotes, links and tables. Only when the output is a terminal;
+0 keeps the text as the model wrote it, 1 draws it anyway. Default: 1 on a
+terminal
+
 =item B<AI_TOOL_CALLS>
 
 C<native> (default): the tools are sent with the request (the API's C<tools>),
