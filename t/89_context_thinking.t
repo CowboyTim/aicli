@@ -51,6 +51,10 @@ use TestAI;
     TestAI::setup(AI_API_KEY => 'nvapi-x', AI_LOCAL_SERVER => undef, AI_MODEL => 'nemo', AI_SUMMARY_CHUNKS => 1);
     $req = $::JSON->decode(ai::build_request([{role => 'user', content => 'hi'}]));
     ok($req->{chat_template_kwargs}{enable_thinking}, "request: nvidia keeps thinking on by default");
+    is($req->{max_tokens}, 16384, "request: nvidia answers up to 16384 tokens");
+    TestAI::setup(AI_API_KEY => 'nvapi-x', AI_LOCAL_SERVER => undef, AI_TOKENS => 2000, AI_MODEL => 'nemo', AI_SUMMARY_CHUNKS => 1);
+    $req = $::JSON->decode(ai::build_request([{role => 'user', content => 'hi'}]));
+    is($req->{max_tokens}, 2000, "request: nvidia takes AI_TOKENS");
 
     TestAI::setup(AI_API_KEY => 'sk-proj-x', AI_LOCAL_SERVER => undef, AI_THINKING => 'off', AI_MODEL => 'gpt', AI_SUMMARY_CHUNKS => 1);
     $req = $::JSON->decode(ai::build_request([{role => 'user', content => 'hi'}]));

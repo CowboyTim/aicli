@@ -3601,6 +3601,8 @@ sub req {
     my $req = provider::req(@jstr);
     # thinking on unless the session or AI_THINKING says otherwise (provider::req)
     $req->{chat_template_kwargs} //= {"enable_thinking" => $Types::Serialiser::true};
+    # the answer limit of the API for this model, 16384 (AI_TOKENS overrides)
+    $req->{max_tokens} = $::ORIG_ENV{AI_TOKENS} // 16384;
     $req->{model} //= 'nvidia/nemotron-3.5-lightning-30b-a3b';
     return $req;
 }
