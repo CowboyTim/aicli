@@ -451,9 +451,11 @@ Summarize the older messages now, to free context.
 
 =item B</voice> [seconds]
 
-Record from the microphone for a few seconds (B<AI_VOICE_SECONDS>, 5 by default),
-recognize the speech with the recognizer of B<AI_ASR_URL> and send the text as the
-request. The recording is made by B<AI_RECORDER> (pw-record), as a child process.
+Record from the microphone, recognize the speech with the recognizer of B<AI_ASR_URL>
+and send the text as the request. At a terminal, Enter starts the recording and
+Enter again stops it (B<AI_VOICE_MAX> seconds at most, 60). With a number of
+seconds it records that long; without a terminal, B<AI_VOICE_SECONDS> (5). The
+recording is made by B<AI_RECORDER> (pw-record), as a child process.
 
 =item B</context> [summary]
 

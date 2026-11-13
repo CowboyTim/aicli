@@ -2615,10 +2615,14 @@ our @COMMANDS;
     },
     '/voice' => {
         usage => '/voice [seconds]',
-        help  => 'record from the microphone (AI_VOICE_SECONDS, 5 by default), recognize it (AI_ASR_URL) and send it as the request',
+        help  => 'talk: Enter starts the recording, Enter stops it (or a number of seconds); the speech is recognized (AI_ASR_URL) and sent as the request',
         run   => sub {
             my ($args) = @_;
-            my $secs = ($args // '') =~ m/^\s*(\d+(?:\.\d+)?)\s*$/ ? $1 : ($::ORIG_ENV{AI_VOICE_SECONDS} // 5);
+            # a number: that long; nothing, at a terminal: push to talk; else the default length
+            my $secs = ($args // '') =~ m/^\s*(\d+(?:\.\d+)?)\s*$/ ? $1
+                : ($args // '') =~ m/\S/ ? ($::ORIG_ENV{AI_VOICE_SECONDS} // 5)
+                : (-t STDIN) ? undef
+                : ($::ORIG_ENV{AI_VOICE_SECONDS} // 5);
             local $BUSY = 1;
             my $text = voice_once($secs);
             if(!defined $text){
@@ -2964,26 +2968,91 @@ sub find_program {
     return;
 }
 
-# record $seconds of audio into $file: the recorder runs as a child in the event
-# loop, and gets SIGINT when the time is up (that is how it finishes the file).
-# Returns true when the recording is there.
-sub voice_record {
-    my ($file, $seconds) = @_;
+# start the recorder on $file: a child in the event loop. Returns the job, or
+# undef when there is no recorder. The recorder finishes the file on SIGINT.
+sub voice_start {
+    my ($file) = @_;
     my $rec = $::ORIG_ENV{AI_RECORDER} // 'pw-record';
     my $bin = find_program($rec)
-        or do { log::error("no recorder: $rec is not installed (AI_RECORDER)"); return 0 };
+        or do { log::error("no recorder: $rec is not installed (AI_RECORDER)"); return };
     unlink $file;
-    my $done = 0;
     my $job = loop::spawn(sub {
         exec {$bin} ($rec, '--rate', '16000', '--channels', '1', '--format', 's16', $file)
             or die "cannot run $bin: $!\n";
-    }, on_done => sub {$done = 1});
-    loop::timer($seconds, sub {
-        return if $done;
-        kill('INT', -$job->{pid}, $job->{pid}); # the recorder finishes the file
-        loop::timer(3, sub {kill('KILL', -$job->{pid}, $job->{pid}) unless $done});
-    });
+    }, on_done => sub {$ai::VOICE_DONE->() if $ai::VOICE_DONE});
+    $job->{started} = Time::HiRes::time();
+    return $job;
+}
+
+# the recorder gets SIGINT, and is killed when it does not finish after a while
+sub voice_stop {
+    my ($job) = @_;
+    return unless $job and $loop::child{$job->{pid}};
+    # a recorder that is only starting does not know SIGINT yet: give it a moment
+    my $wait = ($job->{started} // 0) + 0.5 - Time::HiRes::time();
+    if($wait > 0){
+        loop::timer($wait, sub {voice_stop($job)});
+        return;
+    }
+    kill('INT', -$job->{pid}, $job->{pid});
+    loop::timer(3, sub {kill('KILL', -$job->{pid}, $job->{pid}) if $loop::child{$job->{pid}}});
+    return;
+}
+
+# record $seconds of audio into $file. Returns true when the recording is there.
+sub voice_record {
+    my ($file, $seconds) = @_;
+    my $done = 0;
+    local $ai::VOICE_DONE = sub {$done = 1};
+    my $job = voice_start($file) or return 0;
+    loop::timer($seconds, sub {voice_stop($job) unless $done});
     loop::run(sub {$done or utils::aborted()});
+    voice_stop($job) if utils::aborted() and !$done;
+    return 0 if utils::aborted();
+    return -s $file ? 1 : 0;
+}
+
+# push to talk: Enter starts the recording, Enter again stops it. Without a
+# terminal (a pipe), or with a number of seconds, it is a timed recording.
+# AI_VOICE_MAX seconds at most (60 by default).
+sub voice_ptt {
+    my ($file) = @_;
+    my $max = $::ORIG_ENV{AI_VOICE_MAX} // 60;
+    print "${colors::cyan_color}[press Enter to start talking, Enter again to stop, ctrl-C cancels]${colors::reset_color}\n";
+    my ($job, $done, $stage) = (undef, 0, 0); # stage: 0 waiting for the start, 1 recording
+    my $stop = sub {
+        return if $stage == 2;
+        $stage = 2;
+        loop::unwatch(\*STDIN);
+        voice_stop($job) if $job;
+    };
+    local $ai::VOICE_DONE = sub {$done = 1};
+    loop::watch(\*STDIN, sub {
+        my $buf;
+        my $n = sysread(STDIN, $buf, 4096);
+        if(!$n){ # the input ended: what is recorded is the request
+            $stop->();
+            return;
+        }
+        # every Enter is an event, several can come in one read
+        for (1 .. scalar(() = $buf =~ m/\n/g)){
+            if($stage == 0){
+                $job = voice_start($file) or do { $stage = 2; loop::unwatch(\*STDIN); $done = 1; return };
+                $stage = 1;
+                print "${colors::cyan_color}[recording, Enter to stop]${colors::reset_color}\n";
+            } elsif($stage == 1){
+                $stop->();
+                last;
+            } else {
+                last;
+            }
+        }
+    });
+    loop::timer($max, sub {$stop->() unless $done});
+    loop::run(sub {$done or utils::aborted()});
+    loop::unwatch(\*STDIN);
+    $stop->() unless $stage == 2;
+    voice_stop($job) if utils::aborted() and $job and !$done;
     return 0 if utils::aborted();
     return -s $file ? 1 : 0;
 }
@@ -3040,10 +3109,14 @@ sub transcribe {
 
 # one utterance: record, transcribe. Returns the text, undef when there is none
 sub voice_once {
-    my ($seconds) = @_;
+    my ($seconds) = @_; # undef: push to talk
     my $file = "$AI_SESSION_DIR/voice.wav";
-    print "${colors::cyan_color}[recording $seconds s]${colors::reset_color}\n";
-    return unless voice_record($file, $seconds);
+    if(defined $seconds){
+        print "${colors::cyan_color}[recording $seconds s]${colors::reset_color}\n";
+        return unless voice_record($file, $seconds);
+    } else {
+        return unless voice_ptt($file);
+    }
     my $text = transcribe($file);
     return unless defined $text and length $text;
     return $text;

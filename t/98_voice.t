@@ -93,4 +93,39 @@ chmod 0755, $rec;
     is(scalar(@TestAI::REQUESTS), 2, "/voice: one request to the recognizer, one to the model");
 }
 
+# push to talk: Enter starts, Enter stops (the keys come from a file here)
+sub keys_from {
+    my ($name, $keys) = @_;
+    open(my $fh, '>', "$tmp/$name") or die $!;
+    print {$fh} $keys;
+    close $fh;
+    return "$tmp/$name";
+}
+{
+    TestAI::setup(AI_RECORDER => $rec, AI_VOICE_MAX => 10);
+    my $file = "$tmp/ptt.wav";
+    local *STDIN;
+    open(STDIN, '<', keys_from('keys-two', "\n\n")) or die $!;
+    my $out = TestAI::capture {ok(ai::voice_ptt($file), "ptt: start and stop")};
+    is(ai::slurp($file), "RIFFfake", "ptt: the recording is finished");
+    like($out, qr/recording, Enter to stop/, "ptt: said that it records");
+}
+{
+    TestAI::setup(AI_RECORDER => $rec, AI_VOICE_MAX => 10);
+    my $file = "$tmp/ptt2.wav";
+    local *STDIN;
+    open(STDIN, '<', keys_from('keys-one', "\n")) or die $!;
+    TestAI::capture {ok(ai::voice_ptt($file), "ptt: input that ends while recording stops it")};
+    is(ai::slurp($file), "RIFFfake", "ptt: the recording is finished at the end of the input");
+}
+{
+    TestAI::setup(AI_RECORDER => $rec, AI_ASR_URL => 'http://127.0.0.1:52625/v1/audio/transcriptions');
+    TestAI::mock_http(['{"text":"push to talk"}']);
+    local *STDIN;
+    open(STDIN, '<', keys_from('keys-asr', "\n\n")) or die $!;
+    my $text;
+    TestAI::capture {$text = ai::voice_once(undef)};
+    is($text, "push to talk", "ptt: the recording goes to the recognizer");
+}
+
 done_testing();

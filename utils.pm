@@ -397,6 +397,7 @@ use Scalar::Util ();
 use Time::HiRes ();
 
 our ($multi, $net);
+our %watch;            # file handles the loop reads from: fileno => {fh, cb}, see watch()
 our (%http, $http_seq); # running transfers
 our %child;             # running children, by pid
 our @timers;            # [time, callback]
@@ -613,6 +614,7 @@ sub step {
     # that was just closed, and that one is still marked readable
     my @jobs = values %child;
     vec($rin, fileno($_->{fh}), 1) = 1 for @jobs;
+    vec($rin, fileno($_->{fh}), 1) = 1 for values %watch;
     foreach my $due ((map {$_->[0]} @timers), (map {grep {$_} @{$_}{qw(deadline kill_at giveup_at)}} values %child)){
         $t = $due - $now if $due - $now < $t;
     }
@@ -624,6 +626,13 @@ sub step {
     # interrupted by a signal: nothing is readable, whatever the sets say
     $rout = '' if ($ready // -1) <= 0;
     $now = Time::HiRes::time();
+
+    # watched handles (the keyboard, for push to talk): the callback is called
+    # when the handle can be read; it reads what it needs
+    for my $w (values %watch){
+        next unless exists $watch{fileno($w->{fh})} and $watch{fileno($w->{fh})} == $w;
+        $w->{cb}->() if vec($rout // '', fileno($w->{fh}), 1);
+    }
 
     # transfers
     if(%http){
@@ -678,6 +687,19 @@ sub step {
 }
 
 # drive the loop until $until says so
+# Call $cb when $fh can be read, from the loop. unwatch() takes it away again.
+sub watch {
+    my ($fh, $cb) = @_;
+    $watch{fileno($fh)} = {fh => $fh, cb => $cb};
+    return;
+}
+
+sub unwatch {
+    my ($fh) = @_;
+    delete $watch{fileno($fh)};
+    return;
+}
+
 sub run {
     my ($until) = @_;
     step() until $until->();
