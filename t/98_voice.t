@@ -192,6 +192,45 @@ PL
     unlike($TestAI::REQUESTS[0]{data}, qr/name="prompt"/, "prompt: not sent when not set");
 }
 
+# Esc drops the sentence; the input ending before the start gives up (no hang)
+{
+    TestAI::setup(AI_RECORDER => $rec, AI_VOICE_MAX => 10);
+    my $file = "$tmp/esc.wav";
+    local *STDIN;
+    open(STDIN, '<', keys_from('keys-esc', "\n\e")) or die $!;
+    my $res;
+    my $out = TestAI::capture {$res = ai::voice_ptt($file)};
+    is($res, 'cancel', "esc: the sentence is cancelled");
+    like($out, qr/\[recording: Enter sends now, Esc cancels\]/, "esc: the recording was started");
+}
+{
+    TestAI::setup(AI_RECORDER => $rec, AI_VOICE_MAX => 10);
+    local *STDIN;
+    open(STDIN, '<', keys_from('keys-none', '')) or die $!;
+    my $res;
+    TestAI::capture {$res = ai::voice_ptt("$tmp/none.wav")};
+    is($res, 'cancel', "input ended before the start: nothing recorded, and it returns");
+}
+{
+    TestAI::setup(AI_RECORDER => $rec, AI_VOICE_MAX => 10, AI_VOICE_PAUSE => 0.5);
+    my $file = "$tmp/pause.raw";
+    my $pcm = sub { my ($amp, $n) = @_; pack('s<*', map {$_ % 2 ? $amp : -$amp} 1 .. $n) };
+    open(my $fh, '>:raw', $file) or die $!;
+    close $fh;
+    my $ended = 0;
+    my $alive = 1;
+    local $ai::VOICE_END = sub {$ended++};
+    my $append = sub { open(my $a, '>>:raw', $file) or die $!; print {$a} $_[0]; close $a };
+    loop::timer(0.05, sub {$append->($pcm->(16000, 9600))});  # speech: 0.6 s
+    loop::timer(0.9, sub {$append->($pcm->(0, 32000))});      # then silence, 2 s
+    ai::voice_meter_start($file, \$alive);
+    my $t0 = Time::HiRes::time();
+    loop::run(sub {$ended or Time::HiRes::time() - $t0 > 4});
+    $alive = 0;
+    is($ended, 1, "pause: after speech, a pause ends it, once");
+    ok(Time::HiRes::time() - $t0 < 3.5, "pause: it ended after the pause, not at the time limit");
+}
+
 # the recognizer: the text, and what is sent
 {
     TestAI::setup(AI_RECORDER => $rec, AI_ASR_URL => 'http://127.0.0.1:52625/v1/audio/transcriptions');
@@ -248,7 +287,7 @@ sub keys_from {
     open(STDIN, '<', keys_from('keys-two', "\n\n")) or die $!;
     my $out = TestAI::capture {ok(ai::voice_ptt($file), "ptt: start and stop")};
     is(ai::slurp($file), "RIFFfake", "ptt: the recording is finished");
-    like($out, qr/recording, Enter to stop/, "ptt: said that it records");
+    like($out, qr/recording: Enter sends now, Esc cancels/, "ptt: said that it records, and how to send or cancel");
 }
 {
     TestAI::setup(AI_RECORDER => $rec, AI_VOICE_MAX => 10);

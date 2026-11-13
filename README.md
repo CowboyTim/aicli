@@ -45,11 +45,11 @@ framework.
   recorded, `/context` shows the state
 - **Reasoning control**: `AI_THINKING` or `/thinking` turns the reasoning of the
   model on, off or into a token budget, per session
-- **Voice**: `/voice` records from the microphone (push to talk: Enter starts,
-  Enter stops), recognizes the speech with a local recognizer (FastFlowLM on the
-  NPU, `AI_ASR_URL`) and puts the text in the input line: you see it, edit it if
-  the recognizer got it wrong, and Enter sends it (an empty line cancels). A
-  recording with no sound is not sent. While it is made, the footer shows a level meter and the words
+- **Voice**: `/voice` records from the microphone: Enter starts; while you talk
+  the footer shows the words recognized so far (local recognizer, FastFlowLM on
+  the NPU, `AI_ASR_URL`); Enter sends now, a pause after speech sends it
+  (`AI_VOICE_PAUSE`, 1.2 s), Esc cancels the sentence. A recording with no sound
+  is not sent. While it is made, the footer shows a level meter and the words
   recognized so far (a pass every three seconds of new audio; words that two
   passes agree on are final). The text sent at the stop is the whole recording.
   The recording is a child process (`pw-record`) and goes to a private directory
@@ -168,7 +168,7 @@ the model:
 | `/retry` | ask the last request again, its answer and tool runs are dropped |
 | `/rewind [n]` | take the last exchange (or n) out of the conversation |
 | `/compact` | summarize the older messages now, to free context |
-| `/voice [seconds]` | record from the microphone, recognize it (`AI_ASR_URL`), put the words in the input line: edit, Enter sends |
+| `/voice [seconds]` | record from the microphone, recognize it (`AI_ASR_URL`) and send it; push to talk: Enter starts, Enter or a pause sends, Esc cancels |
 | `/context [summary]` | how full the context is, its compactions and the thinking setting; `summary` shows the last summary of the older messages |
 | `/thinking [on\|off\|<tokens>\|default]` | the reasoning of the model for this session |
 | `/system <text>` | add a system message |
@@ -483,6 +483,7 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 | `AI_ASR_MODEL` | model name sent to the transcription endpoint | whisper-large-v3-turbo |
 | `AI_ASR_PROMPT` | words for the recognizer to spell as given, e.g. `Code me, Perl` (sent with every recognition) | none |
 | `AI_VOICE_SECONDS` | length of a timed `/voice` recording, in seconds (no terminal, or `/voice <seconds>`) | 5 |
+| `AI_VOICE_PAUSE` | silence after speech that ends a push-to-talk recording, in seconds | 1.2 |
 | `AI_VOICE_MAX` | longest push-to-talk recording, in seconds | 60 |
 | `AI_AUTO_COMPACT` | compact right after an answer when the conversation is over the threshold; 0: only before a request | 1 |
 | `AI_THINKING` | the reasoning of the model: `on`, `off` or a token budget; `/thinking` sets it per session | server decides |

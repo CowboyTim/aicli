@@ -2623,7 +2623,7 @@ our @COMMANDS;
     },
     '/voice' => {
         usage => '/voice [seconds]',
-        help  => 'talk: Enter starts the recording, Enter stops it (or a number of seconds); the words are put in the input line: edit them, Enter sends',
+        help  => 'talk: Enter starts, then Enter or a pause sends the words, Esc cancels (or a number of seconds)',
         run   => sub {
             my ($args) = @_;
             # a number: that long; nothing, at a terminal: push to talk; else the default length
@@ -2633,26 +2633,11 @@ our @COMMANDS;
                 : ($::ORIG_ENV{AI_VOICE_SECONDS} // 5);
             my $text = do {local $BUSY = 1; voice_once($secs)};
             if(!defined $text){
-                print "Nothing heard.\n" unless utils::aborted();
+                print "Nothing heard.\n" unless utils::aborted() or $ai::VOICE_CANCELLED;
                 $::ABORT = 0;
                 return 0;
             }
             print "${colors::blue_color3}heard:${colors::reset_color} ".to_text($text)."\n";
-            if(-t STDIN and $::T){
-                # the words are put in the input line: edit them, Enter sends,
-                # an empty line cancels. The model only sees what is sent.
-                print "${colors::cyan_color}[Enter sends it, edit first if it is wrong, an empty line cancels]${colors::reset_color}\n";
-                my $line = eval {$::T->readline(get_chat_prompt($::P1OR2), to_text($text))};
-                if($@ =~ m/EXIT WANTED: 6df87ccd-2c9a-4303-982c-54b60ebb2aa1/){
-                    return 1;
-                }
-                $::ABORT = 0;
-                if(!defined $line or $line !~ m/\S/){
-                    print "${colors::cyan_color}[cancelled]${colors::reset_color}\n";
-                    return 0;
-                }
-                $text = $line;
-            }
             chat_completion(to_text($text));
             $::ABORT = 0;
             return 0;
@@ -3039,14 +3024,28 @@ sub voice_meter {
 # samples the level of the file, every 0.15 s, until the flag is cleared
 sub voice_meter_start {
     my ($file, $alive) = @_;
+    my $pause = $::ORIG_ENV{AI_VOICE_PAUSE} // 1.2;
+    my ($spoke, $quiet_since) = (0, undef);
     my $sample;
     $sample = sub {
         if(!$$alive){
             undef $sample; # the closure refers to itself
             return;
         }
-        push @VOICE_LEVELS, voice_level($file);
+        my $level = voice_level($file);
+        push @VOICE_LEVELS, $level;
         shift @VOICE_LEVELS while @VOICE_LEVELS > 8;
+        my $now = Time::HiRes::time();
+        if($level >= 0.17){ # speech: about -50 dB and louder
+            $spoke = 1;
+            $quiet_since = undef;
+        } elsif($spoke){
+            $quiet_since //= $now;
+            if($now - $quiet_since >= $pause and $ai::VOICE_END){
+                $spoke = 0;
+                $ai::VOICE_END->();
+            }
+        }
         loop::timer(0.15, $sample);
     };
     $sample->();
@@ -3156,12 +3155,14 @@ sub voice_preview_start {
                     my $n = read($fh, my $pcm, $size - $at) // 0;
                     close($fh);
                     $sent_to = $at + $n;
-                    if(pcm_peak($pcm) >= 500){
+                    if(pcm_peak($pcm) >= 100){ # about -50 dB: speech this quiet still counts
                         $busy = 1;
                         my $seconds = $n / $rate;
+                        log::info("voice preview: pass of $seconds s");
                         voice_preview_send($pcm, sub {
                             my ($segs) = @_;
                             $busy = 0;
+                            log::info("voice preview: ".(defined $segs ? scalar(@$segs)." segments" : "no answer"));
                             return unless $segs;
                             my ($c, $trim) = heard_agree($segs, $prev, $seconds);
                             if($c){
@@ -3258,42 +3259,62 @@ sub voice_record {
 sub voice_ptt {
     my ($file) = @_;
     my $max = $::ORIG_ENV{AI_VOICE_MAX} // 60;
-    print "${colors::cyan_color}[press Enter to start talking, Enter again to stop, ctrl-C cancels]${colors::reset_color}\n";
-    my ($job, $done, $stage) = (undef, 0, 0); # stage: 0 waiting for the start, 1 recording
+    print "${colors::cyan_color}[press Enter to start talking; then Enter sends now, a pause sends it, Esc cancels, ctrl-C ends]${colors::reset_color}\n";
+    my ($job, $done, $stage, $cancelled) = (undef, 0, 0, 0); # stage: 0 waiting for the start, 1 recording, 2 over
     my $stop = sub {
         return if $stage == 2;
         $stage = 2;
         loop::unwatch(\*STDIN);
         voice_stop($job) if $job;
     };
+    # Esc: the sentence is dropped, nothing is sent
+    my $cancel = sub {
+        return if $cancelled or $stage == 2;
+        $cancelled = 1;
+        if($stage == 1){
+            $stop->(); # the recorder ends, then $done
+        } else {
+            $stage = 2;
+            loop::unwatch(\*STDIN);
+            $done = 1;
+        }
+    };
     local $ai::VOICE_DONE = sub {$done = 1};
+    # a pause after the speech (voice_meter_start) sends it
+    local $ai::VOICE_END = sub {$stop->() if $stage == 1};
     loop::watch(\*STDIN, sub {
         my $buf;
         my $n = sysread(STDIN, $buf, 4096);
-        if(!$n){ # the input ended: what is recorded is the request
-            $stop->();
+        if(!$n){ # the input ended: what is recorded is the request, else nothing
+            $stage == 1 ? $stop->() : $cancel->();
             return;
         }
-        # every Enter is an event, several can come in one read
-        for (1 .. scalar(() = $buf =~ m/\n/g)){
-            if($stage == 0){
-                $job = voice_start($file) or do { $stage = 2; loop::unwatch(\*STDIN); $done = 1; return };
-                $stage = 1;
-                print "${colors::cyan_color}[recording, Enter to stop]${colors::reset_color}\n";
-            } elsif($stage == 1){
-                $stop->();
-                last;
-            } else {
-                last;
+        (my $keys = $buf) =~ s/\e\[[0-9;?]*[ -\/]*[@-~]//g; # arrow keys and the like
+        for my $key (split //, $keys){
+            if($key eq "\n" or $key eq "\r"){
+                if($stage == 0){
+                    $job = voice_start($file) or do { $stage = 2; loop::unwatch(\*STDIN); $done = 1; return };
+                    $stage = 1;
+                    print "${colors::cyan_color}[recording: Enter sends now, Esc cancels]${colors::reset_color}\n";
+                    loop::timer($max, sub {$stop->() unless $done});
+                } elsif($stage == 1){
+                    $stop->();
+                    return;
+                } else {
+                    return;
+                }
+            } elsif($key eq "\e"){
+                $cancel->();
+                return;
             }
         }
     });
-    loop::timer($max, sub {$stop->() unless $done});
     loop::run(sub {$done or utils::aborted()});
     loop::unwatch(\*STDIN);
     $stop->() unless $stage == 2;
     voice_stop($job) if utils::aborted() and $job and !$done;
     return 0 if utils::aborted();
+    return 'cancel' if $cancelled;
     return -s $file ? 1 : 0;
 }
 
@@ -3355,7 +3376,7 @@ sub transcribe {
 # one utterance: record, transcribe. Returns the text, undef when there is none
 # true when a recording has no sound in it: the recognizer makes up a word
 # for silence ("you"), so it is not sent. The loudest sample of the 16-bit PCM
-# data must reach at least 500 (about -36 dBFS). A file that is not a WAV
+# data must reach at least 100 (about -50 dBFS). A file that is not a WAV
 # with data counts as sound.
 sub voice_quiet {
     my ($file) = @_;
@@ -3368,7 +3389,7 @@ sub voice_quiet {
         my $abs = abs($sample);
         $peak = $abs if $abs > $peak;
     }
-    return $peak < 500;
+    return $peak < 100; # about -50 dB
 }
 
 # where a recording goes: a directory of this user in the temp dir. The
@@ -3391,8 +3412,11 @@ sub voice_dir {
     return $dir;
 }
 
+our $VOICE_CANCELLED; # set when the last sentence was cancelled
+
 sub voice_once {
     my ($seconds) = @_; # undef: push to talk
+    $VOICE_CANCELLED = 0;
     my $dir = voice_dir() or return;
     my $file = "$dir/voice.wav";
     my $got;
@@ -3401,6 +3425,12 @@ sub voice_once {
         $got = voice_record($file, $seconds);
     } else {
         $got = voice_ptt($file);
+    }
+    if(defined $got and $got eq 'cancel'){
+        $VOICE_CANCELLED = 1;
+        unlink $file;
+        print "${colors::cyan_color}[cancelled]${colors::reset_color}\n";
+        return;
     }
     my $text;
     if($got and voice_quiet($file)){
