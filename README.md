@@ -480,6 +480,7 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 | `AI_RECORDER` | recorder program for `/voice` (pw-record, PipeWire) | pw-record |
 | `AI_ASR_URL` | OpenAI compatible transcription endpoint for `/voice` (FastFlowLM: `http://localhost:52625/v1/audio/transcriptions`) | none: no voice |
 | `AI_ASR_MODEL` | model name sent to the transcription endpoint | whisper-large-v3-turbo |
+| `AI_ASR_PROMPT` | words for the recognizer to spell as given, e.g. `Code me, Perl` (sent with every recognition) | none |
 | `AI_VOICE_SECONDS` | length of a timed `/voice` recording, in seconds (no terminal, or `/voice <seconds>`) | 5 |
 | `AI_VOICE_MAX` | longest push-to-talk recording, in seconds | 60 |
 | `AI_AUTO_COMPACT` | compact right after an answer when the conversation is over the threshold; 0: only before a request | 1 |

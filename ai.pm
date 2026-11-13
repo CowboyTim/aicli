@@ -3092,10 +3092,7 @@ sub wav_data_start {
 sub voice_preview_send {
     my ($pcm, $done) = @_;
     my $boundary = 'aicli'.int(rand(1e9)).'x'.int(rand(1e9));
-    my $body = multipart_body($boundary,
-        ['model', $::ORIG_ENV{AI_ASR_MODEL} // 'whisper-large-v3-turbo'],
-        ['response_format', 'verbose_json'],
-        ['file', wav_of_pcm($pcm), 'voice.wav', 'audio/wav']);
+    my $body = multipart_body($boundary, asr_parts(), ['response_format', 'verbose_json'], ['file', wav_of_pcm($pcm), 'voice.wav', 'audio/wav']);
     loop::http(
         method  => 'post',
         url     => $::ORIG_ENV{AI_ASR_URL},
@@ -3297,6 +3294,14 @@ sub multipart_body {
     return $body."--$boundary--\r\n";
 }
 
+# the fields every recognizer request has: the model, and AI_ASR_PROMPT (words
+# the recognizer should spell as given, e.g. "Code me, Perl") when it is set
+sub asr_parts {
+    my @parts = (['model', $::ORIG_ENV{AI_ASR_MODEL} // 'whisper-large-v3-turbo']);
+    push @parts, ['prompt', $::ORIG_ENV{AI_ASR_PROMPT}] if length($::ORIG_ENV{AI_ASR_PROMPT} // '');
+    return @parts;
+}
+
 # the text of a recording, from the speech recognizer; undef when it failed
 sub transcribe {
     my ($file) = @_;
@@ -3306,10 +3311,7 @@ sub transcribe {
     my $wav = do { local $/; <$fh> };
     close($fh);
     my $boundary = 'aicli'.int(rand(1e9)).'x'.int(rand(1e9));
-    my $body = multipart_body($boundary,
-        ['model', $::ORIG_ENV{AI_ASR_MODEL} // 'whisper-large-v3-turbo'],
-        ['response_format', 'json'],
-        ['file', $wav, 'voice.wav', 'audio/wav']);
+    my $body = multipart_body($boundary, asr_parts(), ['response_format', 'json'], ['file', $wav, 'voice.wav', 'audio/wav']);
     my $resp = '';
     utils::http('post', $url, $body, undef, sub {
         my ($ch, $raw) = @_;

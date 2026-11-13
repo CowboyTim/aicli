@@ -742,13 +742,16 @@ Compact the conversation right after an answer when it is over the threshold
 (B<AI_CONTEXT_THRESHOLD>), so that the work happens between the turns. Not with
 B<-p>. Set to 0 to compact only before a request that needs it. Default: 1
 
-=item B<AI_RECORDER>, B<AI_ASR_URL>, B<AI_ASR_MODEL>, B<AI_VOICE_SECONDS>
+=item B<AI_RECORDER>, B<AI_ASR_URL>, B<AI_ASR_MODEL>, B<AI_ASR_PROMPT>, B<AI_VOICE_SECONDS>
 
 Speech for B</voice>: the recorder program (C<pw-record>: PipeWire, its socket is
 shared with the container), the OpenAI compatible transcription endpoint (for
 FastFlowLM on the NPU: C<http://localhost:52625/v1/audio/transcriptions>, no
 default), the model name it expects (C<whisper-large-v3-turbo>), and the default
-length of a recording in seconds (5).
+length of a recording in seconds (5). B<AI_ASR_PROMPT> is sent with every
+recognition as the prompt of the recognizer: words it should spell as given
+(names, C<Code me>, C<Perl>), it biases the spelling and does not change the
+rest.
 
 =item B<AI_SUMMARY_CHUNKS>
 

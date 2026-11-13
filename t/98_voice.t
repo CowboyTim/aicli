@@ -177,6 +177,21 @@ PL
     is_deeply($ai::TUI->{calls}, ['set recording', 'set heard', 'unset recording', 'unset heard'], "preview: the footer items come and go");
 }
 
+# AI_ASR_PROMPT goes to the recognizer, with the model
+{
+    my $f = "$tmp/prompt.wav";
+    ai::spew($f, "RIFFprompt");
+    TestAI::setup(AI_ASR_URL => 'http://127.0.0.1:52625/v1/audio/transcriptions', AI_ASR_PROMPT => 'Code me, Perl.');
+    TestAI::mock_http(['{"text":"Code me"}']);
+    is(ai::transcribe($f), "Code me", "prompt: the text");
+    like($TestAI::REQUESTS[0]{data}, qr/name="prompt"\r\n\r\nCode me, Perl\.\r\n/, "prompt: sent with the request");
+    like($TestAI::REQUESTS[0]{data}, qr/name="model"\r\n\r\nwhisper-large-v3-turbo\r\n/, "prompt: the model is still there");
+    TestAI::setup(AI_ASR_URL => 'http://127.0.0.1:52625/v1/audio/transcriptions');
+    TestAI::mock_http(['{"text":"hi"}']);
+    ai::transcribe($f);
+    unlike($TestAI::REQUESTS[0]{data}, qr/name="prompt"/, "prompt: not sent when not set");
+}
+
 # the recognizer: the text, and what is sent
 {
     TestAI::setup(AI_RECORDER => $rec, AI_ASR_URL => 'http://127.0.0.1:52625/v1/audio/transcriptions');
