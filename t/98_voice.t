@@ -102,14 +102,22 @@ chmod 0755, $rec;
     is_deeply($ai::TUI->{calls}, ['set recording', 'unset recording'], "meter: the item comes and goes with the recorder");
 }
 
-# while it is recorded: every three seconds go to the recognizer, the words
-# are in the footer, and the footer item goes when the recording is over
+# the preview while it is recorded: passes over the new audio, the words that
+# two passes agree on are final, the footer shows the rest
 {
     is(length(ai::wav_of_pcm("abcd")), 44 + 4, "wav: a 44 byte header and the data");
     like(ai::wav_of_pcm("abcd"), qr/\ARIFF.{4}WAVEfmt .{4}.{16}data\x04\x00\x00\x00abcd\z/s, "wav: the header of 16 kHz mono 16 bit");
     is(ai::pcm_peak(pack('s<*', 3, -700, 20)), 700, "peak: the loudest sample");
 
-    # a recorder that has four seconds of noise in the file at once
+    # agreement: the segments both passes give the same way, the last never
+    is_deeply([ai::heard_agree([{text => 'a', end => 1}, {text => 'b', end => 2}, {text => 'c', end => 3}],
+                               [{text => 'a', end => 1}, {text => 'b', end => 2}, {text => 'x', end => 3}], 6)],
+              [2, 2], "agree: two agreeing segments are final, the last is not");
+    is_deeply([ai::heard_agree([{text => 'a', end => 1}, {text => 'b', end => 2}], [], 6)], [0, 0], "agree: nothing without a pass before");
+    is_deeply([ai::heard_agree([{text => 'a', end => 1}, {text => 'b', end => 2}], [], 30)], [1, 1], "agree: a long buffer is cut at its last segment");
+    is_deeply([ai::heard_agree([{text => 'Hello,', end => 1}, {text => 'x', end => 2}], [{text => 'hello', end => 1}], 6)], [1, 1], "agree: punctuation and case do not count");
+
+    # two passes: the recording comes in two parts, the second pass sees the new part
     my $prec = "$tmp/preview-recorder";
     open(my $ph, '>', $prec) or die $!;
     print {$ph} <<"PL";
@@ -117,10 +125,18 @@ chmod 0755, $rec;
 use strict; use warnings;
 my \$out = \$ARGV[-1];
 \$SIG{INT} = sub { exit 0 };
-my \$pcm = pack('s<*', map {int(rand(20000)) - 10000} 1 .. 64000);
+\$| = 1;
+sub noise { pack('s<*', map {int(rand(20000)) - 10000} 1 .. \$_[0]) }
 open(my \$fh, '>:raw', \$out) or die "cannot write \$out: \$!\\n";
-print {\$fh} 'RIFF'.pack('V', 36 + length \$pcm).'WAVE'.'fmt '.pack('V', 16).pack('vvVVvv', 1, 1, 16000, 32000, 2, 16).'data'.pack('V', length \$pcm).\$pcm;
-close \$fh;
+print {\$fh} 'RIFF'.pack('V', 0).'WAVE'.'fmt '.pack('V', 16).pack('vvVVvv', 1, 1, 16000, 32000, 2, 16).'data'.pack('V', 0);
+print {\$fh} noise(56000); # 3.5 s
+\$fh->flush;
+select(undef, undef, undef, 0.7);
+print {\$fh} noise(56000);
+\$fh->flush;
+select(undef, undef, undef, 0.7);
+print {\$fh} noise(48000); # 3 s more
+\$fh->flush;
 sleep 1 while 1;
 PL
     close $ph;
@@ -129,20 +145,35 @@ PL
     TestAI::setup(AI_RECORDER => $prec, AI_ASR_URL => 'http://127.0.0.1:52625/v1/audio/transcriptions');
     package FakeTUI2 { sub new { bless {calls => []}, shift } sub set { push @{$_[0]{calls}}, "set $_[1]" } sub unset { push @{$_[0]{calls}}, "unset $_[1]" } sub clear {} }
     local $ai::TUI = FakeTUI2->new;
+    my @answers = (
+        [{text => ' hello there', end => 1.5}, {text => ' general', end => 3.0}],
+        [{text => ' hello there', end => 1.5}, {text => ' general kenobi', end => 3.0}, {text => ' you are', end => 3.4}],
+        [{text => ' general kenobi', end => 1.5}, {text => ' you are', end => 1.9}, {text => ' now', end => 2.5}],
+    );
     my @sent;
     no warnings 'redefine';
     local *loop::http = sub {
         my (%r) = @_;
         push @sent, \%r;
-        $r{on_done}->({body => '{"text":"  hello there  "}', code => 200, error => undef});
+        my $segs = shift @answers;
+        $r{on_done}->({body => $::JSON->encode({text => 'ignored', segments => $segs}), code => 200, error => undef});
         return;
     };
     my $ok;
-    TestAI::capture {$ok = ai::voice_record("$tmp/preview.wav", 1.5)};
+    TestAI::capture {$ok = ai::voice_record("$tmp/preview.wav", 3.5)};
     ok($ok, "preview: the recording was made");
-    is(scalar(@sent), 1, "preview: one chunk of three seconds went to the recognizer (the rest was less)");
-    like($sent[0]{data}, qr/name="file"; filename="voice\.wav".*\r\n\r\nRIFF/s, "preview: the chunk is a WAV file");
-    is(ai::voice_heard(), "hello there", "preview: the words are shown");
+    is(scalar(@sent), 3, "preview: three passes went to the recognizer");
+    my $datalen = sub {
+        my ($body) = @_;
+        my $fmt = index($body, 'WAVEfmt ');
+        my $at = index($body, 'data', $fmt);
+        return unpack('V', substr($body, $at + 4, 4));
+    };
+    is($datalen->($sent[0]{data}), 112000, "preview: the first pass is the audio so far, 3.5 seconds");
+    is($datalen->($sent[1]{data}), 224000, "preview: the second pass is all of it, 7 seconds: the words are final only after it");
+    is($datalen->($sent[2]{data}), 272000, "preview: the third starts where the final words end (1.9 s in), 8.5 seconds");
+    like($sent[0]{data}, qr/name="response_format"\r\n\r\nverbose_json/, "preview: the passes ask for the segments");
+    is(ai::voice_heard(), "hello there general kenobi you are now", "preview: the final words and the rest of the last pass");
     is_deeply($ai::TUI->{calls}, ['set recording', 'set heard', 'unset recording', 'unset heard'], "preview: the footer items come and go");
 }
 

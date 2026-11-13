@@ -3039,16 +3039,41 @@ sub voice_meter_start {
     return;
 }
 
-# the texts of the chunks of the recording in progress (the footer shows them)
-our @VOICE_HEARD;
+# the preview of the recording in progress: the words that are final (two
+# passes agree on them) and the provisional ones of the last pass
+our @HEARD_COMMITTED;
+our @HEARD_PROVISIONAL;
 
 sub voice_heard {
-    my $t = join(' ', @VOICE_HEARD);
+    my $t = join(' ', grep {length} @HEARD_COMMITTED, @HEARD_PROVISIONAL);
     $t =~ s/\s+/ /g;
     $t =~ s/\A //;
     $t =~ s/ \z//;
     return tui::glyph('ellipsis') unless length $t;
     return length($t) > 60 ? tui::glyph('ellipsis').substr($t, -60) : $t;
+}
+
+sub heard_norm {
+    my ($t) = @_;
+    $t = lc($t // '');
+    $t =~ s/[^\w]+//g;
+    return $t;
+}
+
+# LocalAgreement over the segments of two passes on the same audio: the
+# segments both passes give the same way are final. The last segment never is
+# (it is cut off where the audio ends). Without agreement, a buffer of more
+# than 25 seconds is committed up to its last segment. Returns how many
+# segments are final, and the seconds of audio they cover.
+sub heard_agree {
+    my ($segs, $prev, $seconds) = @_;
+    my $n = @$segs;
+    my $c = 0;
+    while($c < $n - 1 and $c < @$prev and heard_norm($segs->[$c]{text}) eq heard_norm($prev->[$c]{text})){
+        $c++;
+    }
+    $c = $n - 1 if $c == 0 and $n > 1 and $seconds > 25;
+    return ($c, $c ? ($segs->[$c - 1]{end} // 0) : 0);
 }
 
 # where the data of a WAV file starts; undef while its header is not there
@@ -3061,14 +3086,15 @@ sub wav_data_start {
     return ($at < 0 or $at + 8 > $n) ? undef : $at + 8;
 }
 
-# a chunk of the recording to the recognizer; the words go to @VOICE_HEARD.
-# $done is called when the request is over, however it went.
+# the audio buffer to the recognizer as verbose JSON; $done gets the segments
+# [{text, end}] (end in seconds from the start of the audio), or undef when it
+# failed
 sub voice_preview_send {
     my ($pcm, $done) = @_;
     my $boundary = 'aicli'.int(rand(1e9)).'x'.int(rand(1e9));
     my $body = multipart_body($boundary,
         ['model', $::ORIG_ENV{AI_ASR_MODEL} // 'whisper-large-v3-turbo'],
-        ['response_format', 'json'],
+        ['response_format', 'verbose_json'],
         ['file', wav_of_pcm($pcm), 'voice.wav', 'audio/wav']);
     loop::http(
         method  => 'post',
@@ -3078,26 +3104,28 @@ sub voice_preview_send {
         headers => ["Content-Type: multipart/form-data; boundary=$boundary", "Accept: application/json", "User-Agent: AI Chat/0.1"],
         on_done => sub {
             my ($r) = @_;
-            $done->();
             my $d = eval {$::JSON->decode($r->{body} // '')};
-            return unless ref($d) eq 'HASH' and defined $d->{text};
-            my $text = $d->{text};
-            $text =~ s/\s+/ /g;
-            $text =~ s/\A //;
-            $text =~ s/ \z//;
-            return unless $text =~ m/\w/; # " ." and the like are no words
-            push @VOICE_HEARD, $text;
+            my $segs;
+            if(ref($d) eq 'HASH'){
+                if(ref($d->{segments}) eq 'ARRAY'){
+                    $segs = [map {+{text => $_->{text} // '', end => $_->{end} // 0}} grep {ref($_) eq 'HASH'} @{$d->{segments}}];
+                } elsif(defined $d->{text}){
+                    $segs = [{text => $d->{text}, end => length($pcm) / 32000}];
+                }
+            }
+            $done->($segs);
         },
     );
     return;
 }
 
-# every three seconds of the recording go to the recognizer while it is made:
-# one request at a time, and a part without sound is not sent
+# every three seconds of new audio, the whole audio since the last final words
+# goes to the recognizer while the recording is made: one request at a time,
+# and audio without sound is not sent
 sub voice_preview_start {
     my ($file, $alive) = @_;
-    my $chunk = 3 * 16000 * 2; # three seconds, 16 kHz, 16 bit
-    my ($at, $busy) = (undef, 0);
+    my $rate = 32000; # bytes per second: 16 kHz, 16 bit, mono
+    my ($at, $sent_to, $busy, $prev) = (undef, 0, 0, []);
     my $tick;
     $tick = sub {
         if(!$$alive){
@@ -3107,14 +3135,36 @@ sub voice_preview_start {
         if(!$busy){
             $at //= wav_data_start($file);
             my $size = -s $file // 0;
-            if(defined $at and $size - $at >= $chunk and open(my $fh, '<:raw', $file)){
-                seek($fh, $at, 0);
-                my $got = read($fh, my $pcm, $chunk) // 0;
-                close($fh);
-                $at += $got;
-                if(pcm_peak($pcm) >= 500){
-                    $busy = 1;
-                    voice_preview_send($pcm, sub {$busy = 0});
+            if(defined $at){
+                $size -= ($size - $at) % 2; # whole samples
+                if($size - $sent_to >= 3 * $rate and open(my $fh, '<:raw', $file)){
+                    seek($fh, $at, 0);
+                    my $n = read($fh, my $pcm, $size - $at) // 0;
+                    close($fh);
+                    $sent_to = $at + $n;
+                    if(pcm_peak($pcm) >= 500){
+                        $busy = 1;
+                        my $seconds = $n / $rate;
+                        voice_preview_send($pcm, sub {
+                            my ($segs) = @_;
+                            $busy = 0;
+                            return unless $segs;
+                            my ($c, $trim) = heard_agree($segs, $prev, $seconds);
+                            if($c){
+                                push @HEARD_COMMITTED, map {$_->{text}} @$segs[0 .. $c - 1];
+                                $at += int($trim * $rate / 2) * 2;
+                                $prev = [map {+{text => $_->{text}, end => $_->{end} - $trim}} @$segs[$c .. $#$segs]];
+                            } else {
+                                $prev = $segs;
+                            }
+                            @HEARD_PROVISIONAL = map {$_->{text}} @$prev;
+                        });
+                    } elsif($sent_to - $at > 25 * $rate){
+                        # silence for long: the buffer starts after it
+                        $at = $sent_to;
+                        $prev = [];
+                        @HEARD_PROVISIONAL = ();
+                    }
                 }
             }
         }
@@ -3132,7 +3182,8 @@ sub voice_start {
     unlink $file;
     my $alive = 1;
     my $preview = length($::ORIG_ENV{AI_ASR_URL} // '') ? 1 : 0;
-    @VOICE_HEARD = ();
+    @HEARD_COMMITTED = ();
+    @HEARD_PROVISIONAL = ();
     my $job = loop::spawn(sub {
         exec {$bin} ($rec, '--rate', '16000', '--channels', '1', '--format', 's16', $file)
             or die "cannot run $bin: $!\n";
