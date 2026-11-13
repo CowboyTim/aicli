@@ -288,10 +288,23 @@ when the variable is set.
 
 =item B<image>
 
-Look at an image file in the workspace: PNG, JPEG, GIF or WebP, at most
-B<AI_IMAGE_MAX> bytes. The picture is sent to the model with the next message,
-so it can read the text in it or describe it. Only with B<AI_VISION=1>, and only
-for a model that takes pictures.
+Look at an image file in the workspace: PNG, JPEG, GIF or WebP. The picture is
+sent to the model with the next message, so it can read the text in it or
+describe it. A picture bigger than B<AI_IMAGE_MAX> is made smaller with
+ImageMagick, as a JPEG. Only with B<AI_VISION=1>, and only for a model that
+takes pictures.
+
+=item B<convert>
+
+Convert a picture with ImageMagick (the C<magick> or C<convert> program on the
+PATH; the tool is only offered when one is there). The output name sets the
+format: png, jpg, gif, webp, bmp or tif. Options: a largest width and height
+(the proportions are kept, a picture is never made bigger), a crop
+(WIDTHxHEIGHT+X+Y), a turn by 90, 180 or 270 degrees, the quality of jpg and
+webp. The metadata (GPS, camera) is removed and the picture is turned upright.
+The program runs in a forked child with no shell, and with the policy in
+F<ai/imagemagick/policy.xml>: only these formats are read or written, and
+PostScript, PDF, SVG and the like, programs and the network are not used.
 
 =item B<agent>
 
@@ -694,8 +707,14 @@ Default: off.
 
 =item B<AI_IMAGE_MAX>
 
-Largest picture the B<image> tool reads, in bytes. Default: 5242880 (5 MB, the
-smallest limit of the APIs), 0 for no limit.
+Largest picture the B<image> tool sends, in bytes. A bigger one is made smaller
+with ImageMagick. Default: 5242880 (5 MB, the smallest limit of the APIs), 0 for
+no limit.
+
+=item B<AI_CONVERT_MAX>
+
+Largest input of the B<convert> tool, in bytes. Default: 52428800 (50 MB), 0 for
+no limit.
 
 =item B<AI_RAW>
 

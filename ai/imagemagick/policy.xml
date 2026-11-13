@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ImageMagick policy for aicli. The convert tool, and the shrinking of a
+  picture for the image tool, run ImageMagick with MAGICK_CONFIGURE_PATH set to
+  this directory, so this file is read before the one in /etc.
+
+  Every coder is off, then the picture formats the tools take are switched on
+  again. The last rule that matches wins, so the allow rules come after the
+  deny rule. PostScript and PDF would run ghostscript; SVG, MSL, MVG, URL and
+  the rest read other files, programs or the network. Delegates (external
+  programs) are off too. Resources are capped, so one conversion stays small.
+  https://imagemagick.org/script/security-policy.php
+-->
+<policymap>
+  <policy domain="resource" name="thread" value="2"/>
+  <policy domain="resource" name="time" value="60"/>
+  <policy domain="resource" name="file" value="768"/>
+  <policy domain="resource" name="memory" value="256MiB"/>
+  <policy domain="resource" name="map" value="512MiB"/>
+  <policy domain="resource" name="width" value="16KP"/>
+  <policy domain="resource" name="height" value="16KP"/>
+  <policy domain="resource" name="area" value="64MP"/>
+  <policy domain="resource" name="disk" value="1GiB"/>
+  <policy domain="resource" name="list-length" value="32"/>
+  <policy domain="delegate" rights="none" pattern="*"/>
+  <policy domain="filter" rights="none" pattern="*"/>
+  <policy domain="path" rights="none" pattern="@*"/>
+  <policy domain="path" rights="none" pattern="-"/>
+  <policy domain="coder" rights="none" pattern="*"/>
+  <policy domain="coder" rights="read|write" pattern="PNG"/>
+  <policy domain="coder" rights="read|write" pattern="JPEG"/>
+  <policy domain="coder" rights="read|write" pattern="JPG"/>
+  <policy domain="coder" rights="read|write" pattern="GIF"/>
+  <policy domain="coder" rights="read|write" pattern="WEBP"/>
+  <policy domain="coder" rights="read|write" pattern="BMP"/>
+  <policy domain="coder" rights="read|write" pattern="TIFF"/>
+  <policy domain="coder" rights="read|write" pattern="TIF"/>
+</policymap>

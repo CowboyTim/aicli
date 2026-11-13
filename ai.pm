@@ -1107,6 +1107,11 @@ sub show_changes {
     my @changes = splice(@tools::CHANGES);
     return unless $printer and ($::ORIG_ENV{AI_SHOW_DIFF} // 1);
     foreach my $ch (@changes){
+        if($ch->{binary}){
+            # a picture: there is no diff of its bytes
+            &{$printer}("  ${colors::cyan_color}$ch->{path}".(defined $ch->{old} ? "" : " (new)").": a picture${colors::reset_color}\n");
+            next;
+        }
         my ($diff, $added, $removed) = format_diff($ch->{old}, $ch->{new}, max => $::ORIG_ENV{AI_DIFF_LINES} // 40);
         next unless length($diff);
         &{$printer}("  ${colors::cyan_color}$ch->{path}".(defined $ch->{old} ? "" : " (new)").": +$added -$removed${colors::reset_color}\n$diff");
@@ -4291,7 +4296,7 @@ EOb
         required => ["path"],
     },
     image => {
-        description => "look at an image file in the workspace (PNG, JPEG, GIF or WebP): the picture comes with the next message, so you can read the text in it or describe what it shows",
+        description => "look at an image file in the workspace (PNG, JPEG, GIF or WebP; a bigger one is made smaller): the picture comes with the next message, so you can read the text in it or describe what it shows",
         syntax => "///IMAGE_4e0b+EO_a1f7\n{{path}}\nEO_a1f7[LENGTH({{path}})]\nIMAGE_4e0b",
         properties  => {
             "path" => {type => "string", description => "The image file"},
@@ -4300,6 +4305,22 @@ EOb
         # only with AI_VISION=1, for a model that takes pictures: a text model
         # can not read them, and the picture would stay in the conversation
         available => sub {$::ORIG_ENV{AI_VISION} ? 1 : 0},
+    },
+    convert => {
+        description => "convert a picture with ImageMagick and write it to the output name: a smaller size (the proportions are kept, a picture is never made bigger), a crop, a turn, another format (by the name: png, jpg, gif, webp, bmp, tif), the quality of jpg and webp. The metadata (GPS, camera) is removed and the picture turned upright. Input and output are in the workspace",
+        syntax => "///CONVERT_5d1a+EO_c7e2+EO_0b93+EO_4a6f+EO_e18c+EO_7d20+EO_b5f9+EO_3c61\n{{input}}\nEO_c7e2[LENGTH({{input}})]\n{{output}}\nEO_0b93[LENGTH({{output}})]\n{{width}}\nEO_4a6f[LENGTH({{width}})]\n{{height}}\nEO_e18c[LENGTH({{height}})]\n{{crop}}\nEO_7d20[LENGTH({{crop}})]\n{{rotate}}\nEO_b5f9[LENGTH({{rotate}})]\n{{quality}}\nEO_3c61[LENGTH({{quality}})]\nCONVERT_5d1a",
+        properties  => {
+            "input"   => {type => "string", description => "The picture to read"},
+            "output"  => {type => "string", description => "The file to write: its name ends in .png, .jpg, .gif, .webp, .bmp or .tif, and that sets the format"},
+            "width"   => {type => "string", description => "The largest width in pixels; empty to keep the width"},
+            "height"  => {type => "string", description => "The largest height in pixels; empty to keep the height"},
+            "crop"    => {type => "string", description => "The part to keep, as WIDTHxHEIGHT+X+Y, such as 800x600+0+0; empty for none"},
+            "rotate"  => {type => "string", description => "90, 180 or 270 degrees clockwise; empty for none"},
+            "quality" => {type => "string", description => "From 1 to 100, for jpg and webp; empty for the default"},
+        },
+        required => ["input", "output"],
+        # only where the ImageMagick program is installed
+        available => sub {tools::_magick() ? 1 : 0},
     },
     };
 
@@ -4584,17 +4605,22 @@ sub image_4e0b {
     die "not a file: $path\n" unless -f $path;
     my $size = -s $path;
     my $max  = $::ORIG_ENV{AI_IMAGE_MAX} // 5242880; # 5 MB, the smallest limit of the APIs
-    die sprintf("%s is %d bytes, more than AI_IMAGE_MAX (%d)\n", $path, $size, $max)
-        if $max and $size > $max;
-    open(my $fh, '<:raw', $path)
-        or die "cannot read $path: $!\n";
-    local $/;
-    my $bytes = <$fh>;
-    close($fh);
-    my $mime = _image_type($bytes)
+    my $mime = _image_type(_read_bytes($path, 16))
         or die "not a PNG, JPEG, GIF or WebP image: $path\n";
+    my ($bytes, $note) = ('', '');
+    if($max and $size > $max){
+        # too big for the API: a smaller JPEG copy goes instead, if ImageMagick can make one
+        my ($small) = eval {_shrink($path, $max)};
+        die sprintf("%s is %d bytes, more than AI_IMAGE_MAX (%d), and could not be made smaller%s\n",
+            $path, $size, $max, $@ ? ": ".((split m/\n/, $@)[0] // '') : '')
+            unless defined $small;
+        ($bytes, $mime) = @$small;
+        $note = ", made from $size bytes";
+    } else {
+        $bytes = _read_bytes($path);
+    }
     push @tools::IMAGES, {path => ai::to_text($path), mime => $mime, data => MIME::Base64::encode_base64($bytes, '')};
-    return "[OK] image attached: $path ($mime, $size bytes), it comes with the next message";
+    return "[OK] image attached: $path ($mime, ".length($bytes)." bytes$note), it comes with the next message";
 }
 
 # the format of a picture by its first bytes (undef: not one of the formats)
@@ -4605,6 +4631,187 @@ sub _image_type {
     return 'image/gif'  if substr($b, 0, 6) =~ m/\AGIF8[79]a\z/;
     return 'image/webp' if substr($b, 0, 4) eq 'RIFF' and substr($b, 8, 4) eq 'WEBP';
     return;
+}
+
+# the first n bytes of a file, or all of it
+sub _read_bytes {
+    my ($file, $n) = @_;
+    open(my $fh, '<:raw', $file)
+        or die "cannot read $file: $!\n";
+    local $/ = defined $n ? \$n : undef;
+    my $bytes = <$fh>;
+    close($fh);
+    return $bytes // '';
+}
+
+# a picture ImageMagick may read here, by its first bytes: the formats of
+# _image_type, and BMP and TIFF
+sub _picture_ok {
+    my ($b) = @_;
+    return 1 if _image_type($b);
+    return 1 if substr($b, 0, 2) eq 'BM';
+    return 1 if substr($b, 0, 4) eq "II*\0" or substr($b, 0, 4) eq "MM\0*";
+    return 0;
+}
+
+# ImageMagick: IM7 "magick" or IM6 "convert", whichever the PATH of the chat has
+# first (looked up once). Undef when neither is there.
+our ($MAGICK, $MAGICK_LOOKED);
+sub _magick {
+    return $MAGICK if $MAGICK_LOOKED;
+    $MAGICK_LOOKED = 1;
+    my @dirs = grep {length} split m/:/, $::ORIG_ENV{PATH} // '';
+    foreach my $name (qw(magick convert)){
+        foreach my $dir (@dirs){
+            return $MAGICK = "$dir/$name" if -f "$dir/$name" and -x _;
+        }
+    }
+    return $MAGICK = undef;
+}
+
+# a name as ImageMagick takes it: a relative one gets ./, so that a name like
+# png:x or @x is not read as a format or a list of files. [ ] and % are refused:
+# they select frames and mean escapes
+sub _magick_name {
+    my ($name) = @_;
+    die "ImageMagick can not take the name $name: [ ] and % are not allowed in it\n"
+        if $name =~ m/[\[\]%]/;
+    return $name =~ m{\A/} ? $name : "./$name";
+}
+
+# the ImageMagick command for one picture, as a list (no shell): the first frame
+# of the input, upright, a crop, a turn, a resize that only shrinks, the metadata
+# removed (GPS, camera), the quality, and the output
+sub _magick_args {
+    my (%o) = @_;
+    my @cmd = (_magick(), "$o{in}\[0]", '-auto-orient');
+    push @cmd, '-crop', $o{crop}, '+repage' if length($o{crop} // '');
+    push @cmd, '-rotate', $o{rotate} if length($o{rotate} // '');
+    push @cmd, '-resize', ($o{width} // '').'x'.($o{height} // '').'>'
+        if length($o{width} // '') or length($o{height} // '');
+    push @cmd, '-strip';
+    push @cmd, '-quality', $o{quality} if length($o{quality} // '');
+    push @cmd, $o{out};
+    return @cmd;
+}
+
+# ImageMagick in a forked child, as the programs of the tools run (see _run).
+# The child has the tool environment (utils::fork_child: a whitelist, no AI_*);
+# here only what ImageMagick needs is added: its policy and its temp directory.
+sub _magick_run {
+    my (%o) = @_;
+    my @cmd = _magick_args(%o);
+    return _run(sub {
+        $ENV{MAGICK_CONFIGURE_PATH} = "$FindBin::Bin/ai/imagemagick"; # policy.xml
+        $ENV{MAGICK_TEMPORARY_PATH} = ai::tmpdir();
+        exec {$cmd[0]} @cmd
+            or die "cannot exec $cmd[0]: $!\n";
+    });
+}
+
+# a JPEG copy of a picture of at most $max bytes: ImageMagick makes it in the
+# temp directory, with the longest side at 2048, then 1024, then 512 pixels.
+# Returns [bytes, mime], or undef when no copy is small enough.
+sub _shrink {
+    my ($path, $max) = @_;
+    return unless _magick();
+    my $tmp = ai::tmpdir()."/aicli-shrink-$$.jpg";
+    my $made;
+    eval {
+        foreach my $edge (2048, 1024, 512){
+            _magick_run(in => _magick_name($path), out => _magick_name($tmp),
+                width => $edge, height => $edge, quality => 85);
+            -f $tmp or die "ImageMagick wrote no picture\n";
+            my $bytes = _read_bytes($tmp);
+            unlink $tmp;
+            (_image_type($bytes) // '') eq 'image/jpeg'
+                or die "ImageMagick wrote no JPEG\n";
+            if(length($bytes) <= $max){
+                $made = [$bytes, 'image/jpeg'];
+                last;
+            }
+        }
+        1;
+    } or do {
+        my $err = $@;
+        unlink $tmp;
+        die $err;
+    };
+    return $made;
+}
+
+# the output names of convert, and the formats they stand for
+our %CONVERT_OUT = map {($_ => 1)} qw(png jpg jpeg gif webp bmp tif tiff);
+
+# convert: a picture written as another size, crop, turn or format (see the table)
+sub convert_5d1a {
+    my ($t_args) = @_;
+    my ($in, $out, $w, $h, $crop, $rot, $q) = map {utils::trim($t_args->[$_] // '')} 0 .. 6;
+    die "no picture to read is given\n" unless length $in;
+    die "no file to write is given\n" unless length $out;
+    die "ImageMagick is not installed (convert or magick)\n" unless _magick();
+    my $src = _path($in);
+    die "not a file: $src\n" unless -f $src;
+    my $max  = $::ORIG_ENV{AI_CONVERT_MAX} // 52428800; # 50 MB
+    my $size = -s $src;
+    die sprintf("%s is %d bytes, more than AI_CONVERT_MAX (%d)\n", $src, $size, $max)
+        if $max and $size > $max;
+    die "not a picture ImageMagick reads here (PNG, JPEG, GIF, WebP, BMP or TIFF): $src\n"
+        unless _picture_ok(_read_bytes($src, 16));
+    my $dest = _path($out);
+    my ($ext) = $dest =~ m/\.([A-Za-z0-9]+)\z/;
+    die "the output must end in .png, .jpg, .gif, .webp, .bmp or .tif: $dest\n"
+        unless defined $ext and $CONVERT_OUT{lc $ext};
+    die "can not write $dest: it is a link or a directory\n" if -l $dest or -d $dest;
+    my $number = sub {
+        my ($v, $lo, $hi) = @_;
+        return !length($v) || ($v =~ m/\A\d+\z/ and $v >= $lo and $v <= $hi);
+    };
+    die "width must be from 1 to 16000 pixels: $w\n" unless $number->($w, 1, 16000);
+    die "height must be from 1 to 16000 pixels: $h\n" unless $number->($h, 1, 16000);
+    die "quality must be from 1 to 100: $q\n" unless $number->($q, 1, 100);
+    die "crop must be WIDTHxHEIGHT+X+Y, such as 800x600+0+0: $crop\n"
+        if length $crop and $crop !~ m/\A\d{1,5}x\d{1,5}\+\d{1,5}\+\d{1,5}\z/;
+    die "rotate must be 90, 180 or 270 degrees: $rot\n"
+        if length $rot and $rot !~ m/\A(?:90|180|270)\z/;
+
+    # ImageMagick writes a temp file next to the output; it replaces the output
+    # only when the whole thing worked
+    (my $tmp = $dest) =~ s{([^/]*)\z}{.aicli-convert-$$-$1};
+    my $run = eval {
+        _magick_run(in => _magick_name($src), out => _magick_name($tmp),
+            width => $w, height => $h, crop => $crop, rotate => $rot, quality => $q);
+    };
+    if($@){
+        my $err = $@;
+        unlink $tmp;
+        die $err;
+    }
+    my $publish = sub {
+        my $ok = eval {
+            -f $tmp or die "ImageMagick wrote no picture\n";
+            _changing($dest, 'convert', undef, binary => 1);
+            rename($tmp, $dest) or die "cannot write $dest: $!\n";
+            1;
+        };
+        my $err = $@;
+        unlink $tmp if -e $tmp;
+        die $err unless $ok;
+        return "[OK] converted $in to $dest (".(-s $dest)." bytes)";
+    };
+    return $publish->() unless ref($run) eq 'tools::job';
+    # a sub-agent: the program runs in the loop, and the rest when it is over
+    my $inner = $run->{finish};
+    $run->{finish} = sub {
+        eval {$inner->(@_)};
+        if($@){
+            my $err = $@;
+            unlink $tmp;
+            die $err;
+        }
+        return $publish->();
+    };
+    return $run;
 }
 
 sub write_edf5 {
@@ -4721,10 +4928,10 @@ sub _journal {
 
 # a file is about to get new content
 sub _changing {
-    my ($file, $tool, $new) = @_;
+    my ($file, $tool, $new, %o) = @_;
     my $old = (-f $file) ? _slurp($file) : undef;
     _journal(op => 'write', tool => $tool, path => $file, old => $old);
-    push @CHANGES, {tool => $tool, path => $file, old => $old, new => $new};
+    push @CHANGES, {tool => $tool, path => $file, old => $old, new => $new, binary => $o{binary}};
     return;
 }
 

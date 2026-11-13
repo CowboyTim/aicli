@@ -55,6 +55,14 @@ These are requirements, not suggestions.
   destructors of the chat (terminal cleanup) must not run in a child.
 - **No secrets to children**: `AI_*` variables and the API key stay in the chat
   process (`utils::tool_env()`, `@utils::CHILD_INIT`).
+- **Children get a curated environment, every time**: `utils::fork_child()` is
+  the only `fork()`, and it sets `%ENV` to `utils::tool_env()`, an allow-list
+  (PATH, HOME, TMPDIR, LANG, the runtime variables of the recorder, `GIT_*`,
+  `AI_TOOL_ENV`), before the worker runs. A new child goes through it and never
+  inherits the parent's `%ENV`. What one program needs beyond the list is set in
+  its own worker, after the fork (ImageMagick: `MAGICK_CONFIGURE_PATH`,
+  `MAGICK_TEMPORARY_PATH`), and never in the parent. The list is a guess of
+  what the programs need, see PLAN.md.
 - **The chat must survive**: a failing request, tool or command prints an
   error and returns to the prompt. No `die` may escape to the top.
 - **Few dependencies**: core Perl plus `JSON::XS`, `Net::Curl` (or
@@ -128,6 +136,8 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   (wide characters two, combining none), `_fit()` cuts by columns, emoji are
   `?`. Tests run with the unicode set (`TestAI::setup`).
 - **ai/** – prompt templates: `default` (chat), `coder` (adds the tools).
+  `ai/imagemagick/policy.xml` is the ImageMagick policy of the `convert` tool
+  (`MAGICK_CONFIGURE_PATH` points at its directory in the child).
 - **aicli.sh**, **Dockerfile** – docker wrapper and the Debian slim image.
   **docker-bake.hcl** builds that image (`docker buildx bake`; `image-ci`
   adds the GitHub Actions cache). CI still uses `docker build`.
@@ -288,7 +298,8 @@ How they run:
 | edit | in-process: `tools::ed_apply()`, an ed subset (a, i, c, d, s; line, `$`, `/regex/` addresses); all or nothing |
 | delete, move, mkdir, list | in-process Perl (`unlink`/`rmdir`, `rename`, `File::Path`, `readdir`) |
 | find | in-process Perl: `walk_tree()`, opendir/readdir/closedir, a filter and a prune sub; `-l` before descending, so links are not followed |
-| image | in-process Perl: `_image_type()` checks the format, the picture waits in `@tools::IMAGES`; `handle_llm_response()` sends it in a user message after the results, as `wire_message()` makes it (OpenAI form) or `provider::anthropic::message_content()` (Anthropic). Only with `AI_VISION=1`, never for a sub-agent |
+| image | in-process Perl: `_image_type()` checks the format; a picture bigger than `AI_IMAGE_MAX` is made smaller by `_shrink()` (ImageMagick, forked); the picture waits in `@tools::IMAGES`, and `handle_llm_response()` sends it in a user message after the results, as `wire_message()` makes it (OpenAI form) or `provider::anthropic::message_content()` (Anthropic). Only with `AI_VISION=1`, never for a sub-agent |
+| convert | ImageMagick (`magick` or `convert`, `_magick()`) in a forked child through `_run` (`_magick_run`, `_magick_args`): a list, no shell, the input checked by its first bytes (`_picture_ok()`), the output written to a temp name and renamed when it worked, `_changing(..., binary => 1)` for the journal. Works for sub-agents too (a job) |
 | grep | `_run` → `exec grep -rn -e <pattern> -- <path>` |
 | bash | temp file, `_run` → `exec bash <file>` |
 | perl | `_run` → `eval` in package `aicli::tool`, or `Safe->reval` (`AI_PERL_SAFE`) |
@@ -389,6 +400,7 @@ Other APIs are reached through an OpenAI compatible gateway, such as LiteLLM or 
 | `t/84_providers.t` | providers: detection by key, OpenAI and Anthropic requests and stream, the curl shim, tool calls in the text, the logging of server calls |
 | `t/86_native_tools.t` | native tool calls: tools in the request, calls and results, pieces of arguments, errors, the text fallback, sub-agents |
 | `t/87_images.t` | pictures: the formats, the `image` tool (workspace, refusals, size), the picture message in a turn, its form for OpenAI and Anthropic, the estimate |
+| `t/92_convert.t` | ImageMagick: the `convert` tool and the shrinking of `image`, with a stand-in program (arguments, environment, refusals, failures, sub-agent) and the real one when it is installed (formats, crop, turn, quality, the policy) |
 | `t/88_markdown.t` | markdown of the answer: headings, emphasis, code, lists, tables, streaming, the printer |
 | `t/89_context_thinking.t` | the reasoning setting, what the request says, the first request through compactions, `/context` |
 | `t/97_live.t` | a real model, only when `AI_LIVE_SERVER` is set (`AI_LIVE_MODEL`, optional `AI_LIVE_SEARXNG`): one answer, a native tool call, the thinking setting, search. Skipped otherwise |

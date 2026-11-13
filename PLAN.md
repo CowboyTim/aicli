@@ -22,6 +22,14 @@ user's view) and AGENTS.md (the code, and "Status" for the history), not here.
 - **Pictures with a real vision model.** The `image` tool (`AI_VISION=1`) is
   tested with scripted requests only. No real model that reads pictures has
   been run yet, nor a picture of text to check the reading.
+- **ImageMagick.** Tested here with ImageMagick 6 (`convert`, Debian's package):
+  the formats, the policy (`ai/imagemagick/policy.xml`: PostScript and PDF
+  refused), the crop, the turn, the shrinking. Not yet: ImageMagick 7
+  (`magick`), and the image built from the Dockerfile with it.
+- **The environment whitelist.** `utils::tool_env()` is a guess of what the
+  programs of the tools need. Check each one: the voice recorder needs its
+  runtime variables (XDG_RUNTIME_DIR, PIPEWIRE_REMOTE are in the list), a
+  future program may need more. Every child gets the list (AGENTS.md).
 - **Terminals other than tmux 3.4** for the footer (kitty and others). Emoji
   and wide-character widths may differ.
 

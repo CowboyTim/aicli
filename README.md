@@ -238,7 +238,8 @@ or `[WRITE_edf5 ERROR_9a78 ... ERROR_9a78]`. In native mode it is a tool message
 | `perl` | Perl code | `eval` in a forked child, or `Safe->reval` with `AI_PERL_SAFE` |
 | `fetch` | a web page as text, links as `[text](url)` | async HTTP in the event loop |
 | `search` | web search through your SearXNG instance | async HTTP, only offered with `AI_SEARXNG_URL` |
-| `image` | a picture (PNG, JPEG, GIF or WebP) in the workspace, sent with the next message; only offered with `AI_VISION=1` | Perl, in the chat process |
+| `image` | a picture (PNG, JPEG, GIF or WebP) in the workspace, sent with the next message; a bigger one is made smaller with ImageMagick; only offered with `AI_VISION=1` | Perl, and ImageMagick in a forked child |
+| `convert` | a picture converted with ImageMagick: a smaller size, a crop, a turn, another format by the output name (png, jpg, gif, webp, bmp, tif), the quality. Metadata is removed. Only offered where ImageMagick is installed | ImageMagick in a forked child, no shell, with `ai/imagemagick/policy.xml` |
 | `agent` | give a task to a sub-agent | a second conversation in the event loop |
 
 File tools never start a process. `replace` and `edit` write through a temp
@@ -517,7 +518,8 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 | `AI_MARKDOWN` | draw the markdown of the answer (on a terminal only); 0 keeps it as written | on a terminal |
 | `AI_TOOL_CALLS` | `native`: tools sent with the request, calls as the server parses them; `text`: the tool syntax in the prompt | native |
 | `AI_VISION` | offer the `image` tool, so the model gets pictures: only with a model that takes them | off |
-| `AI_IMAGE_MAX` | largest picture the `image` tool reads, in bytes (0 for no limit) | 5242880 |
+| `AI_IMAGE_MAX` | largest picture the `image` tool sends, in bytes; a bigger one is made smaller (0 for no limit) | 5242880 |
+| `AI_CONVERT_MAX` | largest input of the `convert` tool, in bytes (0 for no limit) | 52428800 |
 | `AI_RAW` | use `/v1/completions` with a prompt built here (qwen only) | off |
 | `AI_DIR` | base directory | `~/.aicli` |
 | `AI_PS1`, `AI_PS2` | input prompts | |

@@ -27,7 +27,7 @@ sub tool {
         my $t = $tools::TOOLS->{$name};
         like($t->{tag}, qr/^\U$name\E_[0-9a-f]{4}$/, "$name: tag $t->{tag}");
         ok(tools->can(lc $t->{tag}), "$name: implemented");
-        is(scalar(@{$t->{sentinels}}), scalar(@{$t->{required}}), "$name: a sentinel per argument");
+        is(scalar(@{$t->{sentinels}}), scalar(keys %{$t->{properties}}), "$name: a sentinel per argument");
         ok(length($t->{description}), "$name: described");
     }
     is_deeply([ai::execute_tool("nope", "NOPE_1", [])], ["", "[ERROR] Unknown tool 'NOPE_1'"], "unknown tool: error");
