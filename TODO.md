@@ -162,7 +162,7 @@ This file outlines potential improvements and features for the AI coding agent (
     - Consider using a lightweight database for session storage.
 
 ## Open, found while fixing the agent loop
-- Sub-agents on the NPU (`flm`, one at a time): checked with `qwen3:4b` and two `agent` calls in one reply: the second agent waits for the slot, starts when the first is done, and each stops at `AI_AGENT_MAX_TURNS`. Open: a small model may not finish a task (here: counting lines) in its turns, and the answer after the agents can run on for minutes.
+- Sub-agents on the NPU (`flm`, one at a time): checked with `qwen3:4b` and two `agent` calls in one reply: the second agent waits for the slot, starts when the first is done, and each stops at `AI_AGENT_MAX_TURNS`. The `lines` loop that looked like a small-model limit was a bug in native argument order (fixed in 56cc7d7); `qwen3:4b` now reads a range in one call. Open: the answer after the agents can run on for minutes on FLM.
 - Voice with a real microphone and real speech: the recorder path is tested with a stand-in, the recognizer only with a generated tone.
 - Sub-agent roles (a config file with endpoints and models, a `role` argument on `agent`, limits per endpoint): planned, not started.
 - Anthropic native tool calls: deferred, Anthropic uses the text protocol.
