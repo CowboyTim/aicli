@@ -3142,20 +3142,44 @@ sub voice_quiet {
     return $peak < 500;
 }
 
-sub voice_once {
-    my ($seconds) = @_; # undef: push to talk
-    my $file = "$AI_SESSION_DIR/voice.wav";
-    if(defined $seconds){
-        print "${colors::cyan_color}[recording $seconds s]${colors::reset_color}\n";
-        return unless voice_record($file, $seconds);
-    } else {
-        return unless voice_ptt($file);
+# where a recording goes: a directory of this user in the temp dir. The
+# recorder is confined by the sandbox to the workspace and the temp dir, the
+# session directory is neither. Made 0700; undef (with the reason) when it
+# cannot be used.
+sub voice_dir {
+    my $dir = tmpdir()."/aicli-$<";
+    if(!-d $dir){
+        mkdir($dir, 0700) or do {
+            log::error("cannot make $dir for the recording: $!");
+            return;
+        };
     }
-    if(voice_quiet($file)){
-        print "${colors::cyan_color}[nothing heard]${colors::reset_color}\n";
+    my @st = stat($dir);
+    if(!@st or $st[4] != $< or ($st[2] & 077)){
+        log::error("$dir is not private to this user (owner or mode): not used for the recording");
         return;
     }
-    my $text = transcribe($file);
+    return $dir;
+}
+
+sub voice_once {
+    my ($seconds) = @_; # undef: push to talk
+    my $dir = voice_dir() or return;
+    my $file = "$dir/voice.wav";
+    my $got;
+    if(defined $seconds){
+        print "${colors::cyan_color}[recording $seconds s]${colors::reset_color}\n";
+        $got = voice_record($file, $seconds);
+    } else {
+        $got = voice_ptt($file);
+    }
+    my $text;
+    if($got and voice_quiet($file)){
+        print "${colors::cyan_color}[nothing heard]${colors::reset_color}\n";
+    } elsif($got){
+        $text = transcribe($file);
+    }
+    unlink $file; # the speech is not kept on disk
     return unless defined $text and length $text;
     return $text;
 }

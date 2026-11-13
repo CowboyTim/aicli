@@ -73,9 +73,13 @@ chmod 0755, $rec;
 # the recognizer: the text, and what is sent
 {
     TestAI::setup(AI_RECORDER => $rec, AI_ASR_URL => 'http://127.0.0.1:52625/v1/audio/transcriptions');
+    $::ORIG_ENV{TMPDIR} = $tmp; # the recordings go to the temp dir of the test
     TestAI::mock_http(['{"text":"  open the file  "}']);
     my $text = ai::voice_once(0.5);
     is($text, "open the file", "asr: the text, without the spaces around");
+    my $dir = ai::voice_dir();
+    is((stat $dir)[2] & 0777, 0700, "voice: the recording directory is private to the user");
+    ok(!-e "$dir/voice.wav", "voice: the recording is removed after it was recognized");
     my $req = $TestAI::REQUESTS[0];
     is($req->{url}, 'http://127.0.0.1:52625/v1/audio/transcriptions', "asr: sent to the recognizer");
     my ($ct) = grep {/^Content-Type: multipart/} @{$req->{headers} // []};
