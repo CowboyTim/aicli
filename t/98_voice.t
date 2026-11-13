@@ -93,7 +93,7 @@ chmod 0755, $rec;
     }
 
     # the item is shown while the recorder runs and taken away when it is done
-    package FakeTUI { sub new { bless {calls => []}, shift } sub set { push @{$_[0]{calls}}, "set $_[1]" } sub unset { push @{$_[0]{calls}}, "unset $_[1]" } sub clear {} }
+    package FakeTUI { sub new { bless {calls => []}, shift } sub set { push @{$_[0]{calls}}, "set $_[1]" } sub unset { push @{$_[0]{calls}}, "unset $_[1]" } sub clear {} sub width { 80 } }
     TestAI::setup(AI_RECORDER => $rec);
     local $ai::TUI = FakeTUI->new;
     my $ok;
@@ -143,7 +143,7 @@ PL
     chmod 0755, $prec;
 
     TestAI::setup(AI_RECORDER => $prec, AI_ASR_URL => 'http://127.0.0.1:52625/v1/audio/transcriptions');
-    package FakeTUI2 { sub new { bless {calls => []}, shift } sub set { push @{$_[0]{calls}}, "set $_[1]" } sub unset { push @{$_[0]{calls}}, "unset $_[1]" } sub clear {} }
+    package FakeTUI2 { sub new { bless {calls => []}, shift } sub set { push @{$_[0]{calls}}, "set $_[1]" } sub unset { push @{$_[0]{calls}}, "unset $_[1]" } sub clear {} sub width { 80 } }
     local $ai::TUI = FakeTUI2->new;
     my @answers = (
         [{text => ' hello there', end => 1.5}, {text => ' general', end => 3.0}],

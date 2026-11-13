@@ -47,8 +47,9 @@ framework.
   model on, off or into a token budget, per session
 - **Voice**: `/voice` records from the microphone (push to talk: Enter starts,
   Enter stops), recognizes the speech with a local recognizer (FastFlowLM on the
-  NPU, `AI_ASR_URL`) and sends the text as the request. A recording with no sound
-  is not sent. While it is made, the footer shows a level meter and the words
+  NPU, `AI_ASR_URL`) and puts the text in the input line: you see it, edit it if
+  the recognizer got it wrong, and Enter sends it (an empty line cancels). A
+  recording with no sound is not sent. While it is made, the footer shows a level meter and the words
   recognized so far (a pass every three seconds of new audio; words that two
   passes agree on are final). The text sent at the stop is the whole recording.
   The recording is a child process (`pw-record`) and goes to a private directory
@@ -167,7 +168,7 @@ the model:
 | `/retry` | ask the last request again, its answer and tool runs are dropped |
 | `/rewind [n]` | take the last exchange (or n) out of the conversation |
 | `/compact` | summarize the older messages now, to free context |
-| `/voice [seconds]` | record from the microphone, recognize it (`AI_ASR_URL`) and send it as the request |
+| `/voice [seconds]` | record from the microphone, recognize it (`AI_ASR_URL`), put the words in the input line: edit, Enter sends |
 | `/context [summary]` | how full the context is, its compactions and the thinking setting; `summary` shows the last summary of the older messages |
 | `/thinking [on\|off\|<tokens>\|default]` | the reasoning of the model for this session |
 | `/system <text>` | add a system message |

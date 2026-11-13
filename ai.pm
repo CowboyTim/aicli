@@ -2623,7 +2623,7 @@ our @COMMANDS;
     },
     '/voice' => {
         usage => '/voice [seconds]',
-        help  => 'talk: Enter starts the recording, Enter stops it (or a number of seconds); the speech is recognized (AI_ASR_URL) and sent as the request',
+        help  => 'talk: Enter starts the recording, Enter stops it (or a number of seconds); the words are put in the input line: edit them, Enter sends',
         run   => sub {
             my ($args) = @_;
             # a number: that long; nothing, at a terminal: push to talk; else the default length
@@ -2631,14 +2631,28 @@ our @COMMANDS;
                 : ($args // '') =~ m/\S/ ? ($::ORIG_ENV{AI_VOICE_SECONDS} // 5)
                 : (-t STDIN) ? undef
                 : ($::ORIG_ENV{AI_VOICE_SECONDS} // 5);
-            local $BUSY = 1;
-            my $text = voice_once($secs);
+            my $text = do {local $BUSY = 1; voice_once($secs)};
             if(!defined $text){
                 print "Nothing heard.\n" unless utils::aborted();
                 $::ABORT = 0;
                 return 0;
             }
-            print "${colors::blue_color3}heard:${colors::reset_color} $text\n";
+            print "${colors::blue_color3}heard:${colors::reset_color} ".to_text($text)."\n";
+            if(-t STDIN and $::T){
+                # the words are put in the input line: edit them, Enter sends,
+                # an empty line cancels. The model only sees what is sent.
+                print "${colors::cyan_color}[Enter sends it, edit first if it is wrong, an empty line cancels]${colors::reset_color}\n";
+                my $line = eval {$::T->readline(get_chat_prompt($::P1OR2), to_text($text))};
+                if($@ =~ m/EXIT WANTED: 6df87ccd-2c9a-4303-982c-54b60ebb2aa1/){
+                    return 1;
+                }
+                $::ABORT = 0;
+                if(!defined $line or $line !~ m/\S/){
+                    print "${colors::cyan_color}[cancelled]${colors::reset_color}\n";
+                    return 0;
+                }
+                $text = $line;
+            }
             chat_completion(to_text($text));
             $::ABORT = 0;
             return 0;
@@ -3050,7 +3064,10 @@ sub voice_heard {
     $t =~ s/\A //;
     $t =~ s/ \z//;
     return tui::glyph('ellipsis') unless length $t;
-    return length($t) > 60 ? tui::glyph('ellipsis').substr($t, -60) : $t;
+    # the newest words: what is left of the footer line after the meter
+    my $max = ($TUI->width() // 80) - 30;
+    $max = 20 if $max < 20;
+    return length($t) > $max ? tui::glyph('ellipsis').substr($t, -$max) : $t;
 }
 
 sub heard_norm {

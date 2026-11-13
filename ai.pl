@@ -461,7 +461,9 @@ Summarize the older messages now, to free context.
 =item B</voice> [seconds]
 
 Record from the microphone, recognize the speech with the recognizer of B<AI_ASR_URL>
-and send the text as the request. At a terminal, Enter starts the recording and
+and put the text in the input line: edit it if the recognizer got it wrong, Enter
+sends it, an empty line cancels. The model only gets what is sent. Without a
+terminal the text is sent as it is. At a terminal, Enter starts the recording and
 Enter again stops it (B<AI_VOICE_MAX> seconds at most, 60). With a number of
 seconds it records that long; without a terminal, B<AI_VOICE_SECONDS> (5). The
 recording is made by B<AI_RECORDER> (pw-record), as a child process, into a
