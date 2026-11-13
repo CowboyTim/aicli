@@ -37,6 +37,13 @@ for v in $(compgen -e | grep '^AI_'); do
     extra_opts="-e $v $extra_opts"
 done
 
+# the defaults of the local setup (lemonade on this machine): only without a
+# key, a local server or another provider of this shell, so that a cloud
+# provider gets no local endpoint and no local model name
+if [ -z "$AI_LOCAL_SERVER" ] && [ -z "$AI_API_KEY" ] && { [ -z "$AI_PROVIDER" ] || [ "$AI_PROVIDER" = lemonade ]; }; then
+    extra_opts="-e AI_LOCAL_SERVER=http://[::1]:8000 -e AI_PROVIDER=lemonade -e AI_MODEL=${AI_MODEL:-NVIDIA-Nemotron-3-Super-120B-A12B-UD-Q4_K_XL-00001-of-00003} $extra_opts"
+fi
+
 ROCM_PATH=${ROCM_PATH:-~/therock-dist-linux-gfx1151-latest}
 ROCM_PATH=$(readlink -f "$ROCM_PATH")
 exec docker run --rm -it \
@@ -54,9 +61,6 @@ exec docker run --rm -it \
     -e BDIR="${BDIR}" \
     -e CDIR="/workdir/${BDIR}" \
     -e GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no" \
-    -e AI_LOCAL_SERVER=${AI_LOCAL_SERVER:-http://[::1]:8000} \
-    -e AI_MODEL=${AI_MODEL:-NVIDIA-Nemotron-3-Super-120B-A12B-UD-Q4_K_XL-00001-of-00003} \
-    -e AI_PROVIDER=${AI_PROVIDER:-lemonade} \
     -e AI_DIR=/workspace/.aicli \
     -e AI_SESSION \
     -e AI_CLEAR \
@@ -88,4 +92,4 @@ exec docker run --rm -it \
     -v aicli-${LOGNAME}:/workspace \
     -v "${PWD}":/workdir/${BDIR} \
         "$DOCKER_IMAGE" \
-            $*
+            "$@"

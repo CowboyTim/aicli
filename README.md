@@ -82,7 +82,10 @@ cd ~/my-project
 `aicli.sh` mounts the current directory, and is set up for a local llama.cpp
 server on an AMD ROCm machine: adjust it (`AI_LOCAL_SERVER`, `AI_MODEL`, the
 `--device` options) to your setup. Every `AI_*` variable of your shell is
-passed into the container. In there `ai.pl` starts as root and at once becomes
+passed into the container. The local defaults (`AI_LOCAL_SERVER`,
+`AI_PROVIDER=lemonade`, the local `AI_MODEL`) apply only when your shell sets
+no `AI_API_KEY`, `AI_LOCAL_SERVER` or other `AI_PROVIDER`; for a cloud provider
+set `AI_API_KEY` and `AI_PROVIDER`, and `AI_MODEL` for its model. In there `ai.pl` starts as root and at once becomes
 you (`UID`/`GID` of the host, `AI_GROUPS` for device groups), so files in the
 mounted project keep their owner; it never runs as root.
 
