@@ -162,6 +162,11 @@ This file outlines potential improvements and features for the AI coding agent (
     - Consider using a lightweight database for session storage.
 
 ## Open, found while fixing the agent loop
+- Sub-agents on the NPU (`flm`, one at a time): the parallel run did not delegate, a prompt that makes the model call `agent` twice is needed to check the queue.
+- Voice with a real microphone and real speech: the recorder path is tested with a stand-in, the recognizer only with a generated tone.
+- Sub-agent roles (a config file with endpoints and models, a `role` argument on `agent`, limits per endpoint): planned, not started.
+- Anthropic native tool calls: deferred, Anthropic uses the text protocol.
+- Cloud providers (NVIDIA, Cerebras, OpenRouter) live: scripted tests only, `t/97_live.t` runs them with `AI_API_KEY`.
 - Look at the first CI runs (`.github/workflows/tests.yml`): the image job is the first time the tests run with `Net::Curl` since the event loop exists.
 - More panes than the footer (files, tool output side by side) on top of `tui.pm`, if ever. The footer itself is done; no curses (no CPAN dependency).
 - Tool confirmation / allow-list: not wanted for now, the container is the sandbox.
@@ -169,10 +174,18 @@ This file outlines potential improvements and features for the AI coding agent (
 - A native tool to find files by name (the model uses bash for that now).
 - Try `AI_PROXY`, `AI_WEB_PROXY` and the `search` tool against a real proxy and SearXNG instance: only tested with a mocked HTTP layer.
 - Not planned: Bedrock and other providers one by one. Use LiteLLM or OpenRouter as the OpenAI compatible endpoint for those.
-- The readline prompt (`ai.pm`, `prompt_term1`/`prompt_term2`) still uses `►`, `❲`, `❳` and `│` regardless of `AI_GLYPHS`; those are ambiguous-width too.
 - Footer checked in tmux 3.4 only; kitty and other terminals not run yet (the escapes are standard, the emoji and wide-character widths may differ per terminal).
 
 ## Completed Items (Reference)
+- [x] Native tool calls (the API's tools, `tool_calls`, role "tool" results), text protocol as fallback (`AI_TOOL_CALLS`)
+- [x] Reasoning control (`AI_THINKING`, `/thinking`), the `enable_thinking` and `reasoning_budget` options
+- [x] Long sessions: the first request kept through compactions, compactions recorded, `/context`, summary in pieces (`AI_SUMMARY_CHUNKS`), automatic compaction after an answer (`AI_AUTO_COMPACT`)
+- [x] Markdown of the answer drawn on a terminal (`md.pm`, `AI_MARKDOWN`)
+- [x] Sub-agents print a line per start and tool call (`AI_AGENT_VIEW`)
+- [x] `-h`/`--help` usage and `-man` manual from the POD (Pod::Usage)
+- [x] FastFlowLM (`AI_PROVIDER=flm`): one sub-agent at a time, native calls by default
+- [x] `/voice`: push to talk or timed, `pw-record` as a child, recognizer over HTTP (`AI_ASR_URL`), PipeWire socket shared with the container
+- [x] Live test file (`t/97_live.t`), runs when `AI_LIVE_SERVER` or `AI_API_KEY` is set
 - [x] Basic interactive shell with history
 - [x] Multi-provider support (Cerebras, OpenRouter, NVIDIA, Lemonade, local servers)
 - [x] Built-in tools: bash, perl, grep, file operations

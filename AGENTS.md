@@ -80,9 +80,11 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   sub-agents, status line, retries, token usage, context management, file
   tools in Perl, web tools, workspace and kernel sandbox, `-c`/`-p`.
 - Everything has tests (`prove -I. t`), but against a scripted or fake LLM.
-  Not yet done by anyone: a session with a real model, the tests with
-  `Net::Curl` (the preferred module; the image has `WWW::Curl`), a real proxy and SearXNG instance, the
-  privilege drop as root in docker with a user other than 1000.
+  Real models have been used with llama.cpp and FastFlowLM on the NPU. The cloud APIs
+(NVIDIA, Cerebras, OpenRouter, Anthropic) have only scripted tests so far. Not yet done by anyone: the
+tests with `Net::Curl` (the preferred module; the image has `WWW::Curl`), a real
+proxy, the privilege drop as root in docker with a user other than 1000, and voice
+with a real microphone.
 - What is open is in TODO.md ("Open, found while fixing the agent loop"),
   what is settled in its "Completed Items".
 

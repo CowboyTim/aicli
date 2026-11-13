@@ -95,8 +95,7 @@ sub chat_setup {
         // 'default';
     $AI_PROMPT_TEMPLATE_FILE = $::ORIG_ENV{AI_PROMPT_TEMPLATE_FILE}
         // "$FindBin::Bin/ai/$AI_PROMPT_TEMPLATE";
-    $AI_SESSION = $::ORIG_ENV{AI_SESSION}
-        // $::ORIG_ENV{AI_PROMPT_DEFAULT};
+    $AI_SESSION = $::ORIG_ENV{AI_SESSION};
     # --continue: go on where this directory left off
     $AI_SESSION = last_session()
         if !length($AI_SESSION // '') and $::ORIG_ENV{AI_CONTINUE};

@@ -60,7 +60,6 @@ exec docker run --rm -it \
     -e AI_DIR=/workspace/.aicli \
     -e AI_SESSION \
     -e AI_CLEAR \
-    -e AI_STREAM=${AI_STREAM:-1} \
     -e AI_PROMPT_TEMPLATE=${AI_PROMPT_TEMPLATE:-coder} \
     -e DEBUG \
     -e GIT_AUTHOR_NAME \

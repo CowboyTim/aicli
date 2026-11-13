@@ -39,11 +39,22 @@ framework.
 - **Token usage**: counted per session, shown after each answer, with an
   optional budget
 - **Context management**: old tool output is cut and older messages are
-  summarized before the conversation outgrows the context window
-- **Text based tool protocol**: no function-calling API needed, so it works
-  with any model, also on raw completion endpoints
-- **Providers**: Cerebras, OpenRouter, NVIDIA, OpenAI, Anthropic, Lemonade, and
-  any OpenAI compatible local server (llama.cpp, ...)
+  summarized, in pieces that fit a request, when the conversation is over the
+  threshold of the context window (right after an answer, or before a request).
+  The first request is kept word for word in the summary, every compaction is
+  recorded, `/context` shows the state
+- **Reasoning control**: `AI_THINKING` or `/thinking` turns the reasoning of the
+  model on, off or into a token budget, per session
+- **Voice**: `/voice` records from the microphone (push to talk: Enter starts,
+  Enter stops), recognizes the speech with a local recognizer (FastFlowLM on the
+  NPU, `AI_ASR_URL`) and sends the text as the request. The recording is a
+  child process (`pw-record`), the upload is built in Perl
+- **Native tool calls**: the tools go in the request and the server returns the
+  calls (`tool_calls`); a text protocol is the fallback (`AI_TOOL_CALLS=text`)
+  for models and servers without it
+- **Providers**: Cerebras, OpenRouter, NVIDIA, OpenAI, Anthropic, Lemonade,
+  FastFlowLM, and any OpenAI compatible local server (llama.cpp, ...). Other
+  APIs through an OpenAI compatible gateway such as LiteLLM or OpenRouter
 - **Sessions**: every conversation is a directory with its history, system
   prompt, model and usage; `-c` continues the last one of the current
   directory
@@ -372,8 +383,9 @@ AGENT_f2a8
 A sub-agent is not a process and not a thread. It is a small state machine:
 its request is a curl handle, its bash/perl/grep tools are forked children,
 and all of them sit in the same `select()` loop as everything else. Its
-thinking and tool calls are not printed, the status line shows what each agent
-is doing and how many tokens it used. Transcripts are kept in
+thinking is not printed. The status line shows what each agent is doing and how
+many tokens it used, and a line per start and tool call is printed
+(`AI_AGENT_VIEW`). Transcripts are kept in
 `sessions/<name>/agents/`. Sub-agents retry API errors like the main loop,
 count for the token usage of the session, and stop on ctrl-C. They watch
 their own context window: the output of their older tool calls is cut, then
@@ -439,6 +451,7 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 | `AI_SESSION_KEEP_DAYS` | at start, remove sessions not used for that many days, without asking; also the default of `/session prune` | never |
 | `AI_PROMPT_TEMPLATE` | `default` (chat) or `coder` (with tools), a file in `ai/` | `default` |
 | `AI_PROMPT_TEMPLATE_FILE` | a system prompt file of your own | |
+| `AI_CONFIG` | the file of `AI_...=value` lines read at start | `~/.aicli/config` |
 | `AI_CLEAR` | start with an empty conversation and a fresh system prompt | 0 |
 | `AI_TOKENS` | max tokens per answer | 100000 |
 | `AI_TEMPERATURE`, `AI_TOP_P`, `AI_TOP_K`, `AI_MIN_P` | sampling | 0.6, 0.95, 20, 0.0 |
@@ -456,7 +469,8 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 | `AI_RECORDER` | recorder program for `/voice` (pw-record, PipeWire) | pw-record |
 | `AI_ASR_URL` | OpenAI compatible transcription endpoint for `/voice` (FastFlowLM: `http://localhost:52625/v1/audio/transcriptions`) | none: no voice |
 | `AI_ASR_MODEL` | model name sent to the transcription endpoint | whisper-large-v3-turbo |
-| `AI_VOICE_SECONDS` | length of a `/voice` recording, in seconds | 5 |
+| `AI_VOICE_SECONDS` | length of a timed `/voice` recording, in seconds (no terminal, or `/voice <seconds>`) | 5 |
+| `AI_VOICE_MAX` | longest push-to-talk recording, in seconds | 60 |
 | `AI_AUTO_COMPACT` | compact right after an answer when the conversation is over the threshold; 0: only before a request | 1 |
 | `AI_THINKING` | the reasoning of the model: `on`, `off` or a token budget; `/thinking` sets it per session | server decides |
 | `AI_TOKEN_BUDGET` | max tokens a session may use | no limit |
@@ -504,9 +518,10 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 ## Project structure
 
 - `ai.pl` - entry point: options, drop privileges, POD
-- `ai.pm` - chat loop, streaming, retry, usage, context, commands, sessions, sub-agents, providers, prompt, tools
-- `utils.pm` - the event loop (curl multi, child pipes, timers in one `select()`), `fork_run()`, logging
+- `ai.pm` - chat loop, streaming, retry, usage, context, commands, sessions, sub-agents, providers, prompt, tools, speech
+- `utils.pm` - the event loop (curl multi, child pipes, keyboard watch, timers in one `select()`), `fork_run()`, logging
 - `tui.pm` - the screen: the status footer (scroll region) or the status line
+- `md.pm` - markdown of the answer, drawn line by line
 - `ai/` - system prompt templates (`default`, `coder`)
 - `aicli.sh`, `Dockerfile`, `docker-bake.hcl` - docker wrapper, image, and the bake file for it
 - `t/` - tests
@@ -523,6 +538,13 @@ CI runs them on every push, with the Debian packages and inside the Debian
 slim image. The LLM is scripted in the tests. `t/45_http_e2e.t` runs the real HTTP code
 against a small fake server (and `ai.pl` itself as a process), it is skipped
 without a curl module.
+
+`t/97_live.t` talks to a real model, when one is given. It is skipped otherwise:
+
+```bash
+AI_LIVE_SERVER=http://localhost:8001/v1 AI_LIVE_MODEL=qwen3:4b prove -I. t/97_live.t
+AI_API_KEY=... AI_LIVE_MODEL=... prove -I. t/97_live.t      # a cloud provider, by its key
+```
 
 ## License
 
