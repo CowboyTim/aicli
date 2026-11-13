@@ -457,7 +457,9 @@ Record from the microphone, recognize the speech with the recognizer of B<AI_ASR
 and send the text as the request. At a terminal, Enter starts the recording and
 Enter again stops it (B<AI_VOICE_MAX> seconds at most, 60). With a number of
 seconds it records that long; without a terminal, B<AI_VOICE_SECONDS> (5). The
-recording is made by B<AI_RECORDER> (pw-record), as a child process.
+recording is made by B<AI_RECORDER> (pw-record), as a child process. A recording
+with no sound in it is not sent (the recognizer makes up a word for silence):
+"[nothing heard]" is shown instead.
 
 =item B</context> [summary]
 

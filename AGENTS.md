@@ -109,7 +109,8 @@ with a real microphone.
   `utils::fork_run()`, `utils::wait_abortable()`), `utils::fork_child()`,
   `utils::tool_env()`, packages `curl` (Net::Curl/WWW::Curl shim) and `log`.
 - **md.pm** – `md`: markdown of the answer, line by line as it streams (`new_printer()` uses it on a terminal)
-- **/voice** (in `ai.pm`, section "Speech"): `voice_record()` runs the recorder as a child (`loop::spawn`), stopped with SIGINT by a timer; `transcribe()` sends the recording as multipart/form-data (`multipart_body()`) to AI_ASR_URL.
+- **/voice** (in `ai.pm`, section "Speech"): `voice_record()` runs the recorder as a child (`loop::spawn`), stopped with SIGINT by a timer; `transcribe()` sends the recording as multipart/form-data (`multipart_body()`) to AI_ASR_URL; `voice_quiet()` skips a recording with no sound (the recognizer answers silence with "you").
+- **FastFlowLM** is used for voice (`flm serve ... --asr 1`, port 52625), not for chat work: its chat defaults (8192 tokens, one agent at a time) stay as they are.
 - **tui.pm** – `tui`: the screen. Two modes: `bar` (default when the terminal
   is big enough, at least 7 rows and 20 columns): a footer of two lines at
   the bottom, activity (`set`/`unset` items with spinner and elapsed time)

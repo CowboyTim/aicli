@@ -128,4 +128,34 @@ sub keys_from {
     is($text, "push to talk", "ptt: the recording goes to the recognizer");
 }
 
+# a recording without sound is not sent: the recognizer makes up a word for it
+{
+    my $wav = sub {
+        my $pcm = pack('s<*', @{$_[0]});
+        return 'RIFF'.pack('V', 36 + length $pcm).'WAVE'.'fmt '.pack('V', 16)
+            .pack('vvVVvv', 1, 1, 16000, 32000, 2, 16).'data'.pack('V', length $pcm).$pcm;
+    };
+    my $silent = "$tmp/silent.wav";
+    open(my $sh, '>:raw', $silent) or die $!; print {$sh} $wav->([(0) x 8000]); close $sh;
+    my $loud = "$tmp/loud.wav";
+    open(my $lh, '>:raw', $loud) or die $!; print {$lh} $wav->([map {$_ % 2 ? 8000 : -8000} 1 .. 8000]); close $lh;
+    ok(ai::voice_quiet($silent), "quiet: a silent recording is quiet");
+    ok(!ai::voice_quiet($loud), "quiet: a loud recording is not");
+    ok(!ai::voice_quiet("$tmp/no-such-file.wav"), "quiet: a missing file is not quiet, the recognizer decides");
+
+    # a recorder that makes a silent file: no request, and it says so
+    my $quiet_rec = "$tmp/quiet-recorder";
+    open(my $qh, '>', $quiet_rec) or die $!;
+    print {$qh} "#!/bin/sh\nfor out; do :; done\ntrap 'cp \"$silent\" \"\$out\"; exit 0' INT\nwhile :; do sleep 0.05; done\n";
+    close $qh;
+    chmod 0755, $quiet_rec;
+    TestAI::setup(AI_RECORDER => $quiet_rec, AI_ASR_URL => 'http://127.0.0.1:52625/v1/audio/transcriptions');
+    my $before = scalar(@TestAI::REQUESTS);
+    my $text;
+    my $out = TestAI::capture {$text = ai::voice_once(0.3)};
+    ok(!defined $text, "quiet: no text");
+    like($out, qr/nothing heard/, "quiet: said that nothing was heard");
+    is(scalar(@TestAI::REQUESTS), $before, "quiet: no request to the recognizer");
+}
+
 done_testing();

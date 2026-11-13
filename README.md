@@ -47,8 +47,8 @@ framework.
   model on, off or into a token budget, per session
 - **Voice**: `/voice` records from the microphone (push to talk: Enter starts,
   Enter stops), recognizes the speech with a local recognizer (FastFlowLM on the
-  NPU, `AI_ASR_URL`) and sends the text as the request. The recording is a
-  child process (`pw-record`), the upload is built in Perl
+  NPU, `AI_ASR_URL`) and sends the text as the request. A recording with no sound
+  is not sent. The recording is a child process (`pw-record`), the upload is built in Perl
 - **Native tool calls**: the tools go in the request and the server returns the
   calls (`tool_calls`); a text protocol is the fallback (`AI_TOOL_CALLS=text`)
   for models and servers without it

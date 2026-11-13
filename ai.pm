@@ -3114,6 +3114,24 @@ sub transcribe {
 }
 
 # one utterance: record, transcribe. Returns the text, undef when there is none
+# true when a recording has no sound in it: the recognizer makes up a word
+# for silence ("you"), so it is not sent. The loudest sample of the 16-bit PCM
+# data must reach at least 500 (about -36 dBFS). A file that is not a WAV
+# with data counts as sound.
+sub voice_quiet {
+    my ($file) = @_;
+    my $d = slurp($file) // return 0;
+    my $at = index($d, 'data');
+    return 0 if $at < 0 or length($d) < $at + 8;
+    my $pcm = substr($d, $at + 8, unpack('V', substr($d, $at + 4, 4)));
+    my $peak = 0;
+    for my $sample (unpack('s<*', substr($pcm, 0, length($pcm) - length($pcm) % 2))){
+        my $abs = abs($sample);
+        $peak = $abs if $abs > $peak;
+    }
+    return $peak < 500;
+}
+
 sub voice_once {
     my ($seconds) = @_; # undef: push to talk
     my $file = "$AI_SESSION_DIR/voice.wav";
@@ -3122,6 +3140,10 @@ sub voice_once {
         return unless voice_record($file, $seconds);
     } else {
         return unless voice_ptt($file);
+    }
+    if(voice_quiet($file)){
+        print "${colors::cyan_color}[nothing heard]${colors::reset_color}\n";
+        return;
     }
     my $text = transcribe($file);
     return unless defined $text and length $text;
