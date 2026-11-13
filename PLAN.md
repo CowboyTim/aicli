@@ -36,6 +36,10 @@ user's view) and AGENTS.md (the code, and "Status" for the history), not here.
 - **Tools:** a side-by-side diff.
 - **Answers:** syntax highlighting of code blocks.
 - **Multi-modal:** image input for vision models. Audio input is done (`/voice`).
+- **Live voice.** The footer preview re-sends the audio every few seconds and
+  shows the words that two passes agree on (LocalAgreement), so it is not word
+  by word as you speak. A recognizer with real streaming would do that;
+  FastFlowLM only does batch transcription.
 - **Anthropic native tool calls.** Anthropic uses the text protocol for now.
 - **Performance:** cache model listings; faster session I/O for long histories.
 
