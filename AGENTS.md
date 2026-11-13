@@ -137,7 +137,9 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   never a literal `chr(0x...)` in the status: `_cols()` measures columns
   (wide characters two, combining none), `_fit()` cuts by columns, emoji are
   `?`. Tests run with the unicode set (`TestAI::setup`).
-- **ai/** – prompt templates: `default` (chat), `coder` (adds the tools).
+- **ai/** – prompt templates: `default` (chat), `coder` (adds the tools),
+  `perl` (a Perl developer with the tools; it names no project module, those
+  go in the project's own AGENTS.md).
   `ai/imagemagick/policy.xml` is the ImageMagick policy of the `convert` tool
   (`MAGICK_CONFIGURE_PATH` points at its directory in the child).
 - **aicli.sh**, **Dockerfile** – docker wrapper and the Debian slim image.
@@ -404,6 +406,7 @@ Other APIs are reached through an OpenAI compatible gateway, such as LiteLLM or 
 | `t/87_images.t` | pictures: the formats, the `image` tool (workspace, refusals, size), the picture message in a turn, its form for OpenAI and Anthropic, the estimate |
 | `t/92_convert.t` | ImageMagick: the `convert` tool and the shrinking of `image`, with a stand-in program (arguments, environment, refusals, failures, sub-agent) and the real one when it is installed (formats, crop, turn, quality, the policy) |
 | `t/93_thinking_view.t` | the thinking view: spin, text or off (AI_THINKING_VIEW, AI_SHOW_THINKING, `/thinking-view`), the printer in each, a whole turn without the thinking in the chat |
+| `t/94_perl_prompt.t` | the `perl` template: what it asks of the agent for Perl, that it names no project module, that a session built from it has it |
 | `t/88_markdown.t` | markdown of the answer: headings, emphasis, code, lists, tables, streaming, the printer |
 | `t/89_context_thinking.t` | the reasoning setting, what the request says, the first request through compactions, `/context` |
 | `t/97_live.t` | a real model, only when `AI_LIVE_SERVER` is set (`AI_LIVE_MODEL`, optional `AI_LIVE_SEARXNG`): one answer, a native tool call, the thinking setting, search. Skipped otherwise |

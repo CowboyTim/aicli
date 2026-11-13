@@ -302,7 +302,7 @@ sub cmd {
     @c = ai::chat_word_completions_cli("", "/session delete ", 16, 16);
     ok(scalar(grep {$_ eq 'zz-new'} @c), "completion: new session is offered right away");
     @c = ai::chat_word_completions_cli("", "/prompt ", 8, 8);
-    is_deeply([@c[1 .. $#c]], ["coder", "default"], "completion: /prompt offers the templates");
+    is_deeply([@c[1 .. $#c]], ["coder", "default", "perl"], "completion: /prompt offers the templates");
 }
 
 done_testing();

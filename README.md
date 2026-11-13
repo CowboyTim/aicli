@@ -472,7 +472,7 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 | `AI_MODEL` | model for sessions without their own | provider-dependent |
 | `AI_SESSION` | session name | new `session-<uuid>` |
 | `AI_SESSION_KEEP_DAYS` | at start, remove sessions not used for that many days, without asking; also the default of `/session prune` | never |
-| `AI_PROMPT_TEMPLATE` | `default` (chat) or `coder` (with tools), a file in `ai/` | `default` |
+| `AI_PROMPT_TEMPLATE` | `default` (chat), `coder` (with tools) or `perl` (a Perl developer with the tools), a file in `ai/` | `default` |
 | `AI_PROMPT_TEMPLATE_FILE` | a system prompt file of your own | |
 | `AI_CONFIG` | the file of `AI_...=value` lines read at start | `~/.aicli/config` |
 | `AI_CLEAR` | start with an empty conversation and a fresh system prompt | 0 |

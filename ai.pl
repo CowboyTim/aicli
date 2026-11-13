@@ -672,7 +672,8 @@ B</session prune>. Default: sessions are kept forever.
 =item B<AI_PROMPT_TEMPLATE>
 
 System prompt template for new sessions, a file in F<ai/>: C<default> (plain
-chat) or C<coder> (with the tools). Default: C<default>
+chat), C<coder> (with the tools) or C<perl> (a Perl developer who works with the
+tools and checks each change with C<perl -c>). Default: C<default>
 
 =item B<AI_PROMPT_TEMPLATE_FILE>
 
