@@ -464,6 +464,13 @@ sub provider_is {
     return defined $AI_PROVIDER && $AI_PROVIDER eq $name;
 }
 
+# The answer length limit when AI_TOKENS is not set. FastFlowLM answers for
+# the NPU: a model that loops would stream for minutes at 100000, so it gets
+# 8192; the other providers keep 100000.
+sub default_tokens {
+    return provider_is('flm') ? 8192 : 100_000;
+}
+
 # How many sub-agents work at once. FastFlowLM locks the NPU for one request
 # at a time, so it defaults to one.
 sub max_agents {
@@ -3474,7 +3481,7 @@ sub transform {
     my (@jstr) = @_;
     my $model = $SESSION_MODEL || $::ORIG_ENV{AI_MODEL};
     my %r = (
-        n_predict    => $::ORIG_ENV{AI_TOKENS}      // 100_000,
+        n_predict    => $::ORIG_ENV{AI_TOKENS}      // ai::default_tokens(),
         temperature  => $::ORIG_ENV{AI_TEMPERATURE} // 0.6,
         stream       => $Types::Serialiser::true,
         model        => $model,
@@ -3508,7 +3515,7 @@ sub req {
     my $model = $SESSION_MODEL || $::ORIG_ENV{AI_MODEL};
     my $req = {
         ($model ? (model => $model):()),
-        max_tokens   => $::ORIG_ENV{AI_TOKENS}      // 100_000,
+        max_tokens   => $::ORIG_ENV{AI_TOKENS}      // ai::default_tokens(),
         temperature  => $::ORIG_ENV{AI_TEMPERATURE} // 0.6,
         top_p        => $::ORIG_ENV{AI_TOP_P}       // 0.95,
         top_k        => $::ORIG_ENV{AI_TOP_K}       // 20,

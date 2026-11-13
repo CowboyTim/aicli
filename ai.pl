@@ -637,7 +637,8 @@ Start the session with an empty conversation and a fresh system prompt.
 
 =item B<AI_TOKENS>
 
-Maximum number of tokens for a completion. Default: 100000
+Maximum number of tokens for a completion. Default: 100000, 8192 with FastFlowLM
+(a model that loops on the NPU would otherwise stream for minutes).
 
 =item B<AI_TEMPERATURE>, B<AI_TOP_P>, B<AI_TOP_K>, B<AI_MIN_P>
 
