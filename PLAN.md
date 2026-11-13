@@ -30,8 +30,7 @@ user's view) and AGENTS.md (the code, and "Status" for the history), not here.
 - **Git:** AI-assisted commit messages, branch suggestions.
 - **Questions and plans:** the model asks a clarifying question when unsure,
   and can outline a plan before it acts.
-- **Tools:** a native tool to find files by name (the model uses bash for that
-  now); a side-by-side diff.
+- **Tools:** a side-by-side diff.
 - **Answers:** syntax highlighting of code blocks.
 - **Multi-modal:** image input for vision models. Audio input is done (`/voice`).
 - **Anthropic native tool calls.** Anthropic uses the text protocol for now.

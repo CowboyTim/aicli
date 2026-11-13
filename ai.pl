@@ -251,10 +251,16 @@ line with only a dot), C<N,Md>, C<N,Ms/regex/replacement/g>. An address is a
 line number, C<$> or C</regex/>. As in ed, line numbers are those after the
 previous command. Nothing is written when a command fails.
 
-=item B<delete>, B<move>, B<mkdir>, B<list>
+=item B<delete>, B<move>, B<mkdir>, B<list>, B<find>
 
 Delete a file or an empty directory, move/rename (never overwrites), create a
 directory with its parents, list a directory.
+
+=item B<find>
+
+The entries under a directory whose name matches a Perl regular expression
+(all of them for an empty one), sorted, up to 1000. Walks the tree with
+opendir/readdir in the chat process. Symbolic links are listed, never followed.
 
 =item B<grep>
 
@@ -338,7 +344,7 @@ C<search: formats: [html, json]>).
 =head1 WORKSPACE
 
 The file tools (B<read>, B<lines>, B<write>, B<replace>, B<edit>, B<delete>,
-B<move>, B<mkdir>, B<list> and the path of B<grep>) are confined to the
+B<move>, B<mkdir>, B<list>, B<find> and the path of B<grep>) are confined to the
 workspace: the directory B<ai.pl> is started in, or B<AI_WORKSPACE>. A path
 counts by where it really leads: C<..> and symbolic links are resolved before
 the check, a path that ends up outside is refused. B<delete> and B<move> work

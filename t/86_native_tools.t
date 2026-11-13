@@ -107,6 +107,7 @@ my $tmp = TestAI::setup(AI_TOOL_CALLS => 'native');
     my $args = tools::native_args('lines', '{"path":"utils.pm","range":"1-30"}');
     is_deeply($args, ['utils.pm', '1-30'], "args: lines gets the path and then the range");
     is_deeply(tools::native_args('replace', '{"path":"a","old":"b","new":"c"}'), ['a', 'b', 'c'], "args: replace gets all three in order");
+    is_deeply(tools::native_args('find', '{"path":".","name":""}'), ['.', ''], "args: find with an empty name is every entry");
 }
 
 # the text syntax still works when the model writes it (AI_TOOL_CALLS=text keeps the prompt)

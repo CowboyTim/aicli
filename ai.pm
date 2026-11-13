@@ -3841,6 +3841,15 @@ EOb
         },
         required => ["path", "range"],
     },
+    find => {
+        description => "find files and directories under a path: the entries whose name matches a Perl regular expression (all of them when empty), with their path, sorted. Symbolic links are listed, never followed. Up to 1000 results",
+        syntax => "///FIND_f1e0+EO_b2c4+EO_d8a5\n{{path}}\nEO_b2c4[LENGTH({{path}})]\n{{name}}\nEO_d8a5[LENGTH({{name}})]\nFIND_f1e0",
+        properties  => {
+            "path" => {type => "string", description => "The directory to search, . for the current one"},
+            "name" => {type => "string", description => "A Perl regular expression for the name, such as \\.pm\$ (empty for all)"},
+        },
+        required => ["path", "name"],
+    },
     replace => {
         description => "replace a piece of text in a file. The old text must be in the file exactly once, with the same whitespace: include enough lines to make it unique",
         syntax => "///REPLACE_91c4+EO_5a0e+EO_c2b7+EO_f61d\n{{path}}\nEO_5a0e[LENGTH({{path}})]\n{{old}}\nEO_c2b7[LENGTH({{old}})]\n{{new}}\nEO_f61d[LENGTH({{new}})]\nREPLACE_91c4",
@@ -4550,6 +4559,70 @@ sub list_a41d {
         my $type = -l $f ? 'l' : -d _ ? 'd' : 'f';
         sprintf("%s %10s %s%s\n", $type, $type eq 'd' ? '-' : (lstat($f))[7] // '?', $_, $type eq 'd' ? '/' : '');
     } @names);
+}
+
+# walk_tree: a directory tree with opendir/readdir (no File::Find, no glob).
+# $filter->($shown, $name, $is_dir, $is_link) decides which entries are
+# results; $shown is the path as joined from $label, the start as it was given.
+# $prune->($shown, $name) true means: do not go into that directory. Symbolic
+# links are listed but never followed, so the walk stays where the start is.
+# Entries are sorted within each directory. Options: depth (levels below the
+# start, default unlimited), max (results, default 1000). Returns the results,
+# whether more matched than max, and the number of directories not readable.
+sub walk_tree {
+    my ($start, $label, %o) = @_;
+    my $filter = $o{filter} // sub {1};
+    my $prune  = $o{prune}  // sub {0};
+    my $max    = $o{max}    // 1000;
+    my ($found, $more, $unreadable) = ([], 0, 0);
+    my $visit;
+    $visit = sub {
+        my ($dir, $shown_dir, $level) = @_;
+        opendir(my $dh, $dir) or do {$unreadable++; return};
+        my @names = sort grep {$_ ne '.' and $_ ne '..'} readdir($dh);
+        closedir($dh);
+        foreach my $name (@names){
+            my $path   = "$dir/$name";
+            my $shown  = "$shown_dir/$name";
+            my $link   = -l $path ? 1 : 0;
+            my $is_dir = (!$link and -d $path) ? 1 : 0;
+            if($filter->($shown, $name, $is_dir, $link)){
+                if(@$found >= $max){
+                    $more = 1;
+                    return;
+                }
+                push @$found, $shown;
+            }
+            next unless $is_dir;
+            next if defined $o{depth} and $level >= $o{depth};
+            next if $prune->($shown, $name);
+            $visit->($path, $shown, $level + 1);
+            return if $more;
+        }
+    };
+    $visit->($start, $label, 1);
+    undef $visit; # the closure refers to itself
+    return ($found, $more, $unreadable);
+}
+
+# find: the entries under a directory whose name matches a regex
+sub find_f1e0 {
+    my ($t_args) = @_;
+    my $path = _path($t_args->[0], default => '.');
+    $path = '.' unless length($path);
+    die "not a directory: $path\n" unless -d $path;
+    my $name = utils::trim($t_args->[1] // '');
+    my $re;
+    if(length $name){
+        $re = eval {qr/$name/};
+        die "bad name pattern '$name'\n" unless $re;
+    }
+    my ($found, $more, $unreadable) = walk_tree($path, $path,
+        filter => sub {!$re or $_[1] =~ $re});
+    my $out = join('', map {"$_\n"} @$found);
+    $out .= "more matches than 1000: use a narrower name or a deeper path\n" if $more;
+    $out .= "$unreadable director".($unreadable == 1 ? 'y' : 'ies')." could not be read\n" if $unreadable;
+    return length($out) ? $out : "no matches\n";
 }
 
 # grep: a forked child exec()s grep, no shell involved

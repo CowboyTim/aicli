@@ -13,7 +13,7 @@ framework.
 - **Thinking is shown**: reasoning (`reasoning_content`/`reasoning` deltas and
   `<think>` blocks) streams in its own color, and is not kept in the history
 - **Tools the Perl way**: file tools (read, write, numbered lines, exact
-  replace, ed-style edit, delete, move, mkdir, list) are plain Perl in the
+  replace, ed-style edit, delete, move, mkdir, list, find) are plain Perl in the
   process; bash and grep are `exec()`ed in a forked child, perl code is
   `eval`ed in a forked child (optionally in a `Safe` compartment)
 - **Sub-agents**: the model can hand tasks to sub-agents that work side by
@@ -221,6 +221,7 @@ or `[WRITE_edf5 ERROR_9a78 ... ERROR_9a78]`. In native mode it is a tool message
 | `replace` | swap one exact, unique piece of text | Perl |
 | `edit` | apply an ed script: `a`, `i`, `c`, `d`, `s///` with line, `$` and `/regex/` addresses | Perl |
 | `delete`, `move`, `mkdir`, `list` | file management | Perl |
+| `find` | entries under a directory whose name matches a regex (opendir/readdir, links not followed) | Perl |
 | `grep` | search files | `exec grep -rn` in a forked child, no shell |
 | `bash` | a shell script | temp file, `exec bash` in a forked child |
 | `perl` | Perl code | `eval` in a forked child, or `Safe->reval` with `AI_PERL_SAFE` |
@@ -247,7 +248,7 @@ There is no confirmation before a tool runs. Run it in the container.
 ### Workspace
 
 The file tools (`read`, `lines`, `write`, `replace`, `edit`, `delete`, `move`,
-`mkdir`, `list`, and the path of `grep`) only work inside the workspace: the
+`mkdir`, `list`, `find`, and the path of `grep`) only work inside the workspace: the
 directory `ai.pl` was started in, or `AI_WORKSPACE`. A path is judged by where
 it really ends up: symbolic links and `..` are resolved first, so
 `../other/file`, `/etc/passwd` and a link in the workspace that points out of

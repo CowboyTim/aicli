@@ -285,6 +285,7 @@ How they run:
 | replace | in-process: one exact, unique match; temp file + rename |
 | edit | in-process: `tools::ed_apply()`, an ed subset (a, i, c, d, s; line, `$`, `/regex/` addresses); all or nothing |
 | delete, move, mkdir, list | in-process Perl (`unlink`/`rmdir`, `rename`, `File::Path`, `readdir`) |
+| find | in-process Perl: `walk_tree()`, opendir/readdir/closedir, a filter and a prune sub; `-l` before descending, so links are not followed |
 | grep | `_run` → `exec grep -rn -e <pattern> -- <path>` |
 | bash | temp file, `_run` → `exec bash <file>` |
 | perl | `_run` → `eval` in package `aicli::tool`, or `Safe->reval` (`AI_PERL_SAFE`) |
@@ -376,7 +377,7 @@ Other APIs are reached through an OpenAI compatible gateway, such as LiteLLM or 
 | `t/50_commands.t` | slash commands, input readers, completion |
 | `t/55_session_cleanup.t` | empty sessions removed at exit and start, `/session prune`, `AI_SESSION_KEEP_DAYS`, the session list |
 | `t/60_tools.t` | `fork_run`, environment, bash/perl/Safe/read/write/grep |
-| `t/65_file_tools.t` | lines, replace, the ed engine, edit, delete, move, mkdir, list |
+| `t/65_file_tools.t` | lines, replace, the ed engine, edit, delete, move, mkdir, list, find (`walk_tree` options) |
 | `t/67_sandbox.t` | Landlock for forked tools: writes, reads, child processes, extra paths, fallbacks (skipped without kernel support) |
 | `t/66_workspace.t` | workspace confinement: `..`, absolute paths, symlinks, every file tool, `/workspace` |
 | `t/70_retry_usage_context.t` | retry/backoff, rate limits, usage, budget, context management |

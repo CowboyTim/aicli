@@ -201,5 +201,46 @@ my $five = join('', map {"line $_\n"} 1 .. 5);
     like((tool("delete", ""))[1], qr/no path/, "delete: needs a path");
 }
 
+# find: the walk with its filter, prune, depth and max subs, and the tool
+{
+    mkdir "f1" or die $!;
+    mkdir "f1/a" or die $!;
+    mkdir "f1/a/sub" or die $!;
+    mkdir "f1/.git" or die $!;
+    ai::spew("f1/top.pm", "x");
+    ai::spew("f1/a/b.pm", "x");
+    ai::spew("f1/a/c.txt", "x");
+    ai::spew("f1/a/sub/d.pm", "x");
+    ai::spew("f1/.git/g.pm", "x");
+    symlink("/", "f1/a/rootlink") or die $!; # never followed
+
+    my ($all) = tools::walk_tree("f1", "f1", filter => sub {$_[1] =~ /\.pm$/});
+    is_deeply($all, ["f1/.git/g.pm", "f1/a/b.pm", "f1/a/sub/d.pm", "f1/top.pm"], "walk: the matches, sorted within each directory");
+    my ($pruned) = tools::walk_tree("f1", "f1", filter => sub {$_[1] =~ /\.pm$/}, prune => sub {$_[1] eq '.git'});
+    is_deeply($pruned, ["f1/a/b.pm", "f1/a/sub/d.pm", "f1/top.pm"], "walk: prune: the directory is not gone into");
+    my ($top) = tools::walk_tree("f1", "f1", depth => 1);
+    is_deeply($top, ["f1/.git", "f1/a", "f1/top.pm"], "walk: depth 1 is only the start's own entries");
+    my ($two, $more) = tools::walk_tree("f1", "f1", max => 2);
+    is(scalar(@$two), 2, "walk: max results");
+    ok($more, "walk: and says that more matched");
+    my ($links) = tools::walk_tree("f1", "f1", filter => sub {$_[3]});
+    is_deeply($links, ["f1/a/rootlink"], "walk: a symbolic link is an entry, the filter sees it as one");
+    my (undef, undef, $unreadable) = tools::walk_tree("f1/nope", "f1/nope");
+    is($unreadable, 1, "walk: a directory that cannot be read is counted");
+
+    my ($out, $err) = tool("find", "f1", "\\.pm\$");
+    is_deeply([$out, $err], ["f1/.git/g.pm\nf1/a/b.pm\nf1/a/sub/d.pm\nf1/top.pm\n", undef], "find: the tool, by name");
+    is((tool("find", "f1", "^zzz"))[0], "no matches\n", "find: nothing matches");
+    my ($everything) = tool("find", "f1", "");
+    like($everything, qr{^f1/a/rootlink\n}m, "find: an empty name is every entry, links too");
+    unlike($everything, qr{f1/a/rootlink/}, "find: no entry below a link");
+    like((tool("find", "f1/top.pm", ""))[1], qr/not a directory/, "find: a file is not a directory");
+    like((tool("find", "f1", "(bad"))[1], qr/bad name pattern '\(bad'/, "find: a pattern that does not compile");
+    {
+        local $ai::WORKSPACE = $tmp;
+        like((tool("find", "/", ""))[1], qr/outside of the workspace/, "find: nothing outside of the workspace");
+    }
+}
+
 chdir("/");
 done_testing();
