@@ -2987,7 +2987,15 @@ sub voice_start {
     my $job = loop::spawn(sub {
         exec {$bin} ($rec, '--rate', '16000', '--channels', '1', '--format', 's16', $file)
             or die "cannot run $bin: $!\n";
-    }, on_done => sub {$ai::VOICE_DONE->() if $ai::VOICE_DONE});
+    }, on_done => sub {
+        my ($out) = @_;
+        # no file: say why, in the recorder's own words (not for a ctrl-C)
+        if(!-s $file and !utils::aborted()){
+            my $said = to_text($out // '') =~ s/\s+/ /gr =~ s/^ | $//gr;
+            log::error("the recorder $rec wrote no recording".(length($said) ? ": $said" : ""));
+        }
+        $ai::VOICE_DONE->() if $ai::VOICE_DONE;
+    });
     $job->{started} = Time::HiRes::time();
     return $job;
 }

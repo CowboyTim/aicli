@@ -56,6 +56,20 @@ chmod 0755, $rec;
     like($err, qr/no recorder/, "record: said so");
 }
 
+# a recorder that fails writes no file: its own message says why
+{
+    my $bad = "$tmp/failing-recorder";
+    open(my $bh, '>', $bad) or die $!;
+    print {$bh} "#!/bin/sh\necho 'pw-record: cannot connect to PipeWire' >&2\nexit 1\n";
+    close $bh;
+    chmod 0755, $bad;
+    local $::ORIG_ENV{AI_RECORDER} = $bad;
+    my $ok;
+    my $err = TestAI::capture {$ok = ai::voice_record("$tmp/failed.wav", 0.2)};
+    ok(!$ok, "failing recorder: no recording");
+    like($err, qr/wrote no recording: .*cannot connect to PipeWire/, "failing recorder: the recorder's message is shown");
+}
+
 # the recognizer: the text, and what is sent
 {
     TestAI::setup(AI_RECORDER => $rec, AI_ASR_URL => 'http://127.0.0.1:52625/v1/audio/transcriptions');
