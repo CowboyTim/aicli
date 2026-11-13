@@ -816,7 +816,9 @@ sub new_printer {
     my ($out, %o) = @_;
     my $out_arg = $out; # a printer that was given its output (a test, a pipe) gets no colors of the markdown
     $out //= sub {$TUI->clear(); print $_[0]};
-    my $show_thinking = ($::ORIG_ENV{AI_SHOW_THINKING} // 1) ? 1 : 0;
+    my $view  = thinking_view(); # spin: a spinner while it thinks; text: streamed; off
+    my $tty   = exists $o{tty} ? $o{tty} : (-t STDOUT ? 1 : 0); # the line of how long: a terminal only
+    my $thought; # when the thinking started, while it is not streamed
     my ($last, $ends_nl) = ('', 1);
     # hide_tools: the tool call blocks in the answer are not shown, the tool
     # display says what runs. A line is held back until it is clear that it
@@ -897,15 +899,27 @@ sub new_printer {
         $last    = $kind;
         $ends_nl = $text =~ m/\n\z/ ? 1 : 0;
     };
+    # the thinking is over: a line of how long it took, for a terminal in spin mode
+    my $thought_done = sub {
+        my $took = Time::HiRes::time() - $thought;
+        undef $thought;
+        &{$show}('think', sprintf("thought for %.1fs\n", $took)) if $view eq 'spin' and $tty;
+    };
     $p->{emit} = sub {
         my ($kind, $text) = @_;
         return unless length($text // '');
-        return if $kind eq 'think' and !$show_thinking;
+        if($kind eq 'think' and $view ne 'text'){
+            # not streamed: the status line spins meanwhile
+            $thought //= Time::HiRes::time();
+            return;
+        }
+        &{$thought_done}() if defined $thought and $kind eq 'text';
         $text = &{$visible}($text) if $o{hide_tools} and $kind eq 'text';
         return unless length($text);
         &{$show}($kind, $text);
     };
     $p->{finish} = sub {
+        &{$thought_done}() if defined $thought;
         # a held back line that never became a tool call
         &{$show}('text', $hold) if length($hold) and !defined $in_tool;
         ($bol, $hold, $in_tool) = (1, '', undef);
@@ -1541,6 +1555,18 @@ sub thinking_text {
     my $from = (defined $AI_SESSION_DIR and -f "$AI_SESSION_DIR/thinking") ? 'session'
         : defined $::ORIG_ENV{AI_THINKING} ? 'AI_THINKING' : 'default';
     return (thinking_setting() // 'server default')." ($from)";
+}
+
+# How the thinking of the model is shown: 'spin' (the default: no text, the
+# status line spins, and a line says how long it took), 'text' (streamed in its
+# color), or 'off'. AI_THINKING_VIEW sets it, AI_SHOW_THINKING=0 is off, and
+# /thinking-view changes it for this run.
+our $THINKING_VIEW;
+sub thinking_view {
+    return $THINKING_VIEW if defined $THINKING_VIEW;
+    return 'off' unless ($::ORIG_ENV{AI_SHOW_THINKING} // 1);
+    my $v = lc($::ORIG_ENV{AI_THINKING_VIEW} // 'spin');
+    return $v =~ m/\A(?:spin|text|off)\z/ ? $v : 'spin';
 }
 
 # The first request of the conversation, kept in the session: a compaction
@@ -2648,6 +2674,25 @@ our @COMMANDS;
             return 0;
         },
         complete => sub {return +{map {($_ => sub {0})} qw(on off default)}},
+    },
+    '/thinking-view' => {
+        usage => '/thinking-view [spin|text|off]',
+        help  => 'how the thinking of the model is shown: spin (a spinner, the default), text (streamed) or off; for this run',
+        run   => sub {
+            my ($args) = @_;
+            $args = lc(utils::trim($args // ''));
+            if(length $args){
+                if($args =~ m/\A(?:spin|text|off)\z/){
+                    $THINKING_VIEW = $args;
+                } else {
+                    print "Usage: /thinking-view spin|text|off\n";
+                    return 0;
+                }
+            }
+            print "thinking view: ".thinking_view()."\n";
+            return 0;
+        },
+        complete => sub {return +{map {($_ => sub {0})} qw(spin text off)}},
     },
     '/voice' => {
         usage => '/voice [seconds]',

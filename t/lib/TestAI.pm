@@ -29,6 +29,7 @@ sub setup {
         AI_PROMPT_TEMPLATE_FILE => "$ROOT/ai/coder",
         AI_RETRIES      => 0, # tests that want retries or the usage line ask for it
         AI_SHOW_USAGE   => 0,
+        AI_THINKING_VIEW => 'text', # the streamed thinking the older tests look at; the spinner has its own tests
         AI_TOOL_DISPLAY => 'full', # and the same for the brief tool display,
         AI_PROMPT_DATE  => 'none', # the date and the project file in the prompt
         AI_PROJECT_FILE => '',

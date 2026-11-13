@@ -10,8 +10,10 @@ framework.
 
 - **Agent loop**: the answer of the model is scanned for tool calls, they are
   executed, the results go back to the model, until it is done
-- **Thinking is shown**: reasoning (`reasoning_content`/`reasoning` deltas and
-  `<think>` blocks) streams in its own color, and is not kept in the history
+- **Thinking is shown**: while the model reasons (`reasoning_content`/`reasoning`
+  deltas and `<think>` blocks) a spinner runs in the status line, and a line says
+  how long it took. `AI_THINKING_VIEW=text` streams it in its own color instead.
+  Thinking is not kept in the history
 - **Tools the Perl way**: file tools (read, write, numbered lines, exact
   replace, ed-style edit, delete, move, mkdir, list, find) are plain Perl in the
   process; bash and grep are `exec()`ed in a forked child, perl code is
@@ -178,6 +180,7 @@ the model:
 | `/voice [seconds]` | record from the microphone, recognize it (`AI_ASR_URL`) and send it; push to talk: Enter starts, Enter or a pause sends, Esc cancels |
 | `/context [summary]` | how full the context is, its compactions and the thinking setting; `summary` shows the last summary of the older messages |
 | `/thinking [on\|off\|<tokens>\|default]` | the reasoning of the model for this session |
+| `/thinking-view [spin\|text\|off]` | how the thinking is shown, for this run: a spinner, streamed, or hidden |
 | `/system <text>` | add a system message |
 | `/files [regex]` | add matching files of the current directory to the conversation (`.aiignore` is respected) |
 | `/tools` | list the tools |
@@ -197,7 +200,7 @@ read, a second one, or one while nothing runs, ends the program (exit 130).
 ```
  you ──► chat file ──► POST /v1/chat/completions (stream)
               ▲                 │
-              │        thinking │ answer      shown as they stream in
+              │        thinking │ answer      spinner, or streamed; the answer streams in
               │                 ▼
               │        tool calls in the answer?
               │            │ yes                    │ no
@@ -514,7 +517,8 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 | `AI_PROJECT_FILE` | project instruction files to add to the system prompt, empty for none | `AGENTS.md` |
 | `AI_PROJECT_FILE_MAX` | max bytes taken from such a file | 32768 |
 | `AI_PROMPT_DATE` | date in the system prompt: `none`, `year`, `month`, `day` or a `strftime` format | `month` |
-| `AI_SHOW_THINKING` | 0 hides the thinking | 1 |
+| `AI_THINKING_VIEW` | how the thinking is shown: `spin` (a spinner in the status line, and how long it took), `text` (streamed in its color), `off`; `/thinking-view` changes it for the run | spin |
+| `AI_SHOW_THINKING` | 0 hides the thinking (the same as `AI_THINKING_VIEW=off`) | 1 |
 | `AI_TOOL_TIMEOUT` | seconds for a bash/perl/grep tool, 0 = no limit | 120 |
 | `AI_TOOL_MAX_OUTPUT` | max bytes of a tool result, the middle is cut out | 65536 |
 | `AI_TOOL_ENV` | extra environment variables to pass to tools | |

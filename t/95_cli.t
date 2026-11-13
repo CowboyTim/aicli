@@ -90,6 +90,7 @@ SKIP: {
     local $ENV{AI_DIR} = "$tmp/cli";
     local $ENV{AI_CONFIG} = "$tmp/noconfig";
     local $ENV{AI_LOCAL_SERVER} = $url;
+    local $ENV{AI_THINKING_VIEW} = "text"; # the streamed thinking of the fake server, which some tests look at
     local $ENV{AI_PROMPT_TEMPLATE} = "coder";
     local $ENV{AI_PROJECT_FILE} = "";
     local $ENV{AI_RETRIES} = 0; # the failing request would be retried for half a minute

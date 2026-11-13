@@ -509,6 +509,12 @@ B<summary> shows the last summary the model wrote for the older messages.
 The reasoning of the model for this session: on, off, a token budget, or the
 default (B<AI_THINKING>). Without an argument it shows the setting.
 
+=item B</thinking-view> [spin|text|off]
+
+How the thinking of the model is shown, for this run: C<spin> (a spinner in the
+status line, the default), C<text> (streamed in its color) or C<off>. Without an
+argument it shows the view. See B<AI_THINKING_VIEW>.
+
 =item B</system> <text>
 
 Add a system message to the conversation.
@@ -899,9 +905,18 @@ How precise the date in the system prompt is: C<none>, C<year>, C<month>,
 C<day>, or a strftime(3) format. Coarse on purpose: the system prompt starts
 every request, a date that changes often defeats caching. Default: C<month>
 
+=item B<AI_THINKING_VIEW>
+
+How the thinking of the model is shown. C<spin> (the default): nothing of it
+is written, a spinner runs in the status line while the model thinks, and a
+line in a terminal says how long it took. C<text>: the thinking streams in its
+own color. C<off>: hidden. B</thinking-view> changes it for one run. With the
+status line off, C<spin> shows nothing while the model thinks.
+
 =item B<AI_SHOW_THINKING>
 
-Set to 0 to hide the thinking of the model. Default: 1
+Set to 0 to hide the thinking of the model, the same as C<AI_THINKING_VIEW=off>.
+Default: 1
 
 =item B<AI_TOOL_TIMEOUT>
 

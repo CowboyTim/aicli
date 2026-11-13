@@ -403,6 +403,7 @@ Other APIs are reached through an OpenAI compatible gateway, such as LiteLLM or 
 | `t/86_native_tools.t` | native tool calls: tools in the request, calls and results, pieces of arguments, errors, the text fallback, sub-agents |
 | `t/87_images.t` | pictures: the formats, the `image` tool (workspace, refusals, size), the picture message in a turn, its form for OpenAI and Anthropic, the estimate |
 | `t/92_convert.t` | ImageMagick: the `convert` tool and the shrinking of `image`, with a stand-in program (arguments, environment, refusals, failures, sub-agent) and the real one when it is installed (formats, crop, turn, quality, the policy) |
+| `t/93_thinking_view.t` | the thinking view: spin, text or off (AI_THINKING_VIEW, AI_SHOW_THINKING, `/thinking-view`), the printer in each, a whole turn without the thinking in the chat |
 | `t/88_markdown.t` | markdown of the answer: headings, emphasis, code, lists, tables, streaming, the printer |
 | `t/89_context_thinking.t` | the reasoning setting, what the request says, the first request through compactions, `/context` |
 | `t/97_live.t` | a real model, only when `AI_LIVE_SERVER` is set (`AI_LIVE_MODEL`, optional `AI_LIVE_SEARXNG`): one answer, a native tool call, the thinking setting, search. Skipped otherwise |
