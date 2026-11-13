@@ -3945,8 +3945,12 @@ sub rx {
 # the arguments of a tool, in the order of its syntax: {{path}}, {{content}}, ...
 sub arg_names {
     my ($t) = @_;
-    my @names;
-    push @names, $1 while $t->{syntax} =~ m/\{\{(\w+)\}\}/g;
+    # each argument shows up twice in a syntax (its length in a sentinel, then
+    # its text): keep the first place of each, in order
+    my (%seen, @names);
+    while ($t->{syntax} =~ m/\{\{(\w+)\}\}/g){
+        push @names, $1 unless $seen{$1}++;
+    }
     return @names;
 }
 

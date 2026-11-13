@@ -100,6 +100,15 @@ my $tmp = TestAI::setup(AI_TOOL_CALLS => 'native');
     is($none->{tool_call_id}, 'call_none', "bad: and the other one too");
 }
 
+# the arguments of a call go to the right place: a tool with two or more
+# arguments gets each one at its own position (the syntax names each twice)
+{
+    is_deeply([tools::arg_names($tools::TOOLS->{lines})], ['path', 'range'], "args: names once each, in order");
+    my $args = tools::native_args('lines', '{"path":"utils.pm","range":"1-30"}');
+    is_deeply($args, ['utils.pm', '1-30'], "args: lines gets the path and then the range");
+    is_deeply(tools::native_args('replace', '{"path":"a","old":"b","new":"c"}'), ['a', 'b', 'c'], "args: replace gets all three in order");
+}
+
 # the text syntax still works when the model writes it (AI_TOOL_CALLS=text keeps the prompt)
 {
     TestAI::setup(AI_TOOL_CALLS => 'native');
