@@ -464,9 +464,15 @@ Record from the microphone, recognize the speech with the recognizer of B<AI_ASR
 and send the text as the request. At a terminal, Enter starts the recording and
 Enter again stops it (B<AI_VOICE_MAX> seconds at most, 60). With a number of
 seconds it records that long; without a terminal, B<AI_VOICE_SECONDS> (5). The
-recording is made by B<AI_RECORDER> (pw-record), as a child process. A recording
-with no sound in it is not sent (the recognizer makes up a word for silence):
-"[nothing heard]" is shown instead.
+recording is made by B<AI_RECORDER> (pw-record), as a child process, into a
+private directory of the temp dir (C</tmp/aicli-E<lt>uidE<gt>>), deleted after it
+was recognized. A recording with no sound in it is not sent (the recognizer
+makes up a word for silence): "[nothing heard]" is shown instead.
+
+While it is made, the footer shows a level meter and, with B<AI_ASR_URL>, the
+words recognized so far: every three seconds of new audio go to the recognizer,
+and the words that two passes give the same way are final. The text that is
+sent at the stop is the recognition of the whole recording.
 
 =item B</context> [summary]
 

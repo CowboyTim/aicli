@@ -48,7 +48,11 @@ framework.
 - **Voice**: `/voice` records from the microphone (push to talk: Enter starts,
   Enter stops), recognizes the speech with a local recognizer (FastFlowLM on the
   NPU, `AI_ASR_URL`) and sends the text as the request. A recording with no sound
-  is not sent. The recording is a child process (`pw-record`), the upload is built in Perl
+  is not sent. While it is made, the footer shows a level meter and the words
+  recognized so far (a pass every three seconds of new audio; words that two
+  passes agree on are final). The text sent at the stop is the whole recording.
+  The recording is a child process (`pw-record`) and goes to a private directory
+  in the temp dir (`/tmp/aicli-<uid>`), deleted after recognition; the upload is built in Perl
 - **Native tool calls**: the tools go in the request and the server returns the
   calls (`tool_calls`); a text protocol is the fallback (`AI_TOOL_CALLS=text`)
   for models and servers without it

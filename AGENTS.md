@@ -109,7 +109,7 @@ with a real microphone.
   `utils::fork_run()`, `utils::wait_abortable()`), `utils::fork_child()`,
   `utils::tool_env()`, packages `curl` (Net::Curl/WWW::Curl shim) and `log`.
 - **md.pm** – `md`: markdown of the answer, line by line as it streams (`new_printer()` uses it on a terminal)
-- **/voice** (in `ai.pm`, section "Speech"): `voice_record()` runs the recorder as a child (`loop::spawn`), stopped with SIGINT by a timer; `transcribe()` sends the recording as multipart/form-data (`multipart_body()`) to AI_ASR_URL; `voice_quiet()` skips a recording with no sound (the recognizer answers silence with "you").
+- **/voice** (in `ai.pm`, section "Speech"): `voice_record()` runs the recorder as a child (`loop::spawn`), stopped with SIGINT by a timer; `transcribe()` sends the recording as multipart/form-data (`multipart_body()`) to AI_ASR_URL; `voice_quiet()` skips a recording with no sound (the recognizer answers silence with "you"). The recording goes to `voice_dir()` (`/tmp/aicli-<uid>`, the sandbox lets the recorder write there, not in the session directory). While it is made: `voice_meter_start()` samples the level for the footer, `voice_preview_start()` sends the audio since the last final words every three seconds (verbose JSON segments), `heard_agree()` (LocalAgreement) makes the segments that two passes agree on final and drops their audio.
 - **FastFlowLM** is used for voice (`flm serve ... --asr 1`, port 52625), not for chat work. Its chat defaults (8192 tokens) stay as they are; there is no `agent` tool with it.
 - **tui.pm** – `tui`: the screen. Two modes: `bar` (default when the terminal
   is big enough, at least 7 rows and 20 columns): a footer of two lines at
