@@ -386,7 +386,7 @@ and all of them sit in the same `select()` loop as everything else. Its
 thinking is not printed. The status line shows what each agent is doing and how
 many tokens it used, and a line per start and tool call is printed
 (`AI_AGENT_VIEW`). Transcripts are kept in
-`sessions/<name>/agents/`. Sub-agents retry API errors like the main loop,
+`sessions/<name>/agents/`, rewritten after every message, so a stuck agent can be read. A sub-agent stops after `AI_AGENT_MAX_TURNS` tool turns. Sub-agents retry API errors like the main loop,
 count for the token usage of the session, and stop on ctrl-C. They watch
 their own context window: the output of their older tool calls is cut, then
 their oldest steps are dropped; the task always stays.
@@ -456,6 +456,7 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 | `AI_TOKENS` | max tokens per answer | 100000 (8192 with `AI_PROVIDER=flm`) |
 | `AI_TEMPERATURE`, `AI_TOP_P`, `AI_TOP_K`, `AI_MIN_P` | sampling | 0.6, 0.95, 20, 0.0 |
 | `AI_MAX_TURNS` | max requests per input (tool loop), 0 = no limit | 50 |
+| `AI_AGENT_MAX_TURNS` | max tool turns of one sub-agent, 0 = no limit | 20 |
 | `AI_MAX_AGENTS` | sub-agents working at the same time (1 with `AI_PROVIDER=flm`, the NPU takes one request at a time) | 4 |
 | `AI_AGENT_VIEW` | 0: no line per sub-agent start and tool call | 1 |
 | `AI_AGENT_MODEL` | model for sub-agents | the session model |

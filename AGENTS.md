@@ -212,14 +212,15 @@ never reads the environment on its own. Web requests carry no API key.
 are done, then `{result}` / `{error}` are set. A sub-agent has its own message
 list (system prompt from `ai::subagent_prompt()`: session prompt + tools
 without `agent`), retries like the main loop, counts into the usage of the
-session, writes its transcript to `agents/` in the session directory, and
+session, writes its transcript to `agents/` in the session directory after every
+message, and
 shows up in the status line with its tokens (`agent::status`), and each start and
 tool call is printed as one line (`ai::agent_view`, `AI_AGENT_VIEW`). It keeps its
 own messages within the context window (`agent::compact`, before every
 request and once after a "context too long" error): old tool output is
 pruned, then the oldest steps are dropped with a note; system prompt, task
 and the last two messages stay. No summary request, so it never has to wait.
-It cannot start agents.
+It cannot start agents. It stops after `AI_AGENT_MAX_TURNS` tool turns (default 20).
 
 ## System prompt
 

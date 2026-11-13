@@ -3283,6 +3283,7 @@ sub status {
 sub start {
     my ($self) = @_;
     $RUNNING{$self->{id}} = $self;
+    $self->save();
     $self->request();
     return;
 }
@@ -3363,10 +3364,11 @@ sub response {
         function => {name => $_->{name}, arguments => $_->{arguments}}}} @$native]
         if @$native;
     push @{$self->{msgs}}, \%m;
+    $self->save();
     my @calls = @$native ? map {ai::native_call($_)} @$native : ai::parse_tool_calls(ai::to_bytes($answer));
     return $self->finish($answer) unless @calls;
-    my $max_turns = $::ORIG_ENV{AI_MAX_TURNS} // 50;
-    return $self->finish($answer, "stopped after $max_turns tool turns (AI_MAX_TURNS)")
+    my $max_turns = $::ORIG_ENV{AI_AGENT_MAX_TURNS} // 20;
+    return $self->finish($answer, "stopped after $max_turns tool turns (AI_AGENT_MAX_TURNS)")
         if $max_turns and ++$self->{turns} >= $max_turns;
     $self->{queue} = \@calls;
     $self->next_tool();
@@ -3420,6 +3422,7 @@ sub next_tool {
             push @{$self->{msgs}}, $c->{id}
                 ? {role => 'tool', tool_call_id => $c->{id}, content => ai::to_text($err // $result // '')}
                 : {role => 'user', content => ai::to_text(ai::tool_response($c->{tool}, $result, $err))};
+            $self->save();
         };
         if(utils::aborted()){
             &{$got}("", "[ERROR] not executed, interrupted by user");
@@ -3446,13 +3449,10 @@ sub next_tool {
     return;
 }
 
-sub finish {
-    my ($self, $result, $err) = @_;
-    return if $self->{done};
-    @{$self}{qw(done result error activity)} = (1, $result, $err, 'done');
-    delete $RUNNING{$self->{id}};
-    $ai::TUI->unset("agent $self->{id}");
-    # what it did, for whoever wants to know: sessions/<name>/agents/<n>.chat
+# What the agent did, for whoever wants to know: sessions/<name>/agents/<n>.chat,
+# rewritten after every message, so a stuck agent can still be read.
+sub save {
+    my ($self) = @_;
     eval {
         my $dir = "$ai::AI_SESSION_DIR/agents";
         -d $dir or mkdir $dir or die "$dir: $!\n";
@@ -3460,6 +3460,16 @@ sub finish {
             join('', map {$::JSON->encode($_)."\n"} @{$self->{msgs}}));
         1;
     } or log::info("agent transcript not saved: $@");
+    return;
+}
+
+sub finish {
+    my ($self, $result, $err) = @_;
+    return if $self->{done};
+    @{$self}{qw(done result error activity)} = (1, $result, $err, 'done');
+    delete $RUNNING{$self->{id}};
+    $ai::TUI->unset("agent $self->{id}");
+    $self->save();
     # the next one in line
     while(@QUEUE){
         my $next = shift @QUEUE;

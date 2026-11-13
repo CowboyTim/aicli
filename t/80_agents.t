@@ -98,7 +98,7 @@ sub run_calls {
 
 # what can go wrong
 {
-    my $tmp = TestAI::setup(AI_RETRIES => 2, AI_RETRY_DELAY => 0.01, AI_MAX_TURNS => 3);
+    my $tmp = TestAI::setup(AI_RETRIES => 2, AI_RETRY_DELAY => 0.01, AI_AGENT_MAX_TURNS => 3);
     chdir($tmp) or die $!;
 
     # an agent cannot start agents
@@ -136,8 +136,25 @@ sub run_calls {
     # never ending tool loop
     TestAI::mock_agent_http(sub {$say->("still busy\n".$bash->('true'))});
     ($r) = run_calls($agent->("forever"));
-    is(scalar(@TestAI::AGENT_REQUESTS), 3, "turns: stopped at AI_MAX_TURNS");
+    is(scalar(@TestAI::AGENT_REQUESTS), 3, "turns: stopped at AI_AGENT_MAX_TURNS");
     like($r->[0]{content}, qr/failed: stopped after 3 tool turns.*Its last answer was:\nstill busy/s, "turns: says so, with the last answer");
+
+    # the transcript is on disk while the agent is still running
+    my ($seen, $sent) = (-1, -1);
+    TestAI::mock_agent_http(sub {
+        my ($msgs) = @_;
+        if(@$msgs == 2){
+            return $say->("working\n".$bash->('true'));
+        }
+        my ($t) = (sort glob("$tmp/aicli/sessions/test/agents/*.chat"))[-1]; # the newest agent
+        if($seen < 0){
+            $seen = $t ? scalar(() = ai::slurp($t) =~ m/^\{/mg) : -1;
+            $sent = scalar(@$msgs);
+        }
+        return $say->("done");
+    });
+    ($r) = run_calls($agent->("visible"));
+    is($seen, $sent, "transcript: as long as the conversation, before the agent is done");
 
     # a malformed tool call of the agent goes back to the agent
     TestAI::mock_agent_http(sub {

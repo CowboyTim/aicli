@@ -375,7 +375,9 @@ A sub-agent is neither a process nor a thread: its request is one more curl
 handle and its tools are forked children in the one select() loop of the
 program. What it thinks is not printed. The status line shows what it does, with the
 tokens it used, and a line per start and tool call is printed (B<AI_AGENT_VIEW>).
-Its conversation is saved in the F<agents/> directory of the session. An agent keeps its own conversation within the context
+Its conversation is saved in the F<agents/> directory of the session, after every
+message, so a stuck agent can be read. It stops after B<AI_AGENT_MAX_TURNS> tool
+turns (default 20). An agent keeps its own conversation within the context
 window: the output of older tool calls is cut, then its oldest steps are
 dropped, the task stays.
 
@@ -668,6 +670,11 @@ servers without a chat template). Only known for qwen models.
 
 Maximum number of requests for one user input (tool loop). Default: 50, 0 for
 no limit.
+
+=item B<AI_AGENT_MAX_TURNS>
+
+Maximum number of tool turns of one sub-agent (its requests that make tool calls).
+Default: 20. The main loop has its own limit, B<AI_MAX_TURNS>.
 
 =item B<AI_MAX_AGENTS>
 
