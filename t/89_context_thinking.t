@@ -99,15 +99,15 @@ use TestAI;
 # FastFlowLM (the NPU): one request at a time, so one sub-agent; native tool calls stay the default
 {
     TestAI::setup(AI_LOCAL_SERVER => 'http://localhost:8001/v1', AI_PROVIDER => 'flm', AI_MODEL => 'qwen3:4b', AI_TOOL_CALLS => "native", AI_SUMMARY_CHUNKS => 1);
-    is(ai::max_agents(), 1, "flm: one sub-agent at a time");
+    is(ai::max_agents(), 4, "flm: the limit is the same as elsewhere; there are no sub-agents on FLM");
+    ok(!tools::available('agent'), "flm: no agent tool");
     is(ai::default_tokens(), 8192, "flm: a shorter answer limit by default");
     ok(ai::native_calls(), "flm: native tool calls by default");
-    TestAI::setup(AI_LOCAL_SERVER => 'http://localhost:8001/v1', AI_PROVIDER => 'flm', AI_MAX_AGENTS => 3, AI_SUMMARY_CHUNKS => 1);
-    is(ai::max_agents(), 3, "flm: AI_MAX_AGENTS wins");
     TestAI::setup(AI_LOCAL_SERVER => 'http://localhost:8001/v1', AI_PROVIDER => 'flm', AI_TOOL_CALLS => 'text', AI_SUMMARY_CHUNKS => 1);
     ok(!ai::native_calls(), "flm: AI_TOOL_CALLS=text still works");
     TestAI::setup(AI_LOCAL_SERVER => 'http://127.0.0.1:9/v1/', AI_SUMMARY_CHUNKS => 1);
     is(ai::max_agents(), 4, "other providers: four");
+    ok(tools::available('agent'), "other providers: the agent tool is there");
     is(ai::default_tokens(), 100_000, "other providers: the long limit");
 }
 

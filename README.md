@@ -380,6 +380,8 @@ EO_9d31
 AGENT_f2a8
 ```
 
+With `AI_PROVIDER=flm` there is no `agent` tool: the NPU is kept for voice.
+
 A sub-agent is not a process and not a thread. It is a small state machine:
 its request is a curl handle, its bash/perl/grep tools are forked children,
 and all of them sit in the same `select()` loop as everything else. Its
@@ -457,7 +459,7 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 | `AI_TEMPERATURE`, `AI_TOP_P`, `AI_TOP_K`, `AI_MIN_P` | sampling | 0.6, 0.95, 20, 0.0 |
 | `AI_MAX_TURNS` | max requests per input (tool loop), 0 = no limit | 50 |
 | `AI_AGENT_MAX_TURNS` | max tool turns of one sub-agent, 0 = no limit | 20 |
-| `AI_MAX_AGENTS` | sub-agents working at the same time (1 with `AI_PROVIDER=flm`, the NPU takes one request at a time) | 4 |
+| `AI_MAX_AGENTS` | sub-agents working at the same time (no sub-agents with `AI_PROVIDER=flm`) | 4 |
 | `AI_AGENT_VIEW` | 0: no line per sub-agent start and tool call | 1 |
 | `AI_AGENT_MODEL` | model for sub-agents | the session model |
 | `AI_RETRIES` | retries of a failed request | 4 |
@@ -526,7 +528,7 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 - `ai/` - system prompt templates (`default`, `coder`)
 - `aicli.sh`, `Dockerfile`, `docker-bake.hcl` - docker wrapper, image, and the bake file for it
 - `t/` - tests
-- `TODO.md` - roadmap
+- `PLAN.md` - open work and ideas
 - `AGENTS.md` - notes and rules for (AI) contributors
 
 ## Tests

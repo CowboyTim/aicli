@@ -165,7 +165,7 @@ sub mock_web {
     TestAI::setup(AI_WEB_PROXY => "http://web-proxy:8080");
     ok(!tools::available("search"), "search: not available without AI_SEARXNG_URL");
     ok(tools::available("fetch") && tools::available("bash"), "search: the others are");
-    like((tool("search", "perl"))[1], qr/no search engine is set up \(AI_SEARXNG_URL\)/, "search: says what is missing");
+    like((tool("search", "perl"))[1], qr/is not available here/, "search: a call without it is refused");
 
     local $::ORIG_ENV{AI_SEARXNG_URL} = "http://searx.lan:8888/";
     ok(tools::available("search"), "search: available with AI_SEARXNG_URL");

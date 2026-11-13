@@ -61,7 +61,7 @@ These are requirements, not suggestions.
   `WWW::Curl`), `Term::ReadLine::Gnu`. `Data::UUID` is optional. Ask before
   adding a CPAN module.
 - **Keep the docs in sync**: README.md, the POD in `ai.pl` and this file
-  describe what the code does, not what is planned (that is TODO.md). Notes
+  describe what the code does, not what is planned (that is PLAN.md). Notes
   for whoever works on this next go here, in "Status", not in a file of their
   own (there was a MEMORY.md, it is part of this file now).
 - **stdout is the conversation**: messages, errors and the debug log go to
@@ -85,8 +85,8 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
 tests with `Net::Curl` (the preferred module; the image has `WWW::Curl`), a real
 proxy, the privilege drop as root in docker with a user other than 1000, and voice
 with a real microphone.
-- What is open is in TODO.md ("Open, found while fixing the agent loop"),
-  what is settled in its "Completed Items".
+- What is open is in PLAN.md. What is built is in README.md and in this
+  "Status", not in PLAN.md.
 
 ## Layout
 
@@ -110,7 +110,7 @@ with a real microphone.
   `utils::tool_env()`, packages `curl` (Net::Curl/WWW::Curl shim) and `log`.
 - **md.pm** – `md`: markdown of the answer, line by line as it streams (`new_printer()` uses it on a terminal)
 - **/voice** (in `ai.pm`, section "Speech"): `voice_record()` runs the recorder as a child (`loop::spawn`), stopped with SIGINT by a timer; `transcribe()` sends the recording as multipart/form-data (`multipart_body()`) to AI_ASR_URL; `voice_quiet()` skips a recording with no sound (the recognizer answers silence with "you").
-- **FastFlowLM** is used for voice (`flm serve ... --asr 1`, port 52625), not for chat work: its chat defaults (8192 tokens, one agent at a time) stay as they are.
+- **FastFlowLM** is used for voice (`flm serve ... --asr 1`, port 52625), not for chat work. Its chat defaults (8192 tokens) stay as they are; there is no `agent` tool with it.
 - **tui.pm** – `tui`: the screen. Two modes: `bar` (default when the terminal
   is big enough, at least 7 rows and 20 columns): a footer of two lines at
   the bottom, activity (`set`/`unset` items with spinner and elapsed time)
@@ -129,7 +129,7 @@ with a real microphone.
 - **aicli.sh**, **Dockerfile** – docker wrapper and the Debian slim image.
   **docker-bake.hcl** builds that image (`docker buildx bake`; `image-ci`
   adds the GitHub Actions cache). CI still uses `docker build`.
-- **t/** – tests, **TODO.md** – roadmap.
+- **t/** – tests, **PLAN.md** – open work and ideas.
 
 ## How a turn works
 
@@ -209,7 +209,7 @@ never reads the environment on its own. Web requests carry no API key.
 ## Sub-agents
 
 `package agent`. `agent::launch($task)` creates one (queued when
-`AI_MAX_AGENTS` are running), `agent::wait(@agents)` runs the loop until they
+`AI_MAX_AGENTS` are running; the `agent` tool is not available with FastFlowLM), `agent::wait(@agents)` runs the loop until they
 are done, then `{result}` / `{error}` are set. A sub-agent has its own message
 list (system prompt from `ai::subagent_prompt()`: session prompt + tools
 without `agent`), retries like the main loop, counts into the usage of the
@@ -401,7 +401,7 @@ with the Debian packages (`WWW::Curl`) and inside the image of the Dockerfile
 
 ## Known gaps
 
-See TODO.md. The proxies and the SearXNG search have only been tested with a
+See PLAN.md. The proxies and the SearXNG search have only been tested with a
 mocked HTTP layer, never against a real proxy or instance. The bigger ones: `Net::Curl` is the preferred curl module, but the
 tests have only run with `WWW::Curl` since the event loop exists, the image included; no tool
 confirmation or allow-list (by choice);

@@ -369,7 +369,8 @@ With the B<agent> tool the model hands a self-contained task to a sub-agent:
 a second conversation with the model, with the system prompt of the session
 and all tools except B<agent>, but nothing of the conversation so far. Its
 final answer is the result of the tool call. Several B<agent> calls in one
-answer work at the same time, at most B<AI_MAX_AGENTS>.
+answer work at the same time, at most B<AI_MAX_AGENTS>. With B<AI_PROVIDER>=flm
+there is no B<agent> tool at all (the NPU is kept for voice).
 
 A sub-agent is neither a process nor a thread: its request is one more curl
 handle and its tools are forked children in the one select() loop of the
@@ -680,7 +681,8 @@ Default: 20. The main loop has its own limit, B<AI_MAX_TURNS>.
 
 =item B<AI_MAX_AGENTS>
 
-Number of sub-agents that work at the same time. Default: 4
+Number of sub-agents that work at the same time. Default: 4. Not used with
+FastFlowLM, which has no sub-agents.
 
 =item B<AI_AGENT_VIEW>
 

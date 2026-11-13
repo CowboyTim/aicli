@@ -474,7 +474,7 @@ sub default_tokens {
 # How many sub-agents work at once. FastFlowLM locks the NPU for one request
 # at a time, so it defaults to one.
 sub max_agents {
-    return $::ORIG_ENV{AI_MAX_AGENTS} // (provider_is('flm') ? 1 : 4);
+    return $::ORIG_ENV{AI_MAX_AGENTS} // 4;
 }
 
 sub native_calls {
@@ -600,6 +600,7 @@ sub execute_tool_async {
     my $t  = $tools::TOOLS->{$k};
     my $fn = $t && tools->can(lc $t->{tag});
     return &{$cb}("", "[ERROR] Unknown tool '$tool'") unless $fn;
+    return &{$cb}("", "[ERROR] tool '$tool' is not available here") unless tools::available($k);
     return &{$cb}("", "[ERROR] a sub-agent cannot start agents") if $k eq 'agent';
     my $ret = eval {
         local $tools::ASYNC = 1; # forking tools hand back a job instead of waiting
@@ -631,6 +632,7 @@ sub execute_tool {
     my $t  = $tools::TOOLS->{$k};
     my $fn = $t && tools->can(lc $t->{tag});
     return "", "[ERROR] Unknown tool '$tool'" unless $fn;
+    return "", "[ERROR] tool '$tool' is not available here" unless tools::available($k);
     my $ret = eval {&{$fn}($t_args)};
     if($@){
         chomp(my $err = $@);
@@ -3915,6 +3917,8 @@ EOb
             "task" => {type => "string", description => "The complete, self-contained task"},
         },
         required => ["task"],
+        # not on FastFlowLM: the NPU runs one request at a time and is kept for voice
+        available => sub {!ai::provider_is('flm')},
     },
     fetch => {
         description => "get a web page or file by its URL (http or https). HTML comes back as text, with links as [text](url)",

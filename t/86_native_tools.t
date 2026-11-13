@@ -141,6 +141,19 @@ my $tmp = TestAI::setup(AI_TOOL_CALLS => 'native');
     like($res->{content} // '', qr/sub got: from-sub/, "agent: its answer is the tool result of the main agent");
 }
 
+# FastFlowLM: no sub-agents. The agent tool is not in the request, and a call
+# written as text is refused (it does not run)
+{
+    TestAI::setup(AI_LOCAL_SERVER => 'http://localhost:8001/v1', AI_PROVIDER => 'flm', AI_TOOL_CALLS => 'native');
+    my %names = map {($_->{function}{name} => 1)} @{tools::native_list()};
+    ok(!$names{agent}, "flm: no agent tool in the request");
+    ok($names{bash}, "flm: the other tools are there");
+    my (undef, $err) = ai::execute_tool('agent', 'agent', ['do it']);
+    like($err // '', qr/tool 'agent' is not available here/, "flm: an agent call is refused");
+    my ($out, $err2) = ai::execute_tool('bash', 'bash', ['echo still-here']);
+    ok(!$err2 && $out =~ m/still-here/, "flm: a bash call still runs");
+}
+
 # AI_RAW and Anthropic: no tools in the request
 {
     TestAI::setup(AI_TOOL_CALLS => 'native', AI_RAW => 1);

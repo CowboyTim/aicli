@@ -1,0 +1,48 @@
+# PLAN
+
+Open work and ideas for aicli. What is built is described in README.md (the
+user's view) and AGENTS.md (the code, and "Status" for the history), not here.
+
+## Open: needs a real run
+
+- **Voice with a real microphone and real speech.** The recorder path is
+  tested with a stand-in, the recognizer only with a generated tone. The
+  silence threshold (peak below 500, about -36 dBFS) is untested with a mic.
+- **First CI runs** (`.github/workflows/tests.yml`). The image job is the
+  first run of the tests with `Net::Curl`.
+- **Privilege drop as a user other than 1000** (`AI_UID`, `AI_GID`,
+  `AI_GROUPS`) in the docker wrapper. Only the plan is tested.
+- **Proxies and search against the real thing:** `AI_PROXY`, `AI_WEB_PROXY`,
+  and `search` with a real SearXNG. So far only with a mocked HTTP layer.
+- **Cloud providers live** (NVIDIA, Cerebras, OpenRouter, Anthropic) with
+  `AI_API_KEY` and `t/97_live.t`. So far scripted tests only.
+- **Terminals other than tmux 3.4** for the footer (kitty and others). Emoji
+  and wide-character widths may differ.
+
+## Ideas, not started
+
+- **Sub-agent roles:** a config file with endpoints and models, a `role`
+  argument on `agent`, limits per endpoint.
+- **Config file** (JSON or YAML) beside the environment variables, per session
+  and global.
+- **Sessions:** tagging and search, a generated title, export and import
+  (history and context).
+- **Git:** AI-assisted commit messages, branch suggestions.
+- **Questions and plans:** the model asks a clarifying question when unsure,
+  and can outline a plan before it acts.
+- **Tools:** a native tool to find files by name (the model uses bash for that
+  now); a side-by-side diff.
+- **Answers:** syntax highlighting of code blocks.
+- **Multi-modal:** image input for vision models. Audio input is done (`/voice`).
+- **Anthropic native tool calls.** Anthropic uses the text protocol for now.
+- **Performance:** cache model listings; faster session I/O for long histories.
+
+## Decided against
+
+- **Tool confirmation or an allow-list.** The container is the sandbox.
+- **Sub-agents on FastFlowLM.** The NPU is kept for voice; the `agent` tool is
+  not offered with `AI_PROVIDER=flm`.
+- **curses or other CPAN UI modules.** The footer is VT100 escapes in
+  `tui.pm`. More panes side by side only if they are ever needed.
+- **Bedrock and other providers one by one.** Use LiteLLM or OpenRouter as the
+  OpenAI compatible endpoint for those.
