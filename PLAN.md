@@ -5,17 +5,20 @@ user's view) and AGENTS.md (the code, and "Status" for the history), not here.
 
 ## Open: needs a real run
 
-- **Voice with a real microphone and real speech.** The recorder path is
-  tested with a stand-in, the recognizer only with a generated tone. The
-  silence threshold (peak below 500, about -36 dBFS) is untested with a mic.
+- **Voice with a real microphone.** Checked: a 16 s recording of real speech
+  was recognized correctly with `AI_ASR_PROMPT`, and the pause send and the
+  footer words ran in a pseudo-terminal. Not checked: Esc cancel and the level
+  meter in a real terminal. The thresholds (speech and silence at peak 100,
+  about -50 dBFS) were lowered after a quiet test recording; the same mic at
+  full source gain then gave a clear one (peak -7 dBFS).
 - **First CI runs** (`.github/workflows/tests.yml`). The image job is the
   first run of the tests with `Net::Curl`.
 - **Privilege drop as a user other than 1000** (`AI_UID`, `AI_GID`,
   `AI_GROUPS`) in the docker wrapper. Only the plan is tested.
 - **Proxies and search against the real thing:** `AI_PROXY`, `AI_WEB_PROXY`,
   and `search` with a real SearXNG. So far only with a mocked HTTP layer.
-- **Cloud providers live** (NVIDIA, Cerebras, OpenRouter, Anthropic) with
-  `AI_API_KEY` and `t/97_live.t`. So far scripted tests only.
+- **Cloud providers live** (NVIDIA, Cerebras, OpenRouter, Anthropic). NVIDIA
+  works in real use. The others have only scripted tests so far.
 - **Terminals other than tmux 3.4** for the footer (kitty and others). Emoji
   and wide-character widths may differ.
 
