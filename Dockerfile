@@ -8,14 +8,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# tools the model may use, and the Perl modules of the perl tool: PDL (arrays,
-# FFT) and Audio::Wav (WAV files). aicli itself does not load them.
+# tools the model may use, the Perl modules of the perl tool: PDL (arrays, FFT)
+# and Audio::Wav (WAV files), and lame, an MP3 encoder for the WAV files. aicli
+# itself does not load them.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         bash ripgrep grep findutils coreutils diffutils patch \
         git openssh-client openssl \
         curl wget socat \
         imagemagick \
-        pdl libaudio-wav-perl \
+        pdl libaudio-wav-perl lame \
         python3 python3-dev \
         lua5.4 luarocks \
         build-essential clang libssl-dev libperl-dev \

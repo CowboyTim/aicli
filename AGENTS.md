@@ -68,7 +68,8 @@ These are requirements, not suggestions.
 - **Few dependencies**: core Perl plus `JSON::XS`, `Net::Curl` (or
   `WWW::Curl`), `Term::ReadLine::Gnu`. `Data::UUID` is optional. Ask before
   adding a CPAN module. The image also has `PDL` and `Audio::Wav` (Debian
-  packages) for the `perl` tool; aicli itself does not load them.
+  packages) for the `perl` tool, and the `lame` MP3 encoder; aicli itself does
+  not load them.
 - **Keep the docs in sync**: README.md, the POD in `ai.pl` and this file
   describe what the code does, not what is planned (that is PLAN.md). Notes
   for whoever works on this next go here, in "Status", not in a file of their

@@ -155,7 +155,26 @@ SKIP: {
     my ($out, $err) = tool("perl", 'use PDL; use Audio::Wav; my $f = sequence(4) * 2; print "pdl ", $f->sum->sclr, " wav ", (Audio::Wav->can("write") ? "ok" : "no");');
     is($err, undef, "perl modules: PDL and Audio::Wav load in the tool");
     is($out, "pdl 12 wav ok", "perl modules: PDL arithmetic runs in the tool");
-    ($out, $err) = tool("perl", 'print "x\n"; exit 0; print "not here"');
+}
+
+# lame, the MP3 encoder of the image: it encodes a WAV file (skipped without it)
+SKIP: {
+    my ($lame) = grep {-x "$_/lame"} split m/:/, $ENV{PATH} // '';
+    skip "lame or Audio::Wav is not installed", 2 unless $lame && eval { require Audio::Wav; 1 };
+    my $dir = File::Temp::tempdir(CLEANUP => 1, TMPDIR => 1);
+    my $w = Audio::Wav->new->write("$dir/tone.wav", {bits_sample => 16, sample_rate => 44100, channels => 1});
+    $w->write_raw(pack('s<*', map {int(8000 * sin(2 * 3.14159265358979 * 440 * $_ / 44100))} 0 .. 44099));
+    $w->finish;
+    is(system('lame', '--quiet', "$dir/tone.wav", "$dir/tone.mp3"), 0, "lame: a WAV is encoded to MP3");
+    open(my $fh, '<:raw', "$dir/tone.mp3") or die "no MP3: $!";
+    read($fh, my $head, 2);
+    close($fh);
+    ok(ord(substr($head, 0, 1)) == 0xFF && (ord(substr($head, 1, 1)) & 0xE0) == 0xE0, "lame: the MP3 starts with a frame sync");
+}
+
+# perl: exits and forks
+{
+    my ($out, $err) = tool("perl", 'print "x\n"; exit 0; print "not here"');
     is_deeply([$out, $err], ["x\n", undef], "perl: exit 0 is fine");
     ($out, $err) = tool("perl", 'print "x\n"; exit 3');
     like($err, qr/exit code: 3, output: x/, "perl: exit code is seen");

@@ -142,8 +142,8 @@ Without `-p`, piped stdin is read as one request per line.
 | `Data::UUID` | optional: session ids | `libdata-uuid-perl` |
 
 The Docker image also has `PDL` (arrays, FFT: `pdl`) and `Audio::Wav` (WAV
-files: `libaudio-wav-perl`) for the `perl` tool, so the model can use them.
-aicli itself does not load them.
+files: `libaudio-wav-perl`) for the `perl` tool, so the model can use them, and
+the `lame` MP3 encoder (`lame`). aicli itself does not load them.
 
 Everything else is core Perl (`Safe`, `POSIX`, `File::Temp`, `Time::HiRes`,
 `Getopt::Long`, `Pod::Usage`; `Test::More` for the tests). To build the XS
