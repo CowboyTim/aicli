@@ -2978,6 +2978,24 @@ sub find_program {
 
 # start the recorder on $file: a child in the event loop. Returns the job, or
 # undef when there is no recorder. The recorder finishes the file on SIGINT.
+# a WAV file of 16-bit mono PCM at 16 kHz, the format of the recorder
+sub wav_of_pcm {
+    my ($pcm) = @_;
+    return 'RIFF'.pack('V', 36 + length $pcm).'WAVE'.'fmt '.pack('V', 16)
+        .pack('vvVVvv', 1, 1, 16000, 32000, 2, 16).'data'.pack('V', length $pcm).$pcm;
+}
+
+# the loudest sample of 16-bit PCM bytes, 0 to 32767
+sub pcm_peak {
+    my ($pcm) = @_;
+    my $peak = 0;
+    foreach my $sample (unpack('s<*', substr($pcm, 0, length($pcm) - length($pcm) % 2))){
+        my $abs = abs($sample);
+        $peak = $abs if $abs > $peak;
+    }
+    return $peak;
+}
+
 # the level of a recording while it is made: the loudest sample of the last
 # quarter second, from 0 (silence, -60 dB and below) to 1 (full scale)
 sub voice_level {
@@ -2987,11 +3005,7 @@ sub voice_level {
     seek($fh, $size > 8000 ? $size - 8000 : 0, 0);
     my $got = read($fh, my $buf, 8000) // 0;
     close($fh);
-    my $peak = 0;
-    foreach my $sample (unpack('s<*', substr($buf, 0, $got - $got % 2))){
-        my $abs = abs($sample);
-        $peak = $abs if $abs > $peak;
-    }
+    my $peak = pcm_peak(substr($buf, 0, $got));
     return 0 unless $peak;
     my $level = (20 * log($peak / 32768) / log(10) + 60) / 60;
     return $level < 0 ? 0 : $level > 1 ? 1 : $level;
@@ -3025,6 +3039,91 @@ sub voice_meter_start {
     return;
 }
 
+# the texts of the chunks of the recording in progress (the footer shows them)
+our @VOICE_HEARD;
+
+sub voice_heard {
+    my $t = join(' ', @VOICE_HEARD);
+    $t =~ s/\s+/ /g;
+    $t =~ s/\A //;
+    $t =~ s/ \z//;
+    return tui::glyph('ellipsis') unless length $t;
+    return length($t) > 60 ? tui::glyph('ellipsis').substr($t, -60) : $t;
+}
+
+# where the data of a WAV file starts; undef while its header is not there
+sub wav_data_start {
+    my ($file) = @_;
+    open(my $fh, '<:raw', $file) or return;
+    my $n = read($fh, my $head, 256) // 0;
+    close($fh);
+    my $at = index(substr($head, 0, $n), 'data');
+    return ($at < 0 or $at + 8 > $n) ? undef : $at + 8;
+}
+
+# a chunk of the recording to the recognizer; the words go to @VOICE_HEARD.
+# $done is called when the request is over, however it went.
+sub voice_preview_send {
+    my ($pcm, $done) = @_;
+    my $boundary = 'aicli'.int(rand(1e9)).'x'.int(rand(1e9));
+    my $body = multipart_body($boundary,
+        ['model', $::ORIG_ENV{AI_ASR_MODEL} // 'whisper-large-v3-turbo'],
+        ['response_format', 'json'],
+        ['file', wav_of_pcm($pcm), 'voice.wav', 'audio/wav']);
+    loop::http(
+        method  => 'post',
+        url     => $::ORIG_ENV{AI_ASR_URL},
+        data    => $body,
+        timeout => 60,
+        headers => ["Content-Type: multipart/form-data; boundary=$boundary", "Accept: application/json", "User-Agent: AI Chat/0.1"],
+        on_done => sub {
+            my ($r) = @_;
+            $done->();
+            my $d = eval {$::JSON->decode($r->{body} // '')};
+            return unless ref($d) eq 'HASH' and defined $d->{text};
+            my $text = $d->{text};
+            $text =~ s/\s+/ /g;
+            $text =~ s/\A //;
+            $text =~ s/ \z//;
+            return unless $text =~ m/\w/; # " ." and the like are no words
+            push @VOICE_HEARD, $text;
+        },
+    );
+    return;
+}
+
+# every three seconds of the recording go to the recognizer while it is made:
+# one request at a time, and a part without sound is not sent
+sub voice_preview_start {
+    my ($file, $alive) = @_;
+    my $chunk = 3 * 16000 * 2; # three seconds, 16 kHz, 16 bit
+    my ($at, $busy) = (undef, 0);
+    my $tick;
+    $tick = sub {
+        if(!$$alive){
+            undef $tick; # the closure refers to itself
+            return;
+        }
+        if(!$busy){
+            $at //= wav_data_start($file);
+            my $size = -s $file // 0;
+            if(defined $at and $size - $at >= $chunk and open(my $fh, '<:raw', $file)){
+                seek($fh, $at, 0);
+                my $got = read($fh, my $pcm, $chunk) // 0;
+                close($fh);
+                $at += $got;
+                if(pcm_peak($pcm) >= 500){
+                    $busy = 1;
+                    voice_preview_send($pcm, sub {$busy = 0});
+                }
+            }
+        }
+        loop::timer(0.25, $tick);
+    };
+    loop::timer(0.25, $tick);
+    return;
+}
+
 sub voice_start {
     my ($file) = @_;
     my $rec = $::ORIG_ENV{AI_RECORDER} // 'pw-record';
@@ -3032,6 +3131,8 @@ sub voice_start {
         or do { log::error("no recorder: $rec is not installed (AI_RECORDER)"); return };
     unlink $file;
     my $alive = 1;
+    my $preview = length($::ORIG_ENV{AI_ASR_URL} // '') ? 1 : 0;
+    @VOICE_HEARD = ();
     my $job = loop::spawn(sub {
         exec {$bin} ($rec, '--rate', '16000', '--channels', '1', '--format', 's16', $file)
             or die "cannot run $bin: $!\n";
@@ -3039,6 +3140,7 @@ sub voice_start {
         my ($out) = @_;
         $alive = 0;
         $TUI->unset('recording');
+        $TUI->unset('heard') if $preview;
         # no file: say why, in the recorder's own words (not for a ctrl-C)
         if(!-s $file and !utils::aborted()){
             my $said = to_text($out // '') =~ s/\s+/ /gr =~ s/^ | $//gr;
@@ -3050,6 +3152,10 @@ sub voice_start {
     @VOICE_LEVELS = ();
     $TUI->set('recording', \&voice_meter);
     voice_meter_start($file, \$alive);
+    if($preview){
+        $TUI->set('heard', \&voice_heard);
+        voice_preview_start($file, \$alive);
+    }
     return $job;
 }
 

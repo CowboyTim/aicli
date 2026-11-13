@@ -102,6 +102,50 @@ chmod 0755, $rec;
     is_deeply($ai::TUI->{calls}, ['set recording', 'unset recording'], "meter: the item comes and goes with the recorder");
 }
 
+# while it is recorded: every three seconds go to the recognizer, the words
+# are in the footer, and the footer item goes when the recording is over
+{
+    is(length(ai::wav_of_pcm("abcd")), 44 + 4, "wav: a 44 byte header and the data");
+    like(ai::wav_of_pcm("abcd"), qr/\ARIFF.{4}WAVEfmt .{4}.{16}data\x04\x00\x00\x00abcd\z/s, "wav: the header of 16 kHz mono 16 bit");
+    is(ai::pcm_peak(pack('s<*', 3, -700, 20)), 700, "peak: the loudest sample");
+
+    # a recorder that has four seconds of noise in the file at once
+    my $prec = "$tmp/preview-recorder";
+    open(my $ph, '>', $prec) or die $!;
+    print {$ph} <<"PL";
+#!$^X
+use strict; use warnings;
+my \$out = \$ARGV[-1];
+\$SIG{INT} = sub { exit 0 };
+my \$pcm = pack('s<*', map {int(rand(20000)) - 10000} 1 .. 64000);
+open(my \$fh, '>:raw', \$out) or die "cannot write \$out: \$!\\n";
+print {\$fh} 'RIFF'.pack('V', 36 + length \$pcm).'WAVE'.'fmt '.pack('V', 16).pack('vvVVvv', 1, 1, 16000, 32000, 2, 16).'data'.pack('V', length \$pcm).\$pcm;
+close \$fh;
+sleep 1 while 1;
+PL
+    close $ph;
+    chmod 0755, $prec;
+
+    TestAI::setup(AI_RECORDER => $prec, AI_ASR_URL => 'http://127.0.0.1:52625/v1/audio/transcriptions');
+    package FakeTUI2 { sub new { bless {calls => []}, shift } sub set { push @{$_[0]{calls}}, "set $_[1]" } sub unset { push @{$_[0]{calls}}, "unset $_[1]" } sub clear {} }
+    local $ai::TUI = FakeTUI2->new;
+    my @sent;
+    no warnings 'redefine';
+    local *loop::http = sub {
+        my (%r) = @_;
+        push @sent, \%r;
+        $r{on_done}->({body => '{"text":"  hello there  "}', code => 200, error => undef});
+        return;
+    };
+    my $ok;
+    TestAI::capture {$ok = ai::voice_record("$tmp/preview.wav", 1.5)};
+    ok($ok, "preview: the recording was made");
+    is(scalar(@sent), 1, "preview: one chunk of three seconds went to the recognizer (the rest was less)");
+    like($sent[0]{data}, qr/name="file"; filename="voice\.wav".*\r\n\r\nRIFF/s, "preview: the chunk is a WAV file");
+    is(ai::voice_heard(), "hello there", "preview: the words are shown");
+    is_deeply($ai::TUI->{calls}, ['set recording', 'set heard', 'unset recording', 'unset heard'], "preview: the footer items come and go");
+}
+
 # the recognizer: the text, and what is sent
 {
     TestAI::setup(AI_RECORDER => $rec, AI_ASR_URL => 'http://127.0.0.1:52625/v1/audio/transcriptions');
