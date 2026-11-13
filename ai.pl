@@ -273,7 +273,8 @@ The script is written to a temp file, a forked child process exec()s bash on it.
 =item B<perl>
 
 The code is eval()ed in a forked child process. With B<AI_PERL_SAFE> it runs
-in a L<Safe> compartment instead.
+in a L<Safe> compartment instead, where C<require> is trapped: then the modules
+of the image (PDL, Audio::Wav) can not be loaded.
 
 =item B<fetch>
 
@@ -920,7 +921,9 @@ TMPDIR SSH_AUTH_SOCK and GIT_*.
 =item B<AI_PERL_SAFE>
 
 Run the perl tool in a L<Safe> compartment: C<1> for the default opcode set,
-or a list of extra opcodes/opcode tags to permit, e.g. C<:filesys_read>.
+or a list of extra opcodes/opcode tags to permit, e.g. C<:filesys_read>. In a
+compartment C<require> is refused, so no module can be loaded (PDL and
+Audio::Wav included).
 
 =item B<AI_PS1>, B<AI_PS2>
 

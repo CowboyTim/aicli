@@ -146,6 +146,15 @@ sub tool {
     is($err, "[ERROR] problem running tool 'PERL': exit code: 255, output: abroken", "perl: die is an error, with output");
     ($out, $err) = tool("perl", 'print "syntax" if (');
     like($err, qr/exit code: 255, output: syntax error at/, "perl: syntax error is an error");
+}
+
+# the modules of the image for the perl tool (PDL for arrays and FFT, Audio::Wav
+# for WAV files): the tool can use them; skipped where they are not installed
+SKIP: {
+    skip "PDL and Audio::Wav are not installed", 2 unless eval { require PDL; require Audio::Wav; 1 };
+    my ($out, $err) = tool("perl", 'use PDL; use Audio::Wav; my $f = sequence(4) * 2; print "pdl ", $f->sum->sclr, " wav ", (Audio::Wav->can("write") ? "ok" : "no");');
+    is($err, undef, "perl modules: PDL and Audio::Wav load in the tool");
+    is($out, "pdl 12 wav ok", "perl modules: PDL arithmetic runs in the tool");
     ($out, $err) = tool("perl", 'print "x\n"; exit 0; print "not here"');
     is_deeply([$out, $err], ["x\n", undef], "perl: exit 0 is fine");
     ($out, $err) = tool("perl", 'print "x\n"; exit 3');

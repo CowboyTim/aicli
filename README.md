@@ -141,6 +141,10 @@ Without `-p`, piped stdin is read as one request per line.
 | `Term::ReadLine::Gnu` | interactive input | `libterm-readline-gnu-perl` |
 | `Data::UUID` | optional: session ids | `libdata-uuid-perl` |
 
+The Docker image also has `PDL` (arrays, FFT: `pdl`) and `Audio::Wav` (WAV
+files: `libaudio-wav-perl`) for the `perl` tool, so the model can use them.
+aicli itself does not load them.
+
 Everything else is core Perl (`Safe`, `POSIX`, `File::Temp`, `Time::HiRes`,
 `Getopt::Long`, `Pod::Usage`; `Test::More` for the tests). To build the XS
 modules from CPAN you need a compiler plus the libcurl and readline headers
@@ -235,7 +239,7 @@ or `[WRITE_edf5 ERROR_9a78 ... ERROR_9a78]`. In native mode it is a tool message
 | `find` | entries under a directory whose name matches a regex (opendir/readdir, links not followed) | Perl |
 | `grep` | search files | `exec grep -rn` in a forked child, no shell |
 | `bash` | a shell script | temp file, `exec bash` in a forked child |
-| `perl` | Perl code | `eval` in a forked child, or `Safe->reval` with `AI_PERL_SAFE` |
+| `perl` | Perl code, with the modules of the image (PDL, Audio::Wav) | `eval` in a forked child, or `Safe->reval` with `AI_PERL_SAFE` (no modules there) |
 | `fetch` | a web page as text, links as `[text](url)` | async HTTP in the event loop |
 | `search` | web search through your SearXNG instance | async HTTP, only offered with `AI_SEARXNG_URL` |
 | `image` | a picture (PNG, JPEG, GIF or WebP) in the workspace, sent with the next message; a bigger one is made smaller with ImageMagick; only offered with `AI_VISION=1` | Perl, and ImageMagick in a forked child |
