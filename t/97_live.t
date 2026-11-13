@@ -10,21 +10,24 @@ use FindBin;
 use lib "$FindBin::Bin/..", "$FindBin::Bin/lib";
 no warnings 'once';
 
-plan skip_all => 'set AI_LIVE_SERVER (and AI_LIVE_MODEL) to run against a real model'
-    unless length($ENV{AI_LIVE_SERVER} // '');
+plan skip_all => 'set AI_LIVE_SERVER (a local server) or AI_API_KEY (a cloud provider), and AI_LIVE_MODEL'
+    unless length($ENV{AI_LIVE_SERVER} // '') or length($ENV{AI_API_KEY} // '');
 
 $::DEBUG = ($ENV{DEBUG}//"0") == "1"?1:0;
 
 use ai;
 use TestAI;
 
+# a local server, or a cloud provider by its key (AI_PROVIDER from the key prefix,
+# or AI_LIVE_PROVIDER): the provider's own default model when AI_LIVE_MODEL is not set
 my %live = (
-    AI_LOCAL_SERVER => $ENV{AI_LIVE_SERVER},
+    AI_LOCAL_SERVER => length($ENV{AI_LIVE_SERVER} // '') ? $ENV{AI_LIVE_SERVER} : undef,
+    AI_API_KEY      => length($ENV{AI_LIVE_SERVER} // '') ? undef : $ENV{AI_API_KEY},
     AI_MODEL        => $ENV{AI_LIVE_MODEL},
     AI_TOOL_CALLS   => 'native',
     AI_RETRIES      => 2,
     AI_SHOW_USAGE   => 0,
-    AI_PROVIDER     => 'local',
+    AI_PROVIDER     => $ENV{AI_LIVE_PROVIDER},
 );
 
 # one plain answer
