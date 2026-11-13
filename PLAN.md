@@ -19,6 +19,9 @@ user's view) and AGENTS.md (the code, and "Status" for the history), not here.
   and `search` with a real SearXNG. So far only with a mocked HTTP layer.
 - **Cloud providers live** (NVIDIA, Cerebras, OpenRouter, Anthropic). NVIDIA
   works in real use. The others have only scripted tests so far.
+- **Pictures with a real vision model.** The `image` tool (`AI_VISION=1`) is
+  tested with scripted requests only. No real model that reads pictures has
+  been run yet, nor a picture of text to check the reading.
 - **Terminals other than tmux 3.4** for the footer (kitty and others). Emoji
   and wide-character widths may differ.
 
@@ -35,7 +38,6 @@ user's view) and AGENTS.md (the code, and "Status" for the history), not here.
   and can outline a plan before it acts.
 - **Tools:** a side-by-side diff.
 - **Answers:** syntax highlighting of code blocks.
-- **Multi-modal:** image input for vision models. Audio input is done (`/voice`).
 - **Live voice.** The footer preview re-sends the audio every few seconds and
   shows the words that two passes agree on (LocalAgreement), so it is not word
   by word as you speak. A recognizer with real streaming would do that;

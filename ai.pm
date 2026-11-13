@@ -8,6 +8,7 @@ use md;
 
 use Cwd ();
 use Encode ();
+use MIME::Base64 ();
 use Errno;
 use JSON::XS ();
 use Time::HiRes ();
@@ -512,6 +513,7 @@ sub tool_response {
 sub handle_llm_response {
     my ($resp, $printer_sub, $native) = @_;
     $native //= []; # the calls the server made (native), else the ones in the text
+    @tools::IMAGES = (); # pictures left over from an interrupted turn
     return (0, 0, []) unless defined $resp and ref($resp) eq 'SCALAR' and (length($$resp // "") or @$native);
     log::info("handling>>".($$resp // '')."<<");
     # with a printer of the caller everything is handed to it in full
@@ -579,6 +581,12 @@ sub handle_llm_response {
             &{$answer}($i, $c, agent_result($a));
         }
     }
+
+    # pictures the tools looked at go in a message of their own, after the
+    # results: a tool message cannot carry them for every API
+    my @pictures = splice(@tools::IMAGES);
+    push @rt, {role => 'user', content => to_text(join("\n", map {"Image: $_->{path}"} @pictures)), images => \@pictures}
+        if @pictures;
 
     my $newturns = @rt ? 1 : 0;
     return $newturns, ($newturns ? undef : 0), \@rt;
@@ -1257,6 +1265,19 @@ sub provider_headers {
     return &{$fn}($key);
 }
 
+# A message with pictures (the image tool) goes to the API as content parts:
+# its text, then each picture as a data URL. The chat file keeps the pictures
+# as they are; this is only the form the request takes.
+sub wire_message {
+    my ($m) = @_;
+    return $m unless ref($m->{images}) eq 'ARRAY' and @{$m->{images}};
+    my %w = %$m;
+    delete $w{images};
+    $w{content} = [{type => 'text', text => $m->{content} // ''},
+        map {+{type => 'image_url', image_url => {url => "data:$_->{mime};base64,$_->{data}"}}} @{$m->{images}}];
+    return \%w;
+}
+
 # the JSON body of a completion request for these messages, undef when the
 # provider has no format for it
 sub build_request {
@@ -1289,7 +1310,7 @@ sub completion_result {
 # (without the agent tool) and what it is there for
 sub subagent_prompt {
     my $prompt = slurp($PROMPT_FILE // '') // '';
-    $prompt .= prompt::coder::prompt(exclude => ['agent']) unless native_calls(); # the text syntax, see system_prompt()
+    $prompt .= prompt::coder::prompt(exclude => ['agent', 'image']) unless native_calls(); # the text syntax, see system_prompt()
     $prompt .= "\n\nYou are a sub-agent: another agent gave you the task below, the user is not here and you cannot ask questions. "
               ."Work on it with your tools. Your final answer, the one without a tool call, is all the other agent gets to see: "
               ."report what you found or did, complete but without the detours.\n";
@@ -1317,6 +1338,8 @@ sub chars_of {
     for my $call (map {@{$_->{tool_calls} // []}} @_){
         $n += length($call->{function}{name} // '') + length($call->{function}{arguments} // '');
     }
+    # a picture costs about 1500 tokens, here as the characters of that
+    $n += 6000 * @{$_->{images} // []} for @_;
     return $n;
 }
 
@@ -3846,13 +3869,13 @@ sub req {
         top_k        => $::ORIG_ENV{AI_TOP_K}       // 20,
         min_p        => $::ORIG_ENV{AI_MIN_P}       // 0.0,
         stream       => $Types::Serialiser::true,
-        messages     => \@jstr,
+        messages     => [map {ai::wire_message($_)} @jstr],
     };
     # token usage in the last chunk of the stream
     $req->{stream_options} = {include_usage => $Types::Serialiser::true}
         if ($::ORIG_ENV{AI_USAGE} // 1);
     # the tools, natively: the server turns the model's calls into tool_calls
-    $req->{tools} = tools::native_list(exclude => ($ai::IN_AGENT ? ['agent'] : []))
+    $req->{tools} = tools::native_list(exclude => ($ai::IN_AGENT ? ['agent', 'image'] : []))
         if ai::native_calls();
     # the reasoning of the model, when it is set (/thinking, AI_THINKING)
     if(defined(my $th = ai::thinking_setting())){
@@ -3969,6 +3992,20 @@ sub headers {
     ];
 }
 
+# the content of a message for this API: its text, or with pictures the content
+# blocks, the text first and then each picture
+sub message_content {
+    my ($m) = @_;
+    return $m->{content} unless ref($m->{images}) eq 'ARRAY' and @{$m->{images}};
+    return [{type => 'text', text => $m->{content}},
+        map {+{type => 'image', source => {type => 'base64', media_type => $_->{mime}, data => $_->{data}}}} @{$m->{images}}];
+}
+
+sub content_blocks {
+    my ($c) = @_;
+    return ref($c) ? @$c : ({type => 'text', text => $c});
+}
+
 sub req {
     my (@msgs) = @_;
     my (@system, @chat);
@@ -3977,11 +4014,16 @@ sub req {
             push @system, $m->{content};
             next;
         }
+        my $c = message_content($m);
         # the API wants alternating roles: consecutive ones are joined
         if(@chat and $chat[-1]{role} eq $m->{role}){
-            $chat[-1]{content} .= "\n\n".$m->{content};
+            if(ref($chat[-1]{content}) or ref($c)){
+                $chat[-1]{content} = [content_blocks($chat[-1]{content}), content_blocks($c)];
+            } else {
+                $chat[-1]{content} .= "\n\n".$c;
+            }
         } else {
-            push @chat, {role => $m->{role}, content => $m->{content}};
+            push @chat, {role => $m->{role}, content => $c};
         }
     }
     my $req = {
@@ -4247,6 +4289,17 @@ EOb
             "path" => {type => "string", description => "The directory, . for the current one"},
         },
         required => ["path"],
+    },
+    image => {
+        description => "look at an image file in the workspace (PNG, JPEG, GIF or WebP): the picture comes with the next message, so you can read the text in it or describe what it shows",
+        syntax => "///IMAGE_4e0b+EO_a1f7\n{{path}}\nEO_a1f7[LENGTH({{path}})]\nIMAGE_4e0b",
+        properties  => {
+            "path" => {type => "string", description => "The image file"},
+        },
+        required => ["path"],
+        # only with AI_VISION=1, for a model that takes pictures: a text model
+        # can not read them, and the picture would stay in the conversation
+        available => sub {$::ORIG_ENV{AI_VISION} ? 1 : 0},
     },
     };
 
@@ -4522,6 +4575,38 @@ sub read_c5a3 {
     return _slurp(_path($t_args->[0]));
 }
 
+# a picture for the model: read in the workspace, checked to be a format the
+# APIs take, queued for the next message (see ai::handle_llm_response)
+sub image_4e0b {
+    my ($t_args) = @_;
+    die "a sub-agent cannot look at pictures\n" if $tools::ASYNC;
+    my $path = _path($t_args->[0]);
+    die "not a file: $path\n" unless -f $path;
+    my $size = -s $path;
+    my $max  = $::ORIG_ENV{AI_IMAGE_MAX} // 5242880; # 5 MB, the smallest limit of the APIs
+    die sprintf("%s is %d bytes, more than AI_IMAGE_MAX (%d)\n", $path, $size, $max)
+        if $max and $size > $max;
+    open(my $fh, '<:raw', $path)
+        or die "cannot read $path: $!\n";
+    local $/;
+    my $bytes = <$fh>;
+    close($fh);
+    my $mime = _image_type($bytes)
+        or die "not a PNG, JPEG, GIF or WebP image: $path\n";
+    push @tools::IMAGES, {path => ai::to_text($path), mime => $mime, data => MIME::Base64::encode_base64($bytes, '')};
+    return "[OK] image attached: $path ($mime, $size bytes), it comes with the next message";
+}
+
+# the format of a picture by its first bytes (undef: not one of the formats)
+sub _image_type {
+    my ($b) = @_;
+    return 'image/png'  if substr($b, 0, 8) eq "\x89PNG\r\n\x1a\n";
+    return 'image/jpeg' if substr($b, 0, 3) eq "\xFF\xD8\xFF";
+    return 'image/gif'  if substr($b, 0, 6) =~ m/\AGIF8[79]a\z/;
+    return 'image/webp' if substr($b, 0, 4) eq 'RIFF' and substr($b, 8, 4) eq 'WEBP';
+    return;
+}
+
 sub write_edf5 {
     my ($t_args) = @_;
     my $path = _path($t_args->[0]);
@@ -4604,6 +4689,7 @@ sub _path {
 }
 
 our @CHANGES; # file contents changed by the last tools: {tool, path, old, new}
+our @IMAGES;  # pictures the image tool read, for the next message: {path, mime, data}
 our $UNDO_SEQ = 0;
 
 # Remember how to take a file change back: a line in the undo journal of the

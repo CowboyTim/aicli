@@ -286,6 +286,13 @@ Search the web through a SearXNG instance (B<AI_SEARXNG_URL>), the result is a
 list of titles, URLs and snippets. The model is only told about this tool
 when the variable is set.
 
+=item B<image>
+
+Look at an image file in the workspace: PNG, JPEG, GIF or WebP, at most
+B<AI_IMAGE_MAX> bytes. The picture is sent to the model with the next message,
+so it can read the text in it or describe it. Only with B<AI_VISION=1>, and only
+for a model that takes pictures.
+
 =item B<agent>
 
 Give a task to a sub-agent, see B<SUB-AGENTS>.
@@ -678,6 +685,17 @@ and the calls come back as the server parses them (C<tool_calls>). The tool
 syntax is not in the system prompt then. C<text>: the tool syntax is in the
 system prompt and the calls are written in the answer. Anthropic and B<AI_RAW>
 always use the text. Calls written in the text are run in both modes.
+
+=item B<AI_VISION>
+
+Set to 1 to offer the B<image> tool. Only for a model that takes pictures: a
+text model refuses the request, and the picture then stays in the conversation.
+Default: off.
+
+=item B<AI_IMAGE_MAX>
+
+Largest picture the B<image> tool reads, in bytes. Default: 5242880 (5 MB, the
+smallest limit of the APIs), 0 for no limit.
 
 =item B<AI_RAW>
 

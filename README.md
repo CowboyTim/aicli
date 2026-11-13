@@ -16,6 +16,9 @@ framework.
   replace, ed-style edit, delete, move, mkdir, list, find) are plain Perl in the
   process; bash and grep are `exec()`ed in a forked child, perl code is
   `eval`ed in a forked child (optionally in a `Safe` compartment)
+- **Pictures for vision models** (`AI_VISION=1`): the `image` tool sends a PNG,
+  JPEG, GIF or WebP file from the workspace with the next message, so the model
+  can read the text in it or describe it
 - **Sub-agents**: the model can hand tasks to sub-agents that work side by
   side. No threads, no process per agent: every request is a curl handle and
   every tool a child in one `select()` loop
@@ -235,6 +238,7 @@ or `[WRITE_edf5 ERROR_9a78 ... ERROR_9a78]`. In native mode it is a tool message
 | `perl` | Perl code | `eval` in a forked child, or `Safe->reval` with `AI_PERL_SAFE` |
 | `fetch` | a web page as text, links as `[text](url)` | async HTTP in the event loop |
 | `search` | web search through your SearXNG instance | async HTTP, only offered with `AI_SEARXNG_URL` |
+| `image` | a picture (PNG, JPEG, GIF or WebP) in the workspace, sent with the next message; only offered with `AI_VISION=1` | Perl, in the chat process |
 | `agent` | give a task to a sub-agent | a second conversation in the event loop |
 
 File tools never start a process. `replace` and `edit` write through a temp
@@ -512,6 +516,8 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 | `AI_PERL_SAFE` | perl tool in a `Safe` compartment: `1`, or extra opcodes like `:filesys_read` | off |
 | `AI_MARKDOWN` | draw the markdown of the answer (on a terminal only); 0 keeps it as written | on a terminal |
 | `AI_TOOL_CALLS` | `native`: tools sent with the request, calls as the server parses them; `text`: the tool syntax in the prompt | native |
+| `AI_VISION` | offer the `image` tool, so the model gets pictures: only with a model that takes them | off |
+| `AI_IMAGE_MAX` | largest picture the `image` tool reads, in bytes (0 for no limit) | 5242880 |
 | `AI_RAW` | use `/v1/completions` with a prompt built here (qwen only) | off |
 | `AI_DIR` | base directory | `~/.aicli` |
 | `AI_PS1`, `AI_PS2` | input prompts | |
