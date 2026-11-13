@@ -45,6 +45,8 @@ my %GLYPH = (
         bar      => chr(0x2502),         # │
         bullet   => chr(0x2022),         # •
         rule     => chr(0x2500),         # ─
+        rec      => chr(0x25cf),         # ●
+        levels   => [' ', map {chr} 0x2581..0x2588], # ▁▂▃▄▅▆▇█
     },
     ascii => {
         spinner  => [qw(| / - \\)],
@@ -59,6 +61,8 @@ my %GLYPH = (
         bar      => "|",
         bullet   => "*",
         rule     => "-",
+        rec      => "REC",
+        levels   => [' ', '.', ':', '-', '=', '+', '*', '%', '#'],
     },
 );
 my $TIOCGWINSZ = 0x5413;            # ask the terminal for its size (Linux)

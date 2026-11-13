@@ -70,6 +70,38 @@ chmod 0755, $rec;
     like($err, qr/wrote no recording: .*cannot connect to PipeWire/, "failing recorder: the recorder's message is shown");
 }
 
+# the level of the recording and the footer item while it is made
+{
+    my $loud = "$tmp/level-loud.raw";
+    open(my $lf, '>:raw', $loud) or die $!;
+    print {$lf} pack('s<*', map {$_ % 2 ? 16000 : -16000} 1 .. 8000);
+    close $lf;
+    my $silent = "$tmp/level-silent.raw";
+    open(my $sf, '>:raw', $silent) or die $!;
+    print {$sf} pack('s<*', (0) x 8000);
+    close $sf;
+    ok(ai::voice_level($loud) > 0.85, "level: a loud recording is near the top");
+    is(ai::voice_level($silent), 0, "level: silence is zero");
+    is(ai::voice_level("$tmp/no-such.raw"), 0, "level: no file is zero");
+
+    @ai::VOICE_LEVELS = (0, 0.2, 0.5, 0.9, 1);
+    my $meter = ai::voice_meter();
+    like($meter, qr/\A\Q${\ tui::glyph('rec')}\E \s+\S+\z/, "meter: the record glyph, then the cells");
+    {
+        local $::ORIG_ENV{AI_GLYPHS} = "unicode";
+        is(length(ai::voice_meter()), 1 + 1 + 8, "meter: the glyph, a space and eight cells");
+    }
+
+    # the item is shown while the recorder runs and taken away when it is done
+    package FakeTUI { sub new { bless {calls => []}, shift } sub set { push @{$_[0]{calls}}, "set $_[1]" } sub unset { push @{$_[0]{calls}}, "unset $_[1]" } sub clear {} }
+    TestAI::setup(AI_RECORDER => $rec);
+    local $ai::TUI = FakeTUI->new;
+    my $ok;
+    TestAI::capture {$ok = ai::voice_record("$tmp/meter.wav", 0.3)};
+    ok($ok, "meter: the recording was made");
+    is_deeply($ai::TUI->{calls}, ['set recording', 'unset recording'], "meter: the item comes and goes with the recorder");
+}
+
 # the recognizer: the text, and what is sent
 {
     TestAI::setup(AI_RECORDER => $rec, AI_ASR_URL => 'http://127.0.0.1:52625/v1/audio/transcriptions');

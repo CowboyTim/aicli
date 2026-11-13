@@ -2978,17 +2978,67 @@ sub find_program {
 
 # start the recorder on $file: a child in the event loop. Returns the job, or
 # undef when there is no recorder. The recorder finishes the file on SIGINT.
+# the level of a recording while it is made: the loudest sample of the last
+# quarter second, from 0 (silence, -60 dB and below) to 1 (full scale)
+sub voice_level {
+    my ($file) = @_;
+    open(my $fh, '<:raw', $file) or return 0;
+    my $size = -s $fh // 0;
+    seek($fh, $size > 8000 ? $size - 8000 : 0, 0);
+    my $got = read($fh, my $buf, 8000) // 0;
+    close($fh);
+    my $peak = 0;
+    foreach my $sample (unpack('s<*', substr($buf, 0, $got - $got % 2))){
+        my $abs = abs($sample);
+        $peak = $abs if $abs > $peak;
+    }
+    return 0 unless $peak;
+    my $level = (20 * log($peak / 32768) / log(10) + 60) / 60;
+    return $level < 0 ? 0 : $level > 1 ? 1 : $level;
+}
+
+# the last levels of the recording in progress, for the footer
+our @VOICE_LEVELS;
+
+# the footer item of a recording: the record glyph and eight level cells
+sub voice_meter {
+    my $bars = tui::glyph('levels');
+    my @cells = map {$bars->[int($_ * (@$bars - 1) + 0.5)]} @VOICE_LEVELS;
+    unshift @cells, ($bars->[0]) x (8 - @cells);
+    return tui::glyph('rec').' '.join('', @cells);
+}
+
+# samples the level of the file, every 0.15 s, until the flag is cleared
+sub voice_meter_start {
+    my ($file, $alive) = @_;
+    my $sample;
+    $sample = sub {
+        if(!$$alive){
+            undef $sample; # the closure refers to itself
+            return;
+        }
+        push @VOICE_LEVELS, voice_level($file);
+        shift @VOICE_LEVELS while @VOICE_LEVELS > 8;
+        loop::timer(0.15, $sample);
+    };
+    $sample->();
+    return;
+}
+
 sub voice_start {
     my ($file) = @_;
     my $rec = $::ORIG_ENV{AI_RECORDER} // 'pw-record';
     my $bin = find_program($rec)
         or do { log::error("no recorder: $rec is not installed (AI_RECORDER)"); return };
     unlink $file;
+    my $alive = 1;
     my $job = loop::spawn(sub {
         exec {$bin} ($rec, '--rate', '16000', '--channels', '1', '--format', 's16', $file)
             or die "cannot run $bin: $!\n";
     }, on_done => sub {
         my ($out) = @_;
+        $alive = 0;
+        $TUI->unset('recording');
         # no file: say why, in the recorder's own words (not for a ctrl-C)
         if(!-s $file and !utils::aborted()){
             my $said = to_text($out // '') =~ s/\s+/ /gr =~ s/^ | $//gr;
@@ -2997,6 +3047,9 @@ sub voice_start {
         $ai::VOICE_DONE->() if $ai::VOICE_DONE;
     });
     $job->{started} = Time::HiRes::time();
+    @VOICE_LEVELS = ();
+    $TUI->set('recording', \&voice_meter);
+    voice_meter_start($file, \$alive);
     return $job;
 }
 
