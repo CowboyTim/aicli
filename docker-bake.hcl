@@ -1,5 +1,7 @@
-// docker buildx bake             builds the image the wrapper aicli.sh runs
-// docker buildx bake image-ci    the same, with the GitHub Actions build cache
+// docker buildx bake             builds every image: the base and the dev image
+// docker buildx bake image       only the dev image, the one the wrapper aicli.sh runs
+// docker buildx bake base        only the small base image
+// docker buildx bake image-ci    the dev image, with the GitHub Actions build cache
 //
 // The defaults match DOCKER_IMAGE in aicli.sh. Override them from the
 // environment: IMAGE=... TAG=... PLATFORMS=linux/amd64,linux/arm64
@@ -17,12 +19,24 @@ variable "PLATFORMS" {
 }
 
 group "default" {
-  targets = ["image"]
+  targets = ["base", "image"]
 }
 
+// the small image: ai.pl and the basic unix tools
+target "base" {
+  context    = "."
+  dockerfile = "Dockerfile"
+  target     = "base"
+  tags       = ["${IMAGE}-base:${TAG}"]
+  platforms  = split(",", PLATFORMS)
+  output     = ["type=docker"]
+}
+
+// the development image: base plus the languages and the tools (the default stage)
 target "image" {
   context    = "."
   dockerfile = "Dockerfile"
+  target     = "dev"
   tags       = ["${IMAGE}:${TAG}"]
   platforms  = split(",", PLATFORMS)
   output     = ["type=docker"]

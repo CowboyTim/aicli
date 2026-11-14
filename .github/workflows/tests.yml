@@ -18,7 +18,7 @@ jobs:
       - name: Run the tests
         run: prove -I. t
 
-  # The image of the Dockerfile: Debian (slim), WWW::Curl
+  # The image of the Dockerfile (dev stage): Ubuntu 24.04, WWW::Curl
   image:
     runs-on: ubuntu-latest
     steps:

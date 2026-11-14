@@ -89,9 +89,21 @@ cd ~/my-project
 /path/to/aicli.sh
 ```
 
+`aicli.sh --base` runs the small image (`local/ai/aicli-base`: ai.pl and the basic
+unix tools) instead of the dev image (`local/ai/aicli`, the default: languages,
+ImageMagick, PDL, lame). `DOCKER_IMAGE` overrides both.
+
+`aicli.sh --rocm` shares the AMD GPU (`/dev/kfd`, `/dev/dri`, the ROCm files
+in `ROCM_PATH`), `aicli.sh --arduino` shares the serial boards (`ttyUSB*`,
+`ttyACM*`): the container makes `ttyUSB0..7` and `ttyACM0..7` itself when it
+starts (`serial-nodes.sh`, as claude-agent does), so a board plugged in later
+works without a restart. `SERIAL_MAX` changes how many. The GPU devices are
+passed only if they exist on the host. The chat does not need the GPU: the model
+server runs on the host, and the container reaches it over `--network=host`.
+
 `aicli.sh` mounts the current directory, and is set up for a local llama.cpp
-server on an AMD ROCm machine: adjust it (`AI_LOCAL_SERVER`, `AI_MODEL`, the
-`--device` options) to your setup. Every `AI_*` variable of your shell is
+server on an AMD ROCm machine: adjust it (`AI_LOCAL_SERVER`, `AI_MODEL`) to your
+setup. Every `AI_*` variable of your shell is
 passed into the container. The local defaults (`AI_LOCAL_SERVER`,
 `AI_PROVIDER=lemonade`, the local `AI_MODEL`) apply only when your shell sets
 no `AI_API_KEY`, `AI_LOCAL_SERVER` or other `AI_PROVIDER`; for a cloud provider
@@ -566,7 +578,7 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 prove -I. t
 ```
 
-CI runs them on every push, with the Debian packages and inside the Debian
+CI runs them on every push, with the Debian packages and inside the Ubuntu
 slim image. The LLM is scripted in the tests. `t/45_http_e2e.t` runs the real HTTP code
 against a small fake server (and `ai.pl` itself as a process), it is skipped
 without a curl module.

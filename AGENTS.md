@@ -142,7 +142,7 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   go in the project's own AGENTS.md).
   `ai/imagemagick/policy.xml` is the ImageMagick policy of the `convert` tool
   (`MAGICK_CONFIGURE_PATH` points at its directory in the child).
-- **aicli.sh**, **Dockerfile** – docker wrapper and the Debian slim image.
+- **aicli.sh**, **Dockerfile** – docker wrapper and the Ubuntu image.
   **docker-bake.hcl** builds that image (`docker buildx bake`; `image-ci`
   adds the GitHub Actions cache). CI still uses `docker build`.
 - **t/** – tests, **PLAN.md** – open work and ideas.
@@ -420,7 +420,7 @@ Other APIs are reached through an OpenAI compatible gateway, such as LiteLLM or 
 
 CI (`.github/workflows/tests.yml`) runs them twice on every push to `main`:
 with the Debian packages (`WWW::Curl`) and inside the image of the Dockerfile
-(Debian slim, `WWW::Curl`), there as a normal user.
+(Ubuntu 24.04, dev stage, `WWW::Curl`), there as a normal user.
 
 `TestAI::mock_http` scripts the main agent (`utils::http`),
 `TestAI::mock_agent_http` answers the sub-agents (`loop::http`).
