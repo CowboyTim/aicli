@@ -147,6 +147,10 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   `ai/imagemagick/policy.xml` is the ImageMagick policy of the `convert` tool
   (`MAGICK_CONFIGURE_PATH` points at its directory in the child).
 - **aicli.sh**, **Dockerfile** – docker wrapper and the Ubuntu image.
+  Builds: `./build-watch.sh` runs `docker buildx bake --pull` each time
+  `.build-trigger` appears (`touch .build-trigger` starts one). The output goes
+  to the terminal and to `build-watch.log`; `tail build-watch.log` shows the
+  result (`== ... done, exit N`). Both files are git-ignored.
   **docker-bake.hcl** builds that image (`docker buildx bake`; `image-ci`
   adds the GitHub Actions cache). CI still uses `docker build`.
 - **t/** – tests, **PLAN.md** – open work and ideas.
