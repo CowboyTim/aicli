@@ -4399,7 +4399,7 @@ EOb
         available => sub {tools::_magick() ? 1 : 0},
     },
     devel => {
-        description => "list what a development language has installed, with versions, instead of guessing a module or package name: perl (every module in @INC), python (packages), lua (rocks), c (libraries known to pkg-config), bash (the common tools on the PATH). An optional filter is a regular expression for the lines",
+        description => "find what a development language has installed, with versions, when you do not know the exact name: perl (modules: a filter is required, a regular expression for the module names), python (packages), lua (rocks), c (libraries known to pkg-config), bash (the common tools on the PATH). Filters are regular expressions for the names; at most 40 lines come back. If you know the module name, run perl -MName -e 'print \$Name::VERSION' instead",
         syntax => "///DEVEL_9c3e+EO_5b7a+EO_e21d\n{{language}}\nEO_5b7a[LENGTH({{language}})]\n{{filter}}\nEO_e21d[LENGTH({{filter}})]\nDEVEL_9c3e",
         properties  => {
             "language" => {type => "string", description => "perl, python, lua, c or bash"},
@@ -5006,15 +5006,20 @@ sub devel_9c3e {
     my $filter = utils::trim($t_args->[1] // '');
     my $profile = $DEVEL_PROFILE{$lang}
         or die "no profile for '$lang': the profiles are ".join(', ', sort keys %DEVEL_PROFILE)."\n";
+    # the whole list of the perl modules is not for the chat: a name is asked for
+    if($lang eq 'perl' and !length $filter){
+        return "devel perl: give a filter, a regular expression for the module names, such as ^JSON or ^PDL::. "
+            ."For one module, perl -MName -e 'print \$Name::VERSION' says whether it is there and which version\n";
+    }
     my $rx = length($filter) ? (eval {qr/$filter/i} // die "the filter is not a regular expression: $filter\n") : undef;
     my $format = sub {
         my ($raw, $note) = @_;
         my @lines = grep {length} split m/\n/, $raw // '';
         @lines = grep {my ($name) = split ' ', $_; $name =~ $rx} @lines if $rx; # the filter is for the names
         my $total = @lines;
-        splice(@lines, 400) if $total > 400;
+        splice(@lines, 40) if $total > 40;
         return join("\n", "devel $lang".($rx ? " matching '$filter'" : "").($note // '').": $total lines",
-            @lines, ($total > 400 ? ("... ".($total - 400)." more, give a filter") : ()))."\n";
+            @lines, ($total > 40 ? ("... ".($total - 40)." more, give a narrower filter") : ()))."\n";
     };
     return $format->($DEVEL_CACHE{$lang}) if defined $DEVEL_CACHE{$lang};
     if(defined(my $built = _devel_built($lang, $profile))){

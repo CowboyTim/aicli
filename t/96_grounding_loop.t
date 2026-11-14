@@ -41,14 +41,15 @@ sub text_reply {
     like($e // '', qr/not a regular expression/, "devel: a bad filter is refused");
 
     ($r, $e) = ai::execute_tool('devel', 'DEVEL_9c3e', ['perl', '']);
-    ok(!$e, "devel perl: runs") or diag($e);
-    like($r, qr/^perl v5/m, "devel perl: the version");
-    like($r, qr/^Carp \S+$/m, "devel perl: a module with its version");
-    ok(exists $tools::DEVEL_CACHE{perl}, "devel perl: the list is kept for the rest of the process");
+    like($r // '', qr/give a filter/, "devel perl: without a filter, no list, a hint");
+    unlike($r // '', qr/^Carp /m, "devel perl: and no module in it");
 
     ($r, $e) = ai::execute_tool('devel', 'DEVEL_9c3e', ['perl', '^Carp$']);
+    ok(!$e, "devel perl: runs") or diag($e);
     like($r, qr/matching '\^Carp\$': 1 lines/, "devel perl: the filter is for the names, and it is said");
-    like($r, qr/^Carp \S+$/m, "devel perl: the module is there");
+    like($r, qr/^Carp \S+$/m, "devel perl: a module with its version");
+    unlike($r, qr/^Carp::Heavy/m, "devel perl: the filter leaves the others out");
+    ok(exists $tools::DEVEL_CACHE{perl}, "devel perl: the list is kept for the rest of the process");
     unlike($r, qr/^Data::Dumper/m, "devel perl: the filter leaves the others out");
 
     ($r, $e) = ai::execute_tool('devel', 'DEVEL_9c3e', ['bash', 'git']);
@@ -66,12 +67,12 @@ sub text_reply {
     TestAI::setup(AI_TOOL_CALLS => "native", AI_DEVEL_CACHE => "$dir/built");
     ai::spew("$dir/built/perl", "perl v9.9\nMARK 9.9\n");
     delete $tools::DEVEL_CACHE{perl};
-    my ($r, $e) = ai::execute_tool('devel', 'DEVEL_9c3e', ['perl', '']);
+    my ($r, $e) = ai::execute_tool('devel', 'DEVEL_9c3e', ['perl', 'MARK']);
     like($r // '', qr/MARK 9\.9/, "build: the tool reads the list the image has, without probing");
     like($r // '', qr/built with the image/, "build: and says where it comes from");
     ai::spew("$dir/built/perl", "not read again\n");
     delete $tools::DEVEL_CACHE{perl};
-    ($r, $e) = ai::execute_tool('devel', 'DEVEL_9c3e', ['perl', '']);
+    ($r, $e) = ai::execute_tool('devel', 'DEVEL_9c3e', ['perl', 'not']);
     like($r // '', qr/not read again/, "build: the file is read each time the cache is empty");
 }
 
