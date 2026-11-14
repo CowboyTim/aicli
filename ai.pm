@@ -25,6 +25,10 @@ our $cmds;
 our @MODELS;
 our $TUI = tui->new(enabled => 0); # the status line, switched on in chat_loop
 our $BUSY = 0;      # a completion/tool turn is running: ctrl-C aborts the turn only
+our $EVENT_SINK;    # the web interface (ui.pm): called as ($type, $data) for what the chat shows
+sub emit { $EVENT_SINK->(@_) if $EVENT_SINK; return }
+# the text for the web page: no terminal colours in it
+sub web_text { my $t = to_text($_[0] // ''); $t =~ s/\e\[[0-9;]*m//g; return $t }
 our $MAIN_PID = $$;
 our %AUTO_SESSION;    # sessions this process made up a name for
 our $WORKSPACE;       # the directory the file tools are confined to, undef: no limit
@@ -519,7 +523,7 @@ sub handle_llm_response {
     log::info("handling>>".($$resp // '')."<<");
     # with a printer of the caller everything is handed to it in full
     my $brief = (!$printer_sub and tool_display() eq 'brief') ? 1 : 0;
-    my $say = sub {
+    my $say = $EVENT_SINK ? sub {emit(text => {text => web_text($_[0])})} : sub {
         $TUI->clear();
         print $_[0];
     };
@@ -839,7 +843,7 @@ sub new_stream {
 sub new_printer {
     my ($out, %o) = @_;
     my $out_arg = $out; # a printer that was given its output (a test, a pipe) gets no colors of the markdown
-    $out //= sub {$TUI->clear(); print $_[0]};
+    $out //= $EVENT_SINK ? sub {emit(text => {text => web_text($_[0])})} : sub {$TUI->clear(); print $_[0]};
     my $view  = thinking_view(); # spin: a spinner while it thinks; text: streamed; off
     my $tty   = exists $o{tty} ? $o{tty} : (-t STDOUT ? 1 : 0); # the line of how long: a terminal only
     my $thought; # when the thinking started, while it is not streamed
@@ -884,8 +888,10 @@ sub new_printer {
         return $vis;
     };
     # markdown is drawn for the terminal only: a pipe gets the text as it is
-    my $md = (($::ORIG_ENV{AI_MARKDOWN} // ((-t STDOUT and !defined $out_arg) ? 1 : 0)) ? 1 : 0)
+    my $md = (($::ORIG_ENV{AI_MARKDOWN} // ((-t STDOUT and !defined $out_arg and !$EVENT_SINK) ? 1 : 0)) ? 1 : 0)
         ? md->new(base => $colors::green_color) : undef;
+    # the web interface gets the text itself, thinking as its own kind of event
+    my $to_web = ($EVENT_SINK and !defined $out_arg) ? 1 : 0;
     my $p = {};
     my $show = sub {
         my ($kind, $text) = @_;
@@ -918,8 +924,12 @@ sub new_printer {
             &{$out}("\n") unless $ends_nl;
             &{$out}("\n") if length $last; # a blank line between thinking and answer
         }
-        my $color = $kind eq 'think' ? $colors::think_color : $colors::green_color;
-        &{$out}($color.to_bytes($text).$colors::reset_color);
+        if($to_web){
+            emit($kind eq 'think' ? 'think' : 'text', {text => web_text($text)});
+        } else {
+            my $color = $kind eq 'think' ? $colors::think_color : $colors::green_color;
+            &{$out}($color.to_bytes($text).$colors::reset_color);
+        }
         $last    = $kind;
         $ends_nl = $text =~ m/\n\z/ ? 1 : 0;
     };
@@ -3579,8 +3589,9 @@ sub fit_readline {
 
 sub chat_loop {
     $::LOOP = 1;
-    my $input_cli_sub = -t STDIN ? input_terminal() : input_stdin();
-    start_status_line(bar => (-t STDIN ? 1 : 0));
+    # the web interface (ui.pm) takes the place of the input: no readline, no status line
+    my $input_cli_sub = $::UI ? ui::input() : -t STDIN ? input_terminal() : input_stdin();
+    start_status_line(bar => (-t STDIN ? 1 : 0)) unless $::UI;
     # Input from a pipe or file: there is no readline to catch the signals.
     # ctrl-C (INT) stops the turn that runs and the next line is read; a
     # second one while that is still stopping, or one while nothing runs,
@@ -3594,7 +3605,7 @@ sub chat_loop {
         }
         cleanup_chat();
         exit($sig eq 'TERM' ? 143 : 130);
-    }) x 2 unless -t STDIN;
+    }) x 2 unless -t STDIN or $::UI;
     while($::LOOP){
         log::info("Waiting for user input...");
         $::ABORT = 0;
@@ -3607,8 +3618,14 @@ sub chat_loop {
         next if $chat_request =~ m/^\s*$/;
         {
             local $BUSY = 1;
+            emit(turn => {state => 'start'});
             eval {chat_completion($chat_request); 1}
-                or log::error(${colors::red_color}.($@ =~ s/\s+\z//r).${colors::reset_color});
+                or do {
+                    my $err = $@ =~ s/\s+\z//r;
+                    log::error(${colors::red_color}.$err.${colors::reset_color});
+                    emit(failed => {text => $err});
+                };
+            emit(turn => {state => 'end'});
         }
     }
     return;

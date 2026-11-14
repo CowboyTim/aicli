@@ -123,6 +123,10 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
 - **md.pm** – `md`: markdown of the answer, line by line as it streams (`new_printer()` uses it on a terminal)
 - **/voice** (in `ai.pm`, section "Speech"): `voice_record()` runs the recorder as a child (`loop::spawn`), stopped with SIGINT by a timer; `transcribe()` sends the recording as multipart/form-data (`multipart_body()`) to AI_ASR_URL; `voice_quiet()` skips a recording with no sound (the recognizer answers silence with "you"). The recording goes to `voice_dir()` (`/tmp/aicli-<uid>`, the sandbox lets the recorder write there, not in the session directory). While it is made: `voice_meter_start()` samples the level for the footer, `voice_preview_start()` sends the audio since the last final words every three seconds (verbose JSON segments), `heard_agree()` (LocalAgreement) makes the segments that two passes agree on final and drops their audio.
 - **FastFlowLM** is used for voice (`flm serve ... --asr 1`, port 52625), not for chat work. Its chat defaults (8192 tokens) stay as they are; there is no `agent` tool with it.
+- **ui.pm** – `ui`: the web interface (`ai.pl --ui`), headless: an HTTP/1.1 server
+  on the event loop (`loop::watch`), routes, the SSE stream (`publish()`, the
+  `$ai::EVENT_SINK` hook of the chat), the token (`_authed()`), the input queue
+  that `chat_loop` reads (`input()`). Page: `ai/ui/index.html`.
 - **tui.pm** – `tui`: the screen. Two modes: `bar` (default when the terminal
   is big enough, at least 7 rows and 20 columns): a footer of two lines at
   the bottom, activity (`set`/`unset` items with spinner and elapsed time)
@@ -413,6 +417,7 @@ Other APIs are reached through an OpenAI compatible gateway, such as LiteLLM or 
 | `t/88_markdown.t` | markdown of the answer: headings, emphasis, code, lists, tables, streaming, the printer |
 | `t/89_context_thinking.t` | the reasoning setting, what the request says, the first request through compactions, `/context` |
 | `t/97_live.t` | a real model, only when `AI_LIVE_SERVER` is set (`AI_LIVE_MODEL`, optional `AI_LIVE_SEARXNG`): one answer, a native tool call, the thinking setting, search. Skipped otherwise |
+| `t/100_ui.t` | the web interface: routes, the token, origin check, body limits, the input queue, the event stream on socket pairs; then `ai.pl --ui` as a child, a message in and the streamed answer out |
 | `t/98_voice.t` | speech: the multipart upload, the recorder child stopped by SIGINT, the text of the recognizer, `/voice` |
 | `t/95_cli.t` | `-p` (one request, exit codes, stdin) and `-c` (continue per directory), as a process |
 | `t/85_web.t` | proxy selection, HTML to text, fetch, search (mocked HTTP layer), a real fetch, `/retry`, `/rewind` |

@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aicli</title>
+<style>
+  :root { --bg: #fbfbf9; --fg: #1c1c1a; --muted: #6b6b66; --line: #d9d9d3; --user: #e8f0fb; --err: #b3261e; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg: #161615; --fg: #ececea; --muted: #9a9a94; --line: #3a3a37; --user: #22303f; --err: #ff8a80; }
+  }
+  :root[data-theme="dark"] { --bg: #161615; --fg: #ececea; --muted: #9a9a94; --line: #3a3a37; --user: #22303f; --err: #ff8a80; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, sans-serif; }
+  header { padding: 10px 16px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 13px; display: flex; gap: 12px; justify-content: space-between; flex-wrap: wrap; }
+  main { max-width: 860px; margin: 0 auto; padding: 16px; }
+  #log { white-space: pre-wrap; word-wrap: break-word; }
+  .msg { margin: 0 0 14px; }
+  .user { background: var(--user); padding: 8px 12px; border-radius: 8px; }
+  .answer { padding: 0 2px; }
+  .error { color: var(--err); }
+  form { position: sticky; bottom: 0; background: var(--bg); display: flex; gap: 8px; padding: 12px 0; }
+  textarea { flex: 1; font: inherit; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); resize: vertical; min-height: 44px; }
+  button { font: inherit; padding: 0 16px; border: 1px solid var(--line); border-radius: 6px; background: var(--user); color: var(--fg); cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  #status { font-size: 13px; color: var(--muted); }
+</style>
+</head>
+<body>
+<header><span id="status">connecting…</span><span id="model"></span></header>
+<main>
+  <div id="log"></div>
+  <form id="form">
+    <textarea id="text" rows="2" placeholder="Message"></textarea>
+    <button id="send" type="submit">Send</button>
+    <button id="abort" type="button" disabled>Stop</button>
+  </form>
+</main>
+<script>
+(function () {
+  "use strict";
+  var log = document.getElementById("log");
+  var status = document.getElementById("status");
+  var model = document.getElementById("model");
+  var form = document.getElementById("form");
+  var text = document.getElementById("text");
+  var send = document.getElementById("send");
+  var abort = document.getElementById("abort");
+  var current = null; // the element the answer streams into
+
+  function add(cls, s) {
+    var d = document.createElement("div");
+    d.className = "msg " + cls;
+    d.textContent = s; // never innerHTML: the model's text is not markup
+    log.appendChild(d);
+    window.scrollTo(0, document.body.scrollHeight);
+    return d;
+  }
+
+  function setState(s) {
+    model.textContent = s.model || "";
+    status.textContent = s.session ? "session " + s.session : "";
+  }
+
+  var es = new EventSource("/events");
+  es.onopen = function () { status.textContent = "connected"; };
+  es.onerror = function () { status.textContent = "disconnected, retrying…"; };
+  es.addEventListener("state", function (e) { setState(JSON.parse(e.data)); });
+  es.addEventListener("text", function (e) {
+    var t = JSON.parse(e.data).text;
+    if (!current) { current = add("answer", ""); }
+    current.textContent += t;
+    window.scrollTo(0, document.body.scrollHeight);
+  });
+  es.addEventListener("failed", function (e) {
+    if (e.data) { add("error", JSON.parse(e.data).text); }
+  });
+  es.addEventListener("turn", function (e) {
+    var st = JSON.parse(e.data).state;
+    send.disabled = st === "start";
+    abort.disabled = st !== "start";
+    if (st === "start") { current = null; }
+    if (st === "end") { current = null; }
+  });
+
+  form.addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    var s = text.value.trim();
+    if (!s) { return; }
+    add("user", s);
+    text.value = "";
+    fetch("/message", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: s })
+    }).then(function (r) {
+      if (!r.ok) { return r.json().then(function (j) { add("error", j.error || r.statusText); }); }
+    }).catch(function (err) { add("error", String(err)); });
+  });
+
+  abort.addEventListener("click", function () {
+    fetch("/abort", { method: "POST" });
+  });
+})();
+</script>
+</body>
+</html>

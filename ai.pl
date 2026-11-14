@@ -28,14 +28,20 @@ $::DEBUG = $::ORIG_ENV{DEBUG} || 0;
 {
     no warnings 'once';
     require Getopt::Long;
-    my ($help, $man, $continue);
+    my ($help, $man, $continue, $ui, $ui_bind);
     my $ok = Getopt::Long::GetOptions(
         'help|h|?'    => \$help,
         'man'         => \$man,
         'debug'      => \$::DEBUG,
         'continue|c' => \$continue,
         'prompt|p=s' => \$::PROMPT,
+        'ui:s'       => \$ui,
+        'ui-bind=s'  => \$ui_bind,
     );
+    if(defined $ui){
+        $::UI = length($ui) ? $ui : 8080;
+        $::UI_BIND = $ui_bind // '127.0.0.1';
+    }
     if(!$ok or $help or $man){
         # usage (-h, -help) or the whole manual (-man) from the POD of this file;
         # a wrong option gets the usage on stderr and exit 2
@@ -121,6 +127,16 @@ require ai;
 
 ai::chat_setup($BASE_DIR);
 ai::setup_commands();
+if(defined $::UI){
+    # the web interface, headless: the chat reads what comes in over HTTP
+    die "--ui and -p do not go together\n" if defined $::PROMPT;
+    require ui;
+    ui::start(port => $::UI, bind => $::UI_BIND, token => (length($::ORIG_ENV{AI_UI_TOKEN} // "") ? $::ORIG_ENV{AI_UI_TOKEN} : undef));
+    ai::chat_loop();
+    ai::cleanup_chat();
+    ui::stop();
+    exit 0;
+}
 if(defined $::PROMPT){
     # one request and out: -p "text", or -p - for all of stdin
     $::PROMPT = do {local $/; <STDIN>} if $::PROMPT eq '-';
@@ -184,6 +200,24 @@ included) and exit. C<-> as I<text> reads the request from stdin, all of it.
 The exit code is 0 when the model answered, 1 when the request ended with an
 error (also: turn limit, token budget) and 130 when it was interrupted.
 Together with B<-c> this continues a session one request at a time.
+
+=item B<--ui> [I<port>]
+
+A web interface instead of the terminal: the chat reads its messages from HTTP
+and sends its answer as server-sent events. Port 8080 when none is given. The
+page is at C<http://127.0.0.1:8080/?token=...>; the address with the token is
+printed on stderr when it starts. Every request needs the token (a cookie set by
+that address, or an C<Authorization: Bearer> header). C<AI_UI_TOKEN> in the
+environment sets the token. Routes: C</events> (the stream), C<POST /message>,
+C<POST /abort>, C</state>. Slash commands and files come later.
+
+=item B<--ui-bind> I<address>
+
+The address the web interface listens on, C<127.0.0.1> by default. An IPv6
+address works too: C<::1> for the loopback, C<::> for any address (in the URL it
+is in brackets). Any other address than the loopback reaches the chat (its tools
+included) from the network: only with a token that is hard to guess, and with
+the network you trust.
 
 =back
 

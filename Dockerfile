@@ -32,7 +32,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ai.pl and its modules, named one by one (a glob would also take scratch files)
-COPY ai.pl ai.pm md.pm tui.pm utils.pm /
+COPY ai.pl ai.pm md.pm tui.pm utils.pm ui.pm /
 COPY ai /ai
 # the entrypoint that makes the device nodes of the boards and USB devices (aicli.sh)
 COPY aicli-devices.sh /usr/local/bin/aicli-devices

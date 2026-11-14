@@ -12,6 +12,8 @@
 #   ./aicli.sh --nrf-sniffer   share nRF52840 dongles (implies --usb)
 #   ./aicli.sh --bluetooth     host network and Bluetooth HCI access (adds NET_ADMIN, NET_RAW)
 #   ./aicli.sh -c              anything else goes to ai.pl
+#   ./aicli.sh --ui [PORT]     the web interface (ai.pl --ui); the container shares the host network,
+#                              so it is at http://127.0.0.1:PORT (8080) on the host, token on stderr
 #
 # The flags come first, in any order. Only the flags above are taken; ai.pl's
 # own options (-c, -p, ...) pass through.
@@ -212,6 +214,7 @@ exec docker run --rm -it \
     -e GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no" \
     -e AI_DIR=/workspace/.aicli \
     -e AI_SESSION \
+    -e AI_UI_TOKEN \
     -e AI_CLEAR \
     -e AI_PROMPT_TEMPLATE=${AI_PROMPT_TEMPLATE:-coder} \
     -e DEBUG \
