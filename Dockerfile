@@ -27,6 +27,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ai.pl
 COPY *.pm *.pl /
 COPY ai /ai
+# the lists of the development languages (devel tool): made now, they are the same
+# for every session of this image; bash is not listed, it is the PATH of the run
+RUN perl -I/ -Mai -e 'tools::devel_build("/usr/share/aicli/devel")'
+
 RUN perl -cw /ai.pl
 ENV HOME=/ai
 USER root

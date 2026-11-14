@@ -4912,7 +4912,7 @@ our %DEVEL_PROFILE = (
         '    print(d.metadata["Name"] or "?", d.version)')]},
     lua    => {exec => ['luarocks', 'list', '--porcelain']},
     c      => {exec => ['pkg-config', '--list-all']},
-    bash   => {code => \&_devel_bash},
+    bash   => {code => \&_devel_bash, live => 1},
 );
 
 # the version a module file declares, read from its first lines: nothing is loaded
@@ -4947,7 +4947,9 @@ sub _devel_perl {
             }
         }
     };
-    $walk->($_, '', 0) for grep {!ref($_) and -d $_} @INC;
+    # not "/" nor "." (an @INC of "-I/" would walk the whole filesystem): the
+    # module trees are the directories with a name of their own
+    $walk->($_, '', 0) for grep {!ref($_) and -d $_ and m{\A/.} } @INC;
     print "perl $^V\n";
     print map {"$_ $mods{$_}\n"} sort keys %mods;
 }
@@ -4961,6 +4963,43 @@ sub _devel_bash {
     }
 }
 
+# the list of a profile, run in a forked child (text, or a job for a sub-agent)
+sub _devel_run {
+    my ($profile) = @_;
+    return _run($profile->{code}) if $profile->{code};
+    my @argv = @{$profile->{exec}};
+    return _run(sub {exec {$argv[0]} @argv or die "cannot run $argv[0]: $!\n"}, exit_ok => []);
+}
+
+# the list the image has, made at build time (see devel_build), or undef. The
+# directory is AI_DEVEL_CACHE (default /usr/share/aicli/devel); a profile marked
+# live (bash: the PATH of the machine) is never read from it.
+sub _devel_built {
+    my ($lang, $profile) = @_;
+    return if $profile->{live};
+    my $dir = $::ORIG_ENV{AI_DEVEL_CACHE} // '/usr/share/aicli/devel';
+    return unless length $dir and -f "$dir/$lang";
+    return ai::slurp("$dir/$lang");
+}
+
+# at build time: the list of every profile that is not live, written to $dir
+sub devel_build {
+    my ($dir) = @_;
+    -d $dir or mkdir($dir) or die "cannot make $dir: $!\n";
+    foreach my $lang (sort keys %DEVEL_PROFILE){
+        next if $DEVEL_PROFILE{$lang}{live};
+        my $raw = eval {_devel_run($DEVEL_PROFILE{$lang})};
+        if($@){
+            warn "devel $lang: no list at build time ($@)";
+            next;
+        }
+        ai::spew("$dir/$lang", $raw // '');
+        my @lines = split m/\n/, $raw // '';
+        print "devel $lang: ".scalar(@lines)." lines\n";
+    }
+    return;
+}
+
 sub devel_9c3e {
     my ($t_args) = @_;
     my $lang   = lc(utils::trim($t_args->[0] // ''));
@@ -4969,15 +5008,20 @@ sub devel_9c3e {
         or die "no profile for '$lang': the profiles are ".join(', ', sort keys %DEVEL_PROFILE)."\n";
     my $rx = length($filter) ? (eval {qr/$filter/i} // die "the filter is not a regular expression: $filter\n") : undef;
     my $format = sub {
-        my ($raw) = @_;
+        my ($raw, $note) = @_;
         my @lines = grep {length} split m/\n/, $raw // '';
         @lines = grep {my ($name) = split ' ', $_; $name =~ $rx} @lines if $rx; # the filter is for the names
         my $total = @lines;
         splice(@lines, 400) if $total > 400;
-        return join("\n", "devel $lang".($rx ? " matching '$filter'" : "").": $total lines",
+        return join("\n", "devel $lang".($rx ? " matching '$filter'" : "").($note // '').": $total lines",
             @lines, ($total > 400 ? ("... ".($total - 400)." more, give a filter") : ()))."\n";
     };
     return $format->($DEVEL_CACHE{$lang}) if defined $DEVEL_CACHE{$lang};
+    if(defined(my $built = _devel_built($lang, $profile))){
+        # made when the image was built: the same image, the same list
+        $DEVEL_CACHE{$lang} = $built;
+        return $format->($built, ' (built with the image)');
+    }
     my $failed = sub {
         my ($err) = @_;
         my ($first) = split m/\n/, $err // '';
@@ -4988,14 +5032,7 @@ sub devel_9c3e {
         $DEVEL_CACHE{$lang} = $raw;
         return $format->($raw);
     };
-    my $run = eval {
-        $profile->{code}
-            ? _run($profile->{code})
-            : do {
-                my @argv = @{$profile->{exec}};
-                _run(sub {exec {$argv[0]} @argv or die "cannot run $argv[0]: $!\n"}, exit_ok => []);
-            };
-    };
+    my $run = eval {_devel_run($profile)};
     return $failed->($@) if $@;
     return $known->($run) unless ref($run) eq 'tools::job';
     # a sub-agent: the probe is a job of the loop, the answer when it is over

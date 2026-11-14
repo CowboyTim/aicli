@@ -55,6 +55,26 @@ sub text_reply {
     like($r // '', qr/^git \S+/m, "devel bash: the tools on the PATH");
 }
 
+# the lists made at build time: written to a directory, read by the tool instead
+# of running the probe, and bash is never read from it
+{
+    my $dir = File::Temp::tempdir(CLEANUP => 1, TMPDIR => 1);
+    TestAI::setup(AI_TOOL_CALLS => 'native', AI_DEVEL_CACHE => $dir);
+    tools::devel_build("$dir/built");
+    ok(-s "$dir/built/perl", "build: the perl list is written");
+    ok(!-e "$dir/built/bash", "build: bash is not written, it is live");
+    TestAI::setup(AI_TOOL_CALLS => "native", AI_DEVEL_CACHE => "$dir/built");
+    ai::spew("$dir/built/perl", "perl v9.9\nMARK 9.9\n");
+    delete $tools::DEVEL_CACHE{perl};
+    my ($r, $e) = ai::execute_tool('devel', 'DEVEL_9c3e', ['perl', '']);
+    like($r // '', qr/MARK 9\.9/, "build: the tool reads the list the image has, without probing");
+    like($r // '', qr/built with the image/, "build: and says where it comes from");
+    ai::spew("$dir/built/perl", "not read again\n");
+    delete $tools::DEVEL_CACHE{perl};
+    ($r, $e) = ai::execute_tool('devel', 'DEVEL_9c3e', ['perl', '']);
+    like($r // '', qr/not read again/, "build: the file is read each time the cache is empty");
+}
+
 # the python profile, when there is a python
 SKIP: {
     skip "no python3 here", 2 unless grep {-x "$_/python3"} split m/:/, $ENV{PATH} // '';
