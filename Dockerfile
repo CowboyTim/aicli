@@ -16,13 +16,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         git openssh-client openssl \
         curl wget socat \
         imagemagick \
-        pdl libaudio-wav-perl lame \
+        pdl libaudio-wav-perl lame perl-doc \
         python3 python3-dev \
         lua5.4 luarocks \
         build-essential clang libssl-dev libperl-dev \
         strace \
         pipewire-bin \
     && rm -rf /var/lib/apt/lists/*
+
+# the Perl modules a session is told about (see make_grounding in ai.pm)
+ENV AI_MODULES="JSON::XS WWW::Curl Term::ReadLine::Gnu PDL PDL::FFT Audio::Wav"
 
 # ai.pl
 COPY *.pm *.pl /

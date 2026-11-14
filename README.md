@@ -479,6 +479,8 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 | `AI_TOKENS` | max tokens per answer | 100000 (8192 with `AI_PROVIDER=flm`) |
 | `AI_TEMPERATURE`, `AI_TOP_P`, `AI_TOP_K`, `AI_MIN_P` | sampling | 0.6, 0.95, 20, 0.0 |
 | `AI_MAX_TURNS` | max requests per input (tool loop), 0 = no limit | 50 |
+| `AI_LOOP_LIMIT` | stop an input after this many turns in a row whose results are the same errors (a stuck model), 0 = never | 4 |
+| `AI_MODULES` | Perl modules a new session is told about, with their versions (made once per session, kept in it); the Docker image sets it | none |
 | `AI_AGENT_MAX_TURNS` | max tool turns of one sub-agent, 0 = no limit | 20 |
 | `AI_MAX_AGENTS` | sub-agents working at the same time (no sub-agents with `AI_PROVIDER=flm`) | 4 |
 | `AI_AGENT_VIEW` | 0: no line per sub-agent start and tool call | 1 |

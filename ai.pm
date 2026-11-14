@@ -514,6 +514,7 @@ sub handle_llm_response {
     my ($resp, $printer_sub, $native) = @_;
     $native //= []; # the calls the server made (native), else the ones in the text
     @tools::IMAGES = (); # pictures left over from an interrupted turn
+    $ai::TURN_ERRORS = []; # the errors of this turn's results, for stuck_check()
     return (0, 0, []) unless defined $resp and ref($resp) eq 'SCALAR' and (length($$resp // "") or @$native);
     log::info("handling>>".($$resp // '')."<<");
     # with a printer of the caller everything is handed to it in full
@@ -527,7 +528,7 @@ sub handle_llm_response {
     # tools work with bytes, and never run from within a thinking block
     my $msg = to_bytes(strip_thinking($$resp // ''));
     log::info("MSG THINK STRIPPED>>$msg<<");
-    my (@rt, @agents);
+    my (@rt, @agents, @errs);
     my $announce = sub {
         my ($c) = @_;
         return &{$printer_sub}("${colors::yellow_color1}\[TOOL $c->{tool}\(...))\]${colors::reset_color}\n")
@@ -536,6 +537,7 @@ sub handle_llm_response {
     };
     my $answer = sub {
         my ($i, $c, $result, $had_error) = @_;
+        $errs[$i] = (defined $had_error and length $had_error) ? $had_error : undef;
         my $tool_response = tool_response($c->{tool}, $result, $had_error);
         # a call of the server is answered with a tool message, as its API wants
         $rt[$i] = $c->{id}
@@ -588,8 +590,30 @@ sub handle_llm_response {
     push @rt, {role => 'user', content => to_text(join("\n", map {"Image: $_->{path}"} @pictures)), images => \@pictures}
         if @pictures;
 
+    $ai::TURN_ERRORS = [@errs];
     my $newturns = @rt ? 1 : 0;
     return $newturns, ($newturns ? undef : 0), \@rt;
+}
+
+# Loop control. A turn whose results are all errors, the same errors as the turn
+# before, is a stuck model: after AI_LOOP_LIMIT such turns in a row (default 4,
+# 0 for none) the input is stopped. $stuck is kept by the caller across the turns
+# of one input. Returns true when the input has to stop.
+sub stuck_check {
+    my ($errs, $stuck) = @_;
+    my $limit = $::ORIG_ENV{AI_LOOP_LIMIT} // 4;
+    my @e = grep {defined} @{$errs // []};
+    if(!$limit or !@e or @e != @{$errs // []}){
+        %$stuck = ();
+        return 0;
+    }
+    my $text = join("\n", @e);
+    if(defined $stuck->{text} and $stuck->{text} eq $text){
+        $stuck->{count}++;
+    } else {
+        %$stuck = (text => $text, count => 1);
+    }
+    return $stuck->{count} >= $limit ? 1 : 0;
 }
 
 # ($result, $error) of a finished sub-agent, as for a tool
@@ -1333,7 +1357,7 @@ sub subagent_prompt {
     $prompt .= "\n\nYou are a sub-agent: another agent gave you the task below, the user is not here and you cannot ask questions. "
               ."Work on it with your tools. Your final answer, the one without a tool call, is all the other agent gets to see: "
               ."report what you found or did, complete but without the detours.\n";
-    return $prompt.prompt_context();
+    return $prompt.grounding_text($AI_SESSION_DIR).prompt_context();
 }
 
 #------------------------------------------------------------------------------
@@ -1799,6 +1823,7 @@ sub chat_completion {
     my $retries   = $::ORIG_ENV{AI_RETRIES} // 4;
     my $max_wait  = $::ORIG_ENV{AI_RETRY_MAX_WAIT} // 120;
     my $turn = 0;
+    my %stuck; # loop control: the same errors turn after turn, see stuck_check()
     my $compacted = 0; # after a "context too long" error, once per input
     while(1){
         last if utils::aborted();
@@ -1868,6 +1893,12 @@ sub chat_completion {
         my ($newturns, undef, $r) = handle_llm_response(\$answer, undef, $native);
         append_messages(@{$r // []});
         last unless $newturns;
+        if(stuck_check($ai::TURN_ERRORS, \%stuck)){
+            my ($first) = split m/\n/, $stuck{text};
+            log::error("${colors::red_color}stopped: the same error came back $stuck{count} turns in a row (AI_LOOP_LIMIT): $first${colors::reset_color}");
+            $ok = 0;
+            last;
+        }
     }
     # between the turns: a conversation over the threshold is made smaller now,
     # not when the next message is sent (not for -p, which exits)
@@ -1892,7 +1923,7 @@ sub system_prompt {
         no strict "refs";
         $prompt .= &{"prompt::${template}::prompt"}() // "";
     }
-    return $prompt.prompt_context();
+    return $prompt.grounding_text($session_dir).prompt_context();
 }
 
 # The date for the system prompt, as coarse as AI_PROMPT_DATE says: none,
@@ -1943,6 +1974,41 @@ sub prompt_context {
     return $r;
 }
 
+# The Perl of the session for the system prompt: the version and the modules that
+# AI_MODULES names, with their versions. Made once, when a session starts (see
+# check_setup), and kept in the session folder: the prompt of a session does not
+# change, and a resumed session keeps the one it had. A child loads the modules,
+# so their code runs there, and what it prints is the only thing taken.
+sub make_grounding {
+    my @mods = grep {m/\A[A-Za-z_]\w*(?:::\w+)*\z/} split m/[\s,]+/, $::ORIG_ENV{AI_MODULES} // '';
+    return '' unless @mods;
+    my $out = utils::fork_run(sub {
+        open(STDERR, '>', '/dev/null');
+        print "perl $^V\n";
+        foreach my $m (@mods){
+            (my $file = "$m.pm") =~ s{::}{/}g;
+            if(eval {require $file; 1}){
+                no strict 'refs';
+                my $v = ${"${m}::VERSION"};
+                print defined $v ? "$m $v\n" : "$m (no version)\n";
+            } else {
+                print "$m: not installed\n";
+            }
+        }
+    }, timeout => 60);
+    my @lines = grep {length} split m/\n/, $out // '';
+    return '' unless @lines;
+    return "\n\nThe Perl of this session and its modules (name and version), as they were when the session started. "
+        ."A module that is not listed is not installed here: check any other with `perl -MModule -e1` before you use it.\n"
+        .join('', map {"- $_\n"} @lines);
+}
+
+# the grounding of a session, as it was made (empty for a session without one)
+sub grounding_text {
+    my ($dir) = @_;
+    return slurp("$dir/grounding") // '';
+}
+
 sub init_session {
     my ($session) = @_;
     my $session_dir = "$SESSIONS_DIR/$session";
@@ -1964,6 +2030,8 @@ sub init_session {
         spew("$session_dir/template", "$AI_PROMPT_TEMPLATE\n");
     }
     if(!-s $s_file or $clear){
+        # what the session has of its Perl, once: a resumed session keeps what it has
+        spew("$session_dir/grounding", make_grounding()) unless -f "$session_dir/grounding";
         spew($s_file, $::JSON->encode({role => 'system', content => to_text(system_prompt($session_dir))})."\n");
     }
     return;

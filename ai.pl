@@ -919,6 +919,20 @@ status line off, C<spin> shows nothing while the model thinks.
 Set to 0 to hide the thinking of the model, the same as C<AI_THINKING_VIEW=off>.
 Default: 1
 
+=item B<AI_LOOP_LIMIT>
+
+A turn whose results are all errors, the same errors as the turn before, counts
+as stuck. After this many such turns in a row the input is stopped, with the
+error named. Default: 4, 0 for never.
+
+=item B<AI_MODULES>
+
+Perl modules, separated by spaces or commas, that a new session is told about:
+the Perl version and each module with its version, or that it is not installed.
+It is made when the session starts and kept in the session, so the system
+prompt does not change during it or after a resume. The Docker image sets a
+list. Default: none.
+
 =item B<AI_TOOL_TIMEOUT>
 
 Seconds a bash/perl/grep tool may run. Default: 120, 0 for no limit.
