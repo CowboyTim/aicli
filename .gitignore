@@ -1,2 +1,4 @@
 *~
 *.wav
+build-watch.log
+.build-trigger
