@@ -93,13 +93,24 @@ cd ~/my-project
 unix tools) instead of the dev image (`local/ai/aicli`, the default: languages,
 ImageMagick, PDL, lame). `DOCKER_IMAGE` overrides both.
 
-`aicli.sh --rocm` shares the AMD GPU (`/dev/kfd`, `/dev/dri`, the ROCm files
-in `ROCM_PATH`), `aicli.sh --arduino` shares the serial boards (`ttyUSB*`,
-`ttyACM*`): the container makes `ttyUSB0..7` and `ttyACM0..7` itself when it
-starts (`serial-nodes.sh`, as claude-agent does), so a board plugged in later
-works without a restart. `SERIAL_MAX` changes how many. The GPU devices are
-passed only if they exist on the host. The chat does not need the GPU: the model
-server runs on the host, and the container reaches it over `--network=host`.
+`aicli.sh` shares devices only when a flag asks, and only the ones that exist
+on the host; the groups that own them are added to the container:
+
+| flag | shares |
+|------|--------|
+| `--rocm` | the AMD GPU (`/dev/kfd`, `/dev/dri`) and the ROCm files in `ROCM_PATH` |
+| `--arduino`, `--serial` | the serial boards (`ttyUSB*`, `ttyACM*`) |
+| `--usb` | the USB power meters (JT-UM120, FNIRSI), with `usb_logger` in the image |
+| `--rtlsdr` | RTL-SDR dongles (implies `--usb`), with `rtl_test`, `rtl_sdr` in the image |
+| `--nrf-sniffer` | nRF52840 dongles (implies `--usb`), with `nrfutil` in the image |
+| `--bluetooth` | Bluetooth HCI access: `NET_ADMIN` and `NET_RAW` (the container has `--network=host`) |
+
+The container makes the device nodes itself when it starts (`aicli-devices.sh`,
+as claude-agent does): `ttyUSB0..7` and `ttyACM0..7` for the boards (`SERIAL_MAX`
+changes how many), and the USB nodes of the meters and dongles that are plugged in.
+So a board plugged in later works without a restart. A USB device replugged later
+gets a new device number, so that needs a new start. The chat needs none of these:
+the model server runs on the host, and the container reaches it over `--network=host`.
 
 `aicli.sh` mounts the current directory, and is set up for a local llama.cpp
 server on an AMD ROCm machine: adjust it (`AI_LOCAL_SERVER`, `AI_MODEL`) to your

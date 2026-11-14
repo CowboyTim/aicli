@@ -7,6 +7,10 @@
 #   ./aicli.sh --dev           the dev image (the default)
 #   ./aicli.sh --rocm          share the AMD GPU: /dev/kfd and /dev/dri, the ROCm files
 #   ./aicli.sh --arduino       share the serial boards: ttyUSB* and ttyACM* (or --serial)
+#   ./aicli.sh --usb           share the USB power meters (JT-UM120, FNIRSI)
+#   ./aicli.sh --rtlsdr        share RTL-SDR dongles (implies --usb)
+#   ./aicli.sh --nrf-sniffer   share nRF52840 dongles (implies --usb)
+#   ./aicli.sh --bluetooth     host network and Bluetooth HCI access (adds NET_ADMIN, NET_RAW)
 #   ./aicli.sh -c              anything else goes to ai.pl
 #
 # The flags come first, in any order. Only the flags above are taken; ai.pl's
@@ -16,32 +20,41 @@
 # the passed devices are added to the container (--group-add), read from the
 # device nodes with stat. Nothing is hardcoded to one host's group numbers.
 #
-# Chat does not need the GPU: the model server (llama.cpp, lemonade) runs on the
-# host and the container reaches it over --network=host. --rocm is for a
-# container that runs ROCm compute itself.
+# The serial boards and the USB devices are made as device nodes in the container
+# when it starts (aicli-devices.sh, as claude-agent does), so a board or dongle
+# plugged in later works, provided its node is there: a USB device replugged
+# later gets a new device number, which needs a new start.
 #
-# Serial: the container makes the nodes ttyUSB0..7 and ttyACM0..7 itself when it
-# starts (serial-nodes.sh, as claude-agent does), and ttyUSB (major 188) and ttyACM
-# (major 166) get a device cgroup rule. A board plugged in later uses one of those
-# nodes, with no restart. SERIAL_MAX changes how many.
+# Chat does not need the GPU or the radios: the model server (llama.cpp, lemonade)
+# runs on the host and the container reaches it over --network=host.
 #
 # Environment overrides:
-#   DOCKER_IMAGE   image to run                         (default: from the flags above)
+#   DOCKER_IMAGE    image to run                        (default: from the flags above)
 #   DOCKER_RUN_OPTS extra "docker run" arguments, word-split
-#   ROCM_PATH      the ROCm files on this host, for --rocm (default: $HOME/therock-dist-linux-gfx1151-latest)
-#   SERIAL_MAX     serial nodes made per type for --arduino (default: 8)
-#   AI_GROUPS      groups for ai.pl to drop to (default: the groups of the devices passed)
+#   ROCM_PATH       the ROCm files on this host, for --rocm (default: $HOME/therock-dist-linux-gfx1151-latest)
+#   SERIAL_MAX      serial nodes made per type (default: 8)
+#   RTLSDR_IDS      RTL-SDR vid:pid list          (default: "0bda:2838 0bda:2832")
+#   NRF_IDS         nRF52840 vid:pid list         (default: "1915:521f 1915:522a", the DFU bootloader and the running sniffer)
+#   AI_GROUPS       groups for ai.pl to drop to   (default: the groups of the devices passed)
 #   every AI_* variable of your shell is passed into the container
 
 image=local/ai/aicli:latest
 rocm=0
 serial=0
+usb=0
+rtlsdr=0
+nrf=0
+bluetooth=0
 while :; do
     case "${1:-}" in
-        --base)            image=local/ai/aicli-base:latest ;;
-        --dev)             image=local/ai/aicli:latest ;;
-        --rocm)            rocm=1 ;;
+        --base)             image=local/ai/aicli-base:latest ;;
+        --dev)              image=local/ai/aicli:latest ;;
+        --rocm)             rocm=1 ;;
         --arduino|--serial) serial=1 ;;
+        --usb)              usb=1 ;;
+        --rtlsdr)           rtlsdr=1; usb=1 ;;
+        --nrf-sniffer)      nrf=1; usb=1 ;;
+        --bluetooth)        bluetooth=1 ;;
         *) break ;;
     esac
     shift
@@ -50,6 +63,7 @@ DOCKER_IMAGE=${DOCKER_IMAGE:-$image}
 
 HERE=$(readlink -f "${PWD}")
 BDIR=${HERE##*/}
+cname=aicli-${LOGNAME}-${BDIR}
 
 extra_opts=
 
@@ -102,6 +116,9 @@ add_dev() {
     [ "$gid" != 0 ] && gids[$gid]=1
     return 0
 }
+gid_of() {
+    getent group "$1" | cut -d: -f3
+}
 
 if [ "$rocm" = 1 ]; then
     add_dev /dev/kfd                              # ROCm compute
@@ -122,18 +139,51 @@ if [ "$rocm" = 1 ]; then
     fi
 fi
 
+# the container makes the nodes of the boards and the USB devices (aicli-devices.sh):
+# it needs the cgroup rules for the majors, and the dialout group of this host
+if [ "$serial" = 1 ] || [ "$usb" = 1 ]; then
+    dialout=$(gid_of dialout)
+    [ -n "$dialout" ] && gids[$dialout]=1
+    dev_opts+=(
+        --entrypoint /usr/local/bin/aicli-devices
+        -e "DEVICE_GID=${dialout:-0}"
+        -e "SERIAL_MAX=${SERIAL_MAX:-8}"
+    )
+fi
 if [ "$serial" = 1 ]; then
-    # the boards: the container makes the nodes itself (serial-nodes.sh), so a board
-    # plugged in after start works; it needs the dialout group of this host
-    serial_gid=$(getent group dialout | cut -d: -f3)
-    [ -n "$serial_gid" ] && gids[$serial_gid]=1
     dev_opts+=(
         --device-cgroup-rule "c 188:* rmw"
         --device-cgroup-rule "c 166:* rmw"
-        --entrypoint /usr/local/bin/aicli-serial
-        -e "SERIAL_GID=${serial_gid:-0}"
-        -e "SERIAL_MAX=${SERIAL_MAX:-8}"
+        -e "SERIAL_NODES=ttyUSB:188 ttyACM:166"
     )
+fi
+if [ "$usb" = 1 ]; then
+    dev_opts+=(--device-cgroup-rule "c 189:* rmw" -e USB_METERS=1)
+fi
+# RTL-SDR and nRF52840 dongles: the USB nodes, with their IDs added to the meters'
+if [ "$rtlsdr" = 1 ] || [ "$nrf" = 1 ]; then
+    extra_ids=()
+    if [ "$rtlsdr" = 1 ]; then
+        read -ra rtl_list <<<"${RTLSDR_IDS:-0bda:2838 0bda:2832}"
+        extra_ids+=("${rtl_list[@]}")
+    fi
+    if [ "$nrf" = 1 ]; then
+        read -ra nrf_list <<<"${NRF_IDS:-1915:521f 1915:522a}"
+        extra_ids+=("${nrf_list[@]}")
+    fi
+    dev_opts+=(-e "USB_EXTRA_IDS=${extra_ids[*]}")
+fi
+
+# Bluetooth HCI: the raw HCI socket needs NET_ADMIN and NET_RAW, and the adapters
+# are in the host's network namespace (the container already has --network=host)
+if [ "$bluetooth" = 1 ]; then
+    dev_opts+=(
+        --cap-add NET_ADMIN --cap-add NET_RAW
+        --security-opt seccomp=unconfined
+        --add-host "$cname:127.0.0.1"
+    )
+    bt=$(gid_of bluetooth)
+    [ -n "$bt" ] && gids[$bt]=1
 fi
 
 group_opts=()
@@ -175,7 +225,7 @@ exec docker run --rm -it \
     --tmpfs /tmp:rw,suid,exec,size=2G \
     --tmpfs /var/tmp:rw,suid,exec,size=1G \
     --network=host \
-    --name aicli-${LOGNAME}-${BDIR} \
+    --name "$cname" \
     -v aicli-${LOGNAME}:/workspace \
     -v "${PWD}":/workdir/${BDIR} \
         "$DOCKER_IMAGE" \

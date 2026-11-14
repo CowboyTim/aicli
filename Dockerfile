@@ -34,9 +34,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ai.pl and its modules, named one by one (a glob would also take scratch files)
 COPY ai.pl ai.pm md.pm tui.pm utils.pm /
 COPY ai /ai
-# the serial nodes for --arduino in aicli.sh (the entrypoint that makes them)
-COPY serial-nodes.sh /usr/local/bin/aicli-serial
-RUN chmod 0755 /usr/local/bin/aicli-serial \
+# the entrypoint that makes the device nodes of the boards and USB devices (aicli.sh)
+COPY aicli-devices.sh /usr/local/bin/aicli-devices
+RUN chmod 0755 /usr/local/bin/aicli-devices \
  && perl -cw /ai.pl
 
 ENV HOME=/ai
@@ -67,6 +67,33 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         pdl libaudio-wav-perl lame perl-doc \
         strace pipewire-bin \
     && rm -rf /var/lib/apt/lists/*
+
+# the radios and the USB power meters: rtl-sdr (rtl_test, rtl_sdr) for RTL-SDR
+# dongles, libusb for the meters and dongles, usb_logger (the usb-multimeter package
+# from PyPI, in a venv) for the JT-UM120 and FNIRSI power meters
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        rtl-sdr libusb-1.0-0 python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+ARG USB_METER_VERSION=3.0.0
+RUN python3 -m venv /opt/usb-multimeter \
+ && /opt/usb-multimeter/bin/pip install --no-cache-dir "usb-multimeter==${USB_METER_VERSION}" \
+ && ln -s /opt/usb-multimeter/bin/usb_logger /usr/local/bin/usb_logger \
+ && usb_logger --help >/dev/null
+
+# nrfutil (Nordic), pinned by sha256: the device command flashes the nRF52840
+# Dongle's sniffer firmware, ble-sniffer reads its output. Installed under /opt,
+# with HOME there, so that any user can run it.
+ARG NRFUTIL_URL="https://files.nordicsemi.com/artifactory/swtools/external/nrfutil/executables/x86_64-unknown-linux-gnu/nrfutil-x86_64-unknown-linux-gnu-1.4.2-8a9090a"
+ARG NRFUTIL_SHA256=a14996288928a92081cadeefd2dd37fcb54ee99a568fd4eaa6fb9586a51fba57
+ARG NRFUTIL_DEVICE=device=2.17.5
+RUN curl -fsSL -o /usr/local/bin/nrfutil "${NRFUTIL_URL}" \
+ && echo "${NRFUTIL_SHA256}  /usr/local/bin/nrfutil" | sha256sum -c - \
+ && chmod 0755 /usr/local/bin/nrfutil \
+ && mkdir -p /opt/nrfutil \
+ && HOME=/opt/nrfutil nrfutil install "${NRFUTIL_DEVICE}" \
+ && HOME=/opt/nrfutil nrfutil install ble-sniffer --force \
+ && HOME=/opt/nrfutil nrfutil device --help >/dev/null \
+ && HOME=/opt/nrfutil nrfutil ble-sniffer --help >/dev/null
 
 # the lists of the development languages (devel tool): made now, they are the same
 # for every session of this image; bash is not listed, it is the PATH of the run
