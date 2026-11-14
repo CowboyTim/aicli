@@ -19,7 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         pdl libaudio-wav-perl lame perl-doc \
         python3 python3-dev \
         lua5.4 luarocks \
-        build-essential clang libssl-dev libperl-dev pkg-config \
+        build-essential clang libssl-dev libperl-dev pkg-config make cmake \
         strace \
         pipewire-bin \
     && rm -rf /var/lib/apt/lists/*

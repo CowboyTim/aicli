@@ -4399,7 +4399,7 @@ EOb
         available => sub {tools::_magick() ? 1 : 0},
     },
     devel => {
-        description => "find what a development language has installed, with versions, when you do not know the exact name: perl (modules: a filter is required, a regular expression for the module names), python (packages), lua (rocks), c (libraries known to pkg-config), bash (the common tools on the PATH). Filters are regular expressions for the names; at most 40 lines come back. If you know the module name, run perl -MName -e 'print \$Name::VERSION' instead",
+        description => "find what a development language has installed, with versions, when you do not know the exact name: perl (modules: a filter is required, a regular expression for the module names), python (packages), lua (rocks), c and c++ (compilers, and libraries known to pkg-config), bash (the common tools on the PATH). Filters are regular expressions for the names; at most 40 lines come back. If you know the module name, run perl -MName -e 'print \$Name::VERSION' instead",
         syntax => "///DEVEL_9c3e+EO_5b7a+EO_e21d\n{{language}}\nEO_5b7a[LENGTH({{language}})]\n{{filter}}\nEO_e21d[LENGTH({{filter}})]\nDEVEL_9c3e",
         properties  => {
             "language" => {type => "string", description => "perl, python, lua, c or bash"},
@@ -4911,7 +4911,8 @@ our %DEVEL_PROFILE = (
         'for d in sorted(m.distributions(), key=lambda d: (d.metadata["Name"] or "").lower()):',
         '    print(d.metadata["Name"] or "?", d.version)')]},
     lua    => {exec => ['luarocks', 'list', '--porcelain']},
-    c      => {exec => ['pkg-config', '--list-all']},
+    c      => {code => \&_devel_c},
+    'c++'  => {code => \&_devel_c},
     bash   => {code => \&_devel_bash, live => 1},
 );
 
@@ -4952,6 +4953,35 @@ sub _devel_perl {
     $walk->($_, '', 0) for grep {!ref($_) and -d $_ and m{\A/.} } @INC;
     print "perl $^V\n";
     print map {"$_ $mods{$_}\n"} sort keys %mods;
+}
+
+# c and c++: the compilers on the PATH (name and path), and the libraries of the
+# pkg-config files (name and version), read from the files: no program runs
+sub _devel_c {
+    my @dirs = grep {length} split m/:/, $ENV{PATH} // '';
+    foreach my $name (qw(cc gcc clang c++ g++ clang++ cpp)){
+        my ($found) = grep {-f "$_/$name" and -x _} @dirs;
+        print "$name $found/$name\n" if $found;
+    }
+    my @pc = grep {length} split m/:/, $ENV{PKG_CONFIG_PATH} // '';
+    push @pc, qw(/usr/lib/x86_64-linux-gnu/pkgconfig /usr/lib/pkgconfig /usr/share/pkgconfig /usr/local/lib/pkgconfig);
+    my %seen;
+    foreach my $dir (grep {-d $_} @pc){
+        opendir(my $dh, $dir) or next;
+        foreach my $f (sort grep {m/\.pc\z/} readdir($dh)){
+            (my $name = $f) =~ s/\.pc\z//;
+            next if $seen{$name}++;
+            my $version = '?';
+            if(open(my $fh, '<', "$dir/$f")){
+                while(my $line = <$fh>){
+                    if($line =~ m/^Version:\s*(\S+)/){ $version = $1; last }
+                }
+                close($fh);
+            }
+            print "$name $version\n";
+        }
+        closedir($dh);
+    }
 }
 
 # bash: the common tools, and where each one is on the PATH

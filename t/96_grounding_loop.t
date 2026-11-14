@@ -36,7 +36,7 @@ sub text_reply {
     TestAI::setup(AI_TOOL_CALLS => 'native');
     ok(tools::available('devel'), "devel: available");
     my ($r, $e) = ai::execute_tool('devel', 'DEVEL_9c3e', ['cobol', '']);
-    like($e // '', qr/no profile for 'cobol': the profiles are bash, c, lua, perl, python/, "devel: an unknown language names the profiles");
+    like($e // '', qr/no profile for 'cobol': the profiles are bash, c, c++, lua, perl, python/, "devel: an unknown language names the profiles");
     ($r, $e) = ai::execute_tool('devel', 'DEVEL_9c3e', ['perl', '(']);
     like($e // '', qr/not a regular expression/, "devel: a bad filter is refused");
 
