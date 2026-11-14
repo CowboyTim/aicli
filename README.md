@@ -245,6 +245,7 @@ or `[WRITE_edf5 ERROR_9a78 ... ERROR_9a78]`. In native mode it is a tool message
 | `perl` | Perl code, with the modules of the image (PDL, Audio::Wav) | `eval` in a forked child, or `Safe->reval` with `AI_PERL_SAFE` (no modules there) |
 | `fetch` | a web page as text, links as `[text](url)` | async HTTP in the event loop |
 | `search` | web search through your SearXNG instance | async HTTP, only offered with `AI_SEARXNG_URL` |
+| `devel` | what a language has installed, with versions: `perl` (modules under @INC), `python` (packages), `lua` (rocks), `c` (pkg-config), `bash` (tools on the PATH); an optional name filter | reads only, in a forked child |
 | `image` | a picture (PNG, JPEG, GIF or WebP) in the workspace, sent with the next message; a bigger one is made smaller with ImageMagick; only offered with `AI_VISION=1` | Perl, and ImageMagick in a forked child |
 | `convert` | a picture converted with ImageMagick: a smaller size, a crop, a turn, another format by the output name (png, jpg, gif, webp, bmp, tif), the quality. Metadata is removed. Only offered where ImageMagick is installed | ImageMagick in a forked child, no shell, with `ai/imagemagick/policy.xml` |
 | `agent` | give a task to a sub-agent | a second conversation in the event loop |
@@ -480,7 +481,6 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 | `AI_TEMPERATURE`, `AI_TOP_P`, `AI_TOP_K`, `AI_MIN_P` | sampling | 0.6, 0.95, 20, 0.0 |
 | `AI_MAX_TURNS` | max requests per input (tool loop), 0 = no limit | 50 |
 | `AI_LOOP_LIMIT` | stop an input after this many turns in a row whose results are the same errors (a stuck model), 0 = never | 4 |
-| `AI_MODULES` | Perl modules a new session is told about, with their versions (made once per session, kept in it); the Docker image sets it | none |
 | `AI_AGENT_MAX_TURNS` | max tool turns of one sub-agent, 0 = no limit | 20 |
 | `AI_MAX_AGENTS` | sub-agents working at the same time (no sub-agents with `AI_PROVIDER=flm`) | 4 |
 | `AI_AGENT_VIEW` | 0: no line per sub-agent start and tool call | 1 |

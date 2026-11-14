@@ -1,6 +1,7 @@
 #!/usr/bin/perl
-# grounding: the Perl and modules of a session, made once and kept in it; loop
-# control: a model that gets the same error turn after turn is stopped
+# devel: what a development language has installed, asked for by the model; the
+# system prompt does not carry it. Loop control: a model that gets the same
+# error turn after turn is stopped.
 use strict; use warnings;
 
 use Test::More;
@@ -30,32 +31,56 @@ sub text_reply {
     return [sse({choices => [{delta => {content => $text}}]}, {choices => [{delta => {}, finish_reason => 'stop'}]})];
 }
 
-# grounding: what it says, and that a session keeps what it was given
+# the tool: the profiles, a filter, the cache, a wrong name
 {
-    TestAI::setup(AI_MODULES => '');
-    is(ai::make_grounding(), '', "grounding: nothing without AI_MODULES");
+    TestAI::setup(AI_TOOL_CALLS => 'native');
+    ok(tools::available('devel'), "devel: available");
+    my ($r, $e) = ai::execute_tool('devel', 'DEVEL_9c3e', ['cobol', '']);
+    like($e // '', qr/no profile for 'cobol': the profiles are bash, c, lua, perl, python/, "devel: an unknown language names the profiles");
+    ($r, $e) = ai::execute_tool('devel', 'DEVEL_9c3e', ['perl', '(']);
+    like($e // '', qr/not a regular expression/, "devel: a bad filter is refused");
 
-    TestAI::setup(AI_MODULES => 'Carp No::Such::Mod ../bad');
-    my $g = ai::make_grounding();
-    like($g, qr/^- perl v5/m, "grounding: the perl version");
-    like($g, qr/^- Carp \S+/m, "grounding: a module with its version");
-    like($g, qr/^- No::Such::Mod: not installed/m, "grounding: a missing module is said so");
-    unlike($g, qr/bad/, "grounding: a name that is not a module is left out");
+    ($r, $e) = ai::execute_tool('devel', 'DEVEL_9c3e', ['perl', '']);
+    ok(!$e, "devel perl: runs") or diag($e);
+    like($r, qr/^perl v5/m, "devel perl: the version");
+    like($r, qr/^Carp \S+$/m, "devel perl: a module with its version");
+    ok(exists $tools::DEVEL_CACHE{perl}, "devel perl: the list is kept for the rest of the process");
+
+    ($r, $e) = ai::execute_tool('devel', 'DEVEL_9c3e', ['perl', '^Carp$']);
+    like($r, qr/matching '\^Carp\$': 1 lines/, "devel perl: the filter is for the names, and it is said");
+    like($r, qr/^Carp \S+$/m, "devel perl: the module is there");
+    unlike($r, qr/^Data::Dumper/m, "devel perl: the filter leaves the others out");
+
+    ($r, $e) = ai::execute_tool('devel', 'DEVEL_9c3e', ['bash', 'git']);
+    like($r // '', qr/^git \S+/m, "devel bash: the tools on the PATH");
 }
+
+# the python profile, when there is a python
+SKIP: {
+    skip "no python3 here", 2 unless grep {-x "$_/python3"} split m/:/, $ENV{PATH} // '';
+    TestAI::setup(AI_TOOL_CALLS => 'native');
+    my ($r, $e) = ai::execute_tool('devel', 'DEVEL_9c3e', ['python', '']);
+    ok(!$e, "devel python: runs") or diag($e);
+    like($r, qr/^python 3\./m, "devel python: the version");
+}
+
+# a profile whose program is not there says so, and is not an error of the loop
 {
-    TestAI::setup(AI_MODULES => 'Carp');
-    my $dir = $ai::AI_SESSION_DIR;
-    ok(-f "$dir/grounding", "session: the grounding is made when the session starts");
-    like(ai::system_prompt(), qr/^- Carp /m, "session: the system prompt has it");
+    TestAI::setup(AI_TOOL_CALLS => 'native');
+    my ($r, $e) = ai::execute_tool('devel', 'DEVEL_9c3e', ['lua', '']);
+    ok(!$e, "devel lua: not an error of the tool") ;
+    like($r // '', qr/^devel lua/, "devel lua: answers either way");
+}
 
-    # the same session, as a resumed one would read it: what it made stays
-    $::ORIG_ENV{AI_MODULES} = 'JSON::XS';
-    my $prompt = ai::system_prompt($dir);
-    like($prompt, qr/^- Carp /m, "session: a changed AI_MODULES does not change the session");
-    unlike($prompt, qr/JSON::XS/, "session: and the new modules are not in it");
-
-    unlink "$dir/grounding";
-    unlike(ai::system_prompt(), qr/The Perl of this session/, "session: an older session without one has no change");
+# the system prompt is the same whatever is installed: the tool asks for it
+{
+    TestAI::setup(AI_TOOL_CALLS => 'native', AI_MODULES => 'Carp');
+    unlike(ai::system_prompt(), qr/Carp \d/, "prompt: no module list in the system prompt");
+    like(ai::system_prompt(), qr/`devel` tool/, "prompt: the coder template names the devel tool");
+    TestAI::mock_http(text_reply("ok"));
+    TestAI::capture {ai::chat_completion("hi")};
+    my @names = map {$_->{function}{name}} @{$::JSON->decode($TestAI::REQUESTS[0]{data})->{tools}};
+    ok((grep {$_ eq 'devel'} @names), "devel: the request offers the tool");
 }
 
 # loop control: the same error turn after turn stops the input

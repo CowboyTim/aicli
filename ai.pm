@@ -1357,7 +1357,7 @@ sub subagent_prompt {
     $prompt .= "\n\nYou are a sub-agent: another agent gave you the task below, the user is not here and you cannot ask questions. "
               ."Work on it with your tools. Your final answer, the one without a tool call, is all the other agent gets to see: "
               ."report what you found or did, complete but without the detours.\n";
-    return $prompt.grounding_text($AI_SESSION_DIR).prompt_context();
+    return $prompt.prompt_context();
 }
 
 #------------------------------------------------------------------------------
@@ -1923,7 +1923,7 @@ sub system_prompt {
         no strict "refs";
         $prompt .= &{"prompt::${template}::prompt"}() // "";
     }
-    return $prompt.grounding_text($session_dir).prompt_context();
+    return $prompt.prompt_context();
 }
 
 # The date for the system prompt, as coarse as AI_PROMPT_DATE says: none,
@@ -1974,41 +1974,6 @@ sub prompt_context {
     return $r;
 }
 
-# The Perl of the session for the system prompt: the version and the modules that
-# AI_MODULES names, with their versions. Made once, when a session starts (see
-# check_setup), and kept in the session folder: the prompt of a session does not
-# change, and a resumed session keeps the one it had. A child loads the modules,
-# so their code runs there, and what it prints is the only thing taken.
-sub make_grounding {
-    my @mods = grep {m/\A[A-Za-z_]\w*(?:::\w+)*\z/} split m/[\s,]+/, $::ORIG_ENV{AI_MODULES} // '';
-    return '' unless @mods;
-    my $out = utils::fork_run(sub {
-        open(STDERR, '>', '/dev/null');
-        print "perl $^V\n";
-        foreach my $m (@mods){
-            (my $file = "$m.pm") =~ s{::}{/}g;
-            if(eval {require $file; 1}){
-                no strict 'refs';
-                my $v = ${"${m}::VERSION"};
-                print defined $v ? "$m $v\n" : "$m (no version)\n";
-            } else {
-                print "$m: not installed\n";
-            }
-        }
-    }, timeout => 60);
-    my @lines = grep {length} split m/\n/, $out // '';
-    return '' unless @lines;
-    return "\n\nThe Perl of this session and its modules (name and version), as they were when the session started. "
-        ."A module that is not listed is not installed here: check any other with `perl -MModule -e1` before you use it.\n"
-        .join('', map {"- $_\n"} @lines);
-}
-
-# the grounding of a session, as it was made (empty for a session without one)
-sub grounding_text {
-    my ($dir) = @_;
-    return slurp("$dir/grounding") // '';
-}
-
 sub init_session {
     my ($session) = @_;
     my $session_dir = "$SESSIONS_DIR/$session";
@@ -2030,8 +1995,6 @@ sub init_session {
         spew("$session_dir/template", "$AI_PROMPT_TEMPLATE\n");
     }
     if(!-s $s_file or $clear){
-        # what the session has of its Perl, once: a resumed session keeps what it has
-        spew("$session_dir/grounding", make_grounding()) unless -f "$session_dir/grounding";
         spew($s_file, $::JSON->encode({role => 'system', content => to_text(system_prompt($session_dir))})."\n");
     }
     return;
@@ -4435,6 +4398,15 @@ EOb
         # only where the ImageMagick program is installed
         available => sub {tools::_magick() ? 1 : 0},
     },
+    devel => {
+        description => "list what a development language has installed, with versions, instead of guessing a module or package name: perl (every module in @INC), python (packages), lua (rocks), c (libraries known to pkg-config), bash (the common tools on the PATH). An optional filter is a regular expression for the lines",
+        syntax => "///DEVEL_9c3e+EO_5b7a+EO_e21d\n{{language}}\nEO_5b7a[LENGTH({{language}})]\n{{filter}}\nEO_e21d[LENGTH({{filter}})]\nDEVEL_9c3e",
+        properties  => {
+            "language" => {type => "string", description => "perl, python, lua, c or bash"},
+            "filter"   => {type => "string", description => "A regular expression for the names; empty for all"},
+        },
+        required => ["language"],
+    },
     };
 
     # derive from the syntax: the tag (BASH_7c48, also the name of the sub that
@@ -4923,6 +4895,115 @@ sub convert_5d1a {
             die $err;
         }
         return $publish->();
+    };
+    return $run;
+}
+
+# devel: what a development language has installed, with versions, for the model
+# to look at instead of guessing. A probe runs in a forked child (through _run),
+# and the list it gives is kept for the rest of the process.
+our %DEVEL_CACHE;
+our %DEVEL_PROFILE = (
+    perl   => {code => \&_devel_perl},
+    python => {exec => ['python3', '-c', join("\n",
+        'import sys, importlib.metadata as m',
+        'print("python", sys.version.split()[0])',
+        'for d in sorted(m.distributions(), key=lambda d: (d.metadata["Name"] or "").lower()):',
+        '    print(d.metadata["Name"] or "?", d.version)')]},
+    lua    => {exec => ['luarocks', 'list', '--porcelain']},
+    c      => {exec => ['pkg-config', '--list-all']},
+    bash   => {code => \&_devel_bash},
+);
+
+# the version a module file declares, read from its first lines: nothing is loaded
+sub _devel_version {
+    my ($file) = @_;
+    open(my $fh, '<', $file) or return;
+    my $n = 0;
+    while(my $line = <$fh>){
+        last if ++$n > 400;
+        return $1 if $line =~ m/\$(?:[\w:]*::)?VERSION\s*=\s*['"]?v?(\d[\d._]*)/;
+    }
+    return;
+}
+
+# perl: the version, and every module under @INC with its version
+sub _devel_perl {
+    my %mods;
+    my $walk; $walk = sub {
+        my ($dir, $prefix, $depth) = @_;
+        return if $depth > 8;
+        opendir(my $dh, $dir) or return;
+        my @entries = sort grep {!m/\A\.\.?\z/} readdir($dh);
+        closedir($dh);
+        foreach my $e (@entries){
+            my $path = "$dir/$e";
+            if(-d $path and $e =~ m/\A[A-Za-z]\w*\z/){
+                $walk->($path, "${prefix}${e}::", $depth + 1);
+            } elsif($e =~ m/\A([A-Za-z]\w*)\.pm\z/ and -f $path){
+                my $name = "$prefix$1";
+                next if exists $mods{$name};
+                $mods{$name} = _devel_version($path) // '?';
+            }
+        }
+    };
+    $walk->($_, '', 0) for grep {!ref($_) and -d $_} @INC;
+    print "perl $^V\n";
+    print map {"$_ $mods{$_}\n"} sort keys %mods;
+}
+
+# bash: the common tools, and where each one is on the PATH
+sub _devel_bash {
+    my @dirs = grep {length} split m/:/, $ENV{PATH} // '';
+    foreach my $name (qw(bash git rg grep find sed awk python3 perl lua luarocks cc gcc clang make pkg-config convert magick lame)){
+        my ($found) = grep {-f "$_/$name" and -x _} @dirs;
+        print $found ? "$name $found/$name\n" : "$name: not on the PATH\n";
+    }
+}
+
+sub devel_9c3e {
+    my ($t_args) = @_;
+    my $lang   = lc(utils::trim($t_args->[0] // ''));
+    my $filter = utils::trim($t_args->[1] // '');
+    my $profile = $DEVEL_PROFILE{$lang}
+        or die "no profile for '$lang': the profiles are ".join(', ', sort keys %DEVEL_PROFILE)."\n";
+    my $rx = length($filter) ? (eval {qr/$filter/i} // die "the filter is not a regular expression: $filter\n") : undef;
+    my $format = sub {
+        my ($raw) = @_;
+        my @lines = grep {length} split m/\n/, $raw // '';
+        @lines = grep {my ($name) = split ' ', $_; $name =~ $rx} @lines if $rx; # the filter is for the names
+        my $total = @lines;
+        splice(@lines, 400) if $total > 400;
+        return join("\n", "devel $lang".($rx ? " matching '$filter'" : "").": $total lines",
+            @lines, ($total > 400 ? ("... ".($total - 400)." more, give a filter") : ()))."\n";
+    };
+    return $format->($DEVEL_CACHE{$lang}) if defined $DEVEL_CACHE{$lang};
+    my $failed = sub {
+        my ($err) = @_;
+        my ($first) = split m/\n/, $err // '';
+        return "devel $lang: not installed here, or it gave no list ($first)\n";
+    };
+    my $known = sub {
+        my ($raw) = @_;
+        $DEVEL_CACHE{$lang} = $raw;
+        return $format->($raw);
+    };
+    my $run = eval {
+        $profile->{code}
+            ? _run($profile->{code})
+            : do {
+                my @argv = @{$profile->{exec}};
+                _run(sub {exec {$argv[0]} @argv or die "cannot run $argv[0]: $!\n"}, exit_ok => []);
+            };
+    };
+    return $failed->($@) if $@;
+    return $known->($run) unless ref($run) eq 'tools::job';
+    # a sub-agent: the probe is a job of the loop, the answer when it is over
+    my $inner = $run->{finish};
+    $run->{finish} = sub {
+        my $out = eval {$inner->(@_)};
+        return $failed->($@) if $@;
+        return $known->($out);
     };
     return $run;
 }

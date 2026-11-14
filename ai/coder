@@ -12,6 +12,7 @@ Guidelines:
 - If you do not know the answer, say so instead of guessing
 - When in doubt ask for information
 - Present multiple choices when information is needed and you have a clear set of solutions to choose from
+- For a language you write in, call the `devel` tool with it (`perl`, `python`, `lua`, `c` or `bash`) to see what is installed, before you use a module or package you are not sure of. Do not guess names
 - When not a coding question, don't respond with invented code
 
 Always prefer patching instead of full write and diff instead of full read

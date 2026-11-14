@@ -295,6 +295,15 @@ describe it. A picture bigger than B<AI_IMAGE_MAX> is made smaller with
 ImageMagick, as a JPEG. Only with B<AI_VISION=1>, and only for a model that
 takes pictures.
 
+=item B<devel>
+
+List what a development language has installed, with versions, so the model
+does not guess a module or package name: C<perl> (every module under @INC),
+C<python> (packages), C<lua> (rocks), C<c> (libraries known to pkg-config) and
+C<bash> (the common tools on the PATH). An optional filter is a regular
+expression for the names. The list is kept for the rest of the process. Only
+the profiles are offered; the system prompt does not carry the list.
+
 =item B<convert>
 
 Convert a picture with ImageMagick (the C<magick> or C<convert> program on the
@@ -924,14 +933,6 @@ Default: 1
 A turn whose results are all errors, the same errors as the turn before, counts
 as stuck. After this many such turns in a row the input is stopped, with the
 error named. Default: 4, 0 for never.
-
-=item B<AI_MODULES>
-
-Perl modules, separated by spaces or commas, that a new session is told about:
-the Perl version and each module with its version, or that it is not installed.
-It is made when the session starts and kept in the session, so the system
-prompt does not change during it or after a resume. The Docker image sets a
-list. Default: none.
 
 =item B<AI_TOOL_TIMEOUT>
 
