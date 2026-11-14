@@ -201,9 +201,11 @@ sub info {
     return;
 }
 
+our $on_error; # the web interface (ui.pm) also gets the errors, as text
 sub error {
     my ($message) = @_;
     _write("ERROR: [$$]: ".scalar(localtime()).": $message\n", 1);
+    $on_error->($message) if $on_error;
     return;
 }
 

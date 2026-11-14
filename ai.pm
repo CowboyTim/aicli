@@ -528,6 +528,15 @@ sub handle_llm_response {
         print $_[0];
     };
     $printer_sub //= $say;
+    # a tool line or a result: for the web page its own block (kind: tool or result),
+    # and in the terminal the same text as always
+    my $say_tool = sub {
+        my ($text, $kind) = @_;
+        return &{$say}($text) unless $EVENT_SINK;
+        emit($kind => {text => web_text($text)});
+        print to_bytes(web_text($text))."\n";
+        return;
+    };
 
     # tools work with bytes, and never run from within a thinking block
     my $msg = to_bytes(strip_thinking($$resp // ''));
@@ -537,7 +546,7 @@ sub handle_llm_response {
         my ($c) = @_;
         return &{$printer_sub}("${colors::yellow_color1}\[TOOL $c->{tool}\(...))\]${colors::reset_color}\n")
             unless $brief;
-        &{$say}("${colors::yellow_color1}\x{e2}\x{97}\x{8f} $c->{k}${colors::reset_color} ".tool_summary($c)."\n");
+        $say_tool->("${colors::yellow_color1}\x{e2}\x{97}\x{8f} $c->{k}${colors::reset_color} ".tool_summary($c)."\n", 'tool');
     };
     my $answer = sub {
         my ($i, $c, $result, $had_error) = @_;
@@ -552,10 +561,10 @@ sub handle_llm_response {
             &{$printer_sub}("${colors::green_color}$tool_response${colors::reset_color}\n");
         } elsif($had_error){
             my $e = $had_error =~ s/^\[ERROR\] (?:problem running tool '\w+': )?//r;
-            &{$say}($colors::red_color.clip_lines($e, $::ORIG_ENV{AI_TOOL_LINES} // 8, "  ").$colors::reset_color);
+            $say_tool->($colors::red_color.clip_lines($e, $::ORIG_ENV{AI_TOOL_LINES} // 8, "  ").$colors::reset_color, 'result');
         } elsif(!$changed or !($::ORIG_ENV{AI_SHOW_DIFF} // 1)){
             # (a file change shows its diff instead)
-            &{$say}($colors::green_color.clip_lines($result, $::ORIG_ENV{AI_TOOL_LINES} // 8, "  ").$colors::reset_color);
+            $say_tool->($colors::green_color.clip_lines($result, $::ORIG_ENV{AI_TOOL_LINES} // 8, "  ").$colors::reset_color, 'result');
         }
         show_changes($printer_sub == $say ? $say : undef);
     };
@@ -1599,7 +1608,8 @@ our $THINKING_VIEW;
 sub thinking_view {
     return $THINKING_VIEW if defined $THINKING_VIEW;
     return 'off' unless ($::ORIG_ENV{AI_SHOW_THINKING} // 1);
-    my $v = lc($::ORIG_ENV{AI_THINKING_VIEW} // 'spin');
+    # the web page cannot show a spinner: it gets the thinking as it comes
+    my $v = lc($::ORIG_ENV{AI_THINKING_VIEW} // ($EVENT_SINK ? 'text' : 'spin'));
     return $v =~ m/\A(?:spin|text|off)\z/ ? $v : 'spin';
 }
 
@@ -1867,6 +1877,8 @@ sub chat_completion {
             }
             print "${colors::red_color}$err${colors::reset_color}\n";
             printf "%s[retry %d of %d in %.1fs, ctrl-C to stop]%s\n", $colors::cyan_color, $attempt, $retries, $wait, $colors::reset_color;
+            emit(failed => {text => web_text($err)}); # the web page: the same, as text
+            emit(status => {text => sprintf("retry %d of %d in %.1fs, ctrl-C to stop", $attempt, $retries, $wait)});
             utils::wait_abortable($wait)
                 or last;
         }
@@ -1885,7 +1897,9 @@ sub chat_completion {
             my @u = record_usage(\@msgs, $resp, $info);
             status_info(out => $u[1], info => $info);
             # the footer has it all, the line is for when there is none
-            print "${colors::cyan_color}".usage_line(@u, $info)."${colors::reset_color}\n"
+            my $usage = usage_line(@u, $info);
+            emit(usage => {text => $usage}); # the web page, as well as the terminal
+            print "${colors::cyan_color}$usage${colors::reset_color}\n"
                 if ($::ORIG_ENV{AI_SHOW_USAGE} // ($TUI->bar() ? 0 : 1));
         }
         if(defined $err){
@@ -3605,7 +3619,7 @@ sub chat_loop {
         }
         cleanup_chat();
         exit($sig eq 'TERM' ? 143 : 130);
-    }) x 2 unless -t STDIN or $::UI;
+    }) x 2 if !(-t STDIN) or $::UI; # the web interface has no readline either
     while($::LOOP){
         log::info("Waiting for user input...");
         $::ABORT = 0;

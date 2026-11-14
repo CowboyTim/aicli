@@ -1,36 +1,84 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-look="simple">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>aicli</title>
 <style>
-  :root { --bg: #fbfbf9; --fg: #1c1c1a; --muted: #6b6b66; --line: #d9d9d3; --user: #e8f0fb; --err: #b3261e; }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) { --bg: #161615; --fg: #ececea; --muted: #9a9a94; --line: #3a3a37; --user: #22303f; --err: #ff8a80; }
+  /* two looks, set on <html data-look>: "simple" (the terminal: plain text, "> "
+     in front of what you wrote) and "cards" (bubbles). Colours follow the system
+     theme, or data-theme on <html> when set. */
+  :root {
+    --bg: #ffffff; --fg: #1c1c1a; --muted: #6b6b66; --line: #d9d9d3;
+    --user-bg: #e8f0fb; --err: #b3261e; --accent: #1c1c1a;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
   }
-  :root[data-theme="dark"] { --bg: #161615; --fg: #ececea; --muted: #9a9a94; --line: #3a3a37; --user: #22303f; --err: #ff8a80; }
-  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, sans-serif; }
-  header { padding: 10px 16px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 13px; display: flex; gap: 12px; justify-content: space-between; flex-wrap: wrap; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #101010; --fg: #d8d8d4; --muted: #8a8a84; --line: #333330;
+      --user-bg: #1f2a36; --err: #ff8a80; --accent: #d8d8d4;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #101010; --fg: #d8d8d4; --muted: #8a8a84; --line: #333330;
+    --user-bg: #1f2a36; --err: #ff8a80; --accent: #d8d8d4;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { min-height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 var(--sans); -webkit-text-size-adjust: 100%; }
+
+  header { position: sticky; top: 0; z-index: 1; display: flex; gap: 12px; align-items: center; justify-content: space-between;
+           padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--bg); color: var(--muted); font-size: 13px; }
+  header select { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 2px 4px; }
+  #status { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+
   main { max-width: 860px; margin: 0 auto; padding: 16px; }
-  #log { white-space: pre-wrap; word-wrap: break-word; }
-  .msg { margin: 0 0 14px; }
-  .user { background: var(--user); padding: 8px 12px; border-radius: 8px; }
-  .answer { padding: 0 2px; }
+  #log { overflow-wrap: anywhere; }
+  .msg { margin: 0 0 14px; white-space: pre-wrap; }
   .error { color: var(--err); }
+  .think { color: var(--muted); font-style: italic; }
+  .tool { color: var(--accent); font-size: 13px; margin-top: 8px; }
+  .result { color: var(--muted); font-size: 13px; margin-left: 1.5em; }
+  .usage { color: var(--muted); font-size: 13px; }
+
+  /* simple: the terminal */
+  html[data-look="simple"] body { font-family: var(--mono); font-size: 14px; line-height: 1.5; }
+  html[data-look="simple"] header { font-family: var(--mono); }
+  html[data-look="simple"] .user { color: var(--accent); margin-top: 18px; }
+  html[data-look="simple"] .user::before { content: "> "; color: var(--muted); }
+  html[data-look="simple"] .answer { margin-bottom: 4px; }
+  html[data-look="simple"] form { font-family: var(--mono); }
+  html[data-look="simple"] textarea { font: inherit; font-size: 14px; border: none; border-top: 1px solid var(--line); border-radius: 0; padding: 10px 0 0; }
+  html[data-look="simple"] button { border: none; background: none; color: var(--muted); padding: 0 8px; }
+  html[data-look="simple"] button:hover:not(:disabled) { color: var(--fg); }
+
+  /* cards: bubbles */
+  html[data-look="cards"] .user { background: var(--user-bg); padding: 8px 12px; border-radius: 8px; }
+  html[data-look="cards"] .answer { padding: 0 2px; }
+
   form { position: sticky; bottom: 0; background: var(--bg); display: flex; gap: 8px; padding: 12px 0; }
   textarea { flex: 1; font: inherit; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); resize: vertical; min-height: 44px; }
-  button { font: inherit; padding: 0 16px; border: 1px solid var(--line); border-radius: 6px; background: var(--user); color: var(--fg); cursor: pointer; }
-  button:disabled { opacity: .5; cursor: default; }
-  #status { font-size: 13px; color: var(--muted); }
+  button { font: inherit; padding: 0 16px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); cursor: pointer; }
+  button:disabled { opacity: .4; cursor: default; }
 </style>
 </head>
 <body>
-<header><span id="status">connecting…</span><span id="model"></span></header>
+<header>
+  <span id="status">connecting…</span>
+  <span>
+    <span id="model"></span>
+    <select id="look" aria-label="look">
+      <option value="simple">simple</option>
+      <option value="cards">cards</option>
+    </select>
+  </span>
+</header>
 <main>
   <div id="log"></div>
   <form id="form">
-    <textarea id="text" rows="2" placeholder="Message"></textarea>
+    <textarea id="text" rows="2" placeholder="Message" aria-label="message"></textarea>
     <button id="send" type="submit">Send</button>
     <button id="abort" type="button" disabled>Stop</button>
   </form>
@@ -45,7 +93,21 @@
   var text = document.getElementById("text");
   var send = document.getElementById("send");
   var abort = document.getElementById("abort");
-  var current = null; // the element the answer streams into
+  var look = document.getElementById("look");
+  var current = null;  // the element the answer streams into
+  var thinking = null; // the element the thinking streams into
+
+  // the look is a per-browser choice, remembered when the browser allows it
+  function setLook(name) {
+    if (name !== "cards") { name = "simple"; }
+    document.documentElement.setAttribute("data-look", name);
+    look.value = name;
+    try { localStorage.setItem("aicli-look", name); } catch (e) { /* no storage: the default */ }
+  }
+  var saved = null;
+  try { saved = localStorage.getItem("aicli-look"); } catch (e) { /* no storage */ }
+  setLook(saved || "simple");
+  look.addEventListener("change", function () { setLook(look.value); });
 
   function add(cls, s) {
     var d = document.createElement("div");
@@ -71,6 +133,28 @@
     current.textContent += t;
     window.scrollTo(0, document.body.scrollHeight);
   });
+  es.addEventListener("think", function (e) {
+    var t = JSON.parse(e.data).text;
+    if (!thinking) { thinking = add("think", ""); }
+    thinking.textContent += t;
+    window.scrollTo(0, document.body.scrollHeight);
+  });
+  es.addEventListener("usage", function (e) {
+    add("usage", JSON.parse(e.data).text);
+  });
+  // a tool line or its result is a block of its own: the next text starts a new one
+  es.addEventListener("tool", function (e) {
+    add("tool", JSON.parse(e.data).text);
+    current = null;
+    thinking = null;
+  });
+  es.addEventListener("result", function (e) {
+    add("result", JSON.parse(e.data).text);
+    current = null;
+  });
+  es.addEventListener("status", function (e) {
+    add("usage", JSON.parse(e.data).text);
+  });
   es.addEventListener("failed", function (e) {
     if (e.data) { add("error", JSON.parse(e.data).text); }
   });
@@ -78,8 +162,16 @@
     var st = JSON.parse(e.data).state;
     send.disabled = st === "start";
     abort.disabled = st !== "start";
-    if (st === "start") { current = null; }
-    if (st === "end") { current = null; }
+    current = null;
+    thinking = null;
+  });
+
+  // Enter sends, Shift+Enter is a new line (not while an IME is composing)
+  text.addEventListener("keydown", function (ev) {
+    if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) {
+      ev.preventDefault();
+      form.requestSubmit();
+    }
   });
 
   form.addEventListener("submit", function (ev) {

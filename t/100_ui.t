@@ -239,6 +239,7 @@ is(status_of($pr), 202, "the message is posted to the chat child");
 my @seen;
 my $text = '';
 my $thought = '';
+my $usage = '';
 {
     local $SIG{ALRM} = sub { die "timeout\n" };
     alarm 20;
@@ -258,6 +259,7 @@ my $thought = '';
                 push @seen, $type;
                 $text .= $::JSON->decode($data)->{text} if $type eq 'text';
                 $thought .= $::JSON->decode($data)->{text} if $type eq 'think';
+                $usage .= $::JSON->decode($data)->{text} if $type eq 'usage';
                 $done = 1 if $type eq 'turn' and $::JSON->decode($data)->{state} eq 'end';
             }
         }
@@ -266,10 +268,13 @@ my $thought = '';
     alarm 0;
 }
 ok(scalar(grep {$_ eq 'turn'} @seen), "the stream shows the turn");
+ok(scalar(grep {$_ eq 'tool'} @seen), "a tool call is its own event");
+ok(scalar(grep {$_ eq 'result'} @seen), "and its result too");
 ok(scalar(grep {$_ eq 'text'} @seen), "the answer streams as text events");
 like($text, qr/\S/, "the answer has text");
 ok(length($thought), "the thinking comes as think events");
 unlike($text.$thought, qr/\x1b/, "no terminal colours in what the page gets");
+like($usage, qr/^\[tokens: /, "the token statistics come to the page too");
 is(scalar(grep {$_ eq 'failed'} @seen), 0, "no failure event");
 
 my $state = do {
@@ -284,6 +289,111 @@ close($ev);
 kill 'TERM', $kid;
 waitpid($kid, 0);
 ok(1, "the chat child is stopped");
+
+# --- the phone's address: a local IPv4 address, or none ------------------------
+
+{
+    my $lan = ui::_lan_address(4);
+    my $lan6 = ui::_lan_address(6);
+    my $v6_ok = !defined $lan6 || ($lan6 =~ m/^[0-9a-f:]+$/ && $lan6 !~ m/^fe80/i);
+    ok($v6_ok, "the IPv6 phone address is global (or none)");
+    SKIP: {
+        skip "no /proc/net/fib_trie here", 1 unless -r '/proc/net/fib_trie';
+        my $v4_ok = !defined $lan || ($lan =~ m/^\d+\.\d+\.\d+\.\d+$/ && $lan !~ m/^127\./);
+        ok($v4_ok, "the phone address is a local IPv4 address (or none)");
+    }
+}
+
+# --- errors of the chat reach the page too
+
+{
+    my @got;
+    my $old_sink = $ai::EVENT_SINK;
+    $ai::EVENT_SINK = sub { push @got, [@_] };
+    $log::on_error = sub { $ai::EVENT_SINK->(failed => {text => ai::web_text($_[0])}) };
+    local $SIG{__WARN__} = sub {};
+    log::error("\e[31mstopped after 50 tool turns\e[0m");
+    $log::on_error = undef;
+    $ai::EVENT_SINK = $old_sink;
+    is(scalar(@got), 1, "an error is sent to the page");
+    is($got[0][0], 'failed', "as a failed event");
+    is($got[0][1]{text}, "stopped after 50 tool turns", "without the colours");
+}
+
+# --- ctrl-C: stops the turn, a second one (idle) ends the program --------------
+
+{
+    my $probe2 = IO::Socket::INET->new(Listen => 1, LocalAddr => '127.0.0.1', LocalPort => 0, ReuseAddr => 1)
+        or die "probe: $!";
+    my $p2 = $probe2->sockport;
+    close($probe2);
+    my $k = fork() // die "fork: $!";
+    if(!$k){
+        open(STDOUT, '>', "$tmp/stdout2") or POSIX::_exit(1);
+        open(STDERR, '>', "$tmp/stderr2") or POSIX::_exit(1);
+        %ENV = (
+            PATH => $ENV{PATH}, HOME => $tmp, AI_DIR => "$tmp/aicli2", AI_CONFIG => "$tmp/noconfig",
+            AI_LOCAL_SERVER => $llm, AI_API_KEY => 'sk-ui', AI_MODEL => 'fake-1', AI_SESSION => 'ui2',
+            AI_UI_TOKEN => $TOKEN,
+        );
+        exec($^X, "-I$ROOT", "$ROOT/ai.pl", "--ui=$p2", "--ui-bind=127.0.0.1") or POSIX::_exit(1);
+    }
+    my $up2 = 0;
+    for (1 .. 100){
+        if(IO::Socket::INET->new(PeerAddr => '127.0.0.1', PeerPort => $p2, Timeout => 1)){ $up2 = 1; last }
+        select(undef, undef, undef, 0.1);
+    }
+    ok($up2, "a second ai.pl --ui is up");
+
+    my $ev2 = IO::Socket::INET->new(PeerAddr => '127.0.0.1', PeerPort => $p2, Timeout => 10) or die "connect: $!";
+    print {$ev2} "GET /events HTTP/1.1\r\nHost: x\r\nCookie: aicli_token=$TOKEN\r\n\r\n";
+    my $post2 = IO::Socket::INET->new(PeerAddr => '127.0.0.1', PeerPort => $p2, Timeout => 10) or die "connect: $!";
+    my $m2 = '{"text":"slow"}';
+    print {$post2} "POST /message HTTP/1.1\r\nHost: x\r\nCookie: aicli_token=$TOKEN\r\nContent-Length: ".length($m2)."\r\nConnection: close\r\n\r\n$m2";
+    my $pr2 = do { local $/; <$post2> };
+    is(status_of($pr2), 202, "the slow message is queued");
+
+    # read events until one of the given type and state arrives
+    my $buf2 = '';
+    my $wait_turn = sub {
+        my ($state) = @_;
+        my $found = 0;
+        local $SIG{ALRM} = sub { die "timeout\n" };
+        alarm 20;
+        eval {
+            while(!$found){
+                my $n = sysread($ev2, my $chunk, 65536);
+                die "closed\n" unless $n;
+                $buf2 .= $chunk;
+                $buf2 =~ s/\A.*?\r\n\r\n//s if $buf2 =~ m/\r\n\r\n/ and $buf2 =~ m/\AHTTP/; # the header, once
+                $buf2 =~ s/\A:[^\n]*\n\n//s; # keep-alive comments
+                while($buf2 =~ s/\A(event: (\w+)\ndata: (.*?)\n\n)//s){
+                    my ($type, $data) = ($2, $3);
+                    $found = 1 if $type eq 'turn' and $::JSON->decode($data)->{state} eq $state;
+                }
+            }
+            1;
+        } or diag("events: $@");
+        alarm 0;
+        return $found;
+    };
+    ok($wait_turn->('start'), "the slow turn starts");
+    select(undef, undef, undef, 0.5);
+    kill 'INT', $k;
+    ok($wait_turn->('end'), "ctrl-C ends the running turn");
+    my $alive = kill(0, $k);
+    ok($alive, "and the program stays (the turn was stopped, not the chat)");
+
+    kill 'INT', $k;
+    my $w = 0;
+    for (1 .. 100){
+        $w = waitpid($k, POSIX::WNOHANG());
+        last if $w;
+        select(undef, undef, undef, 0.1);
+    }
+    is($w, $k, "a second ctrl-C while idle ends the program");
+    is($? >> 8, 130, "with exit 130, as on the terminal");
+}
 
 FakeLLM::stop();
 done_testing();

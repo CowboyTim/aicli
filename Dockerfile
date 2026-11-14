@@ -66,6 +66,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         imagemagick \
         pdl libaudio-wav-perl lame perl-doc \
         strace pipewire-bin \
+        qrencode \
     && rm -rf /var/lib/apt/lists/*
 
 # the radios and the USB power meters: rtl-sdr (rtl_test, rtl_sdr) for RTL-SDR

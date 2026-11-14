@@ -13,6 +13,7 @@ package ui;
 use strict; use warnings;
 no warnings "once"; # the chat variables ($ai::AI_SESSION, $::ABORT) are set by ai.pm
 use IO::Socket::IP; # IPv4 and IPv6 (a core module)
+use POSIX ();
 use File::Basename ();
 use Errno ();
 
@@ -54,9 +55,69 @@ sub start {
     loop::watch($listen, \&_accept);
     loop::timer(15, \&_ping);
     $ai::EVENT_SINK = \&publish;
-    my $host = $bind =~ m/:/ ? "[$bind]" : $bind;
+    $log::on_error = sub { publish(failed => {text => ai::web_text($_[0])}) };
+    # "any" addresses (0.0.0.0, ::) are not a place to open: the loopback is
+    my $shown = ($bind eq '0.0.0.0' or $bind eq '::') ? 'localhost' : $bind;
+    my $host = $shown =~ m/:/ ? "[$shown]" : $shown;
     print STDERR "aicli web interface: http://$host:$port/?token=$token\n";
+    # the phone: an address of this machine it can reach, and a QR code for it
+    my $phone = $bind eq '0.0.0.0' ? (_lan_address(4) // '127.0.0.1')
+              : $bind eq '::'      ? (_lan_address(6) // '::1') # no global IPv6: the loopback
+              : $bind;
+    my $phone_host = $phone =~ m/:/ ? "[$phone]" : $phone;
+    my $phone_url = "http://$phone_host:$port/?token=$token";
+    print STDERR "aicli web interface on the phone: $phone_url\n" if $phone ne $shown;
+    _qr($phone_url);
     return $port;
+}
+
+# The address of this machine for a phone on the local network, of the family
+# given (4 or 6): IPv4 from /proc/net/fib_trie, a private one first; IPv6 from
+# /proc/net/if_inet6, a global one (not fe80::, not the loopback). undef when
+# there is none (Linux only).
+sub _lan_address {
+    my ($family) = @_;
+    $family //= 4;
+    if($family == 6){
+        open(my $fh, '<', '/proc/net/if_inet6') or return undef;
+        my @addr;
+        while(my $l = <$fh>){
+            my ($hex) = $l =~ m/^([0-9a-f]{32})\s/ or next;
+            my $a = join(':', $hex =~ m/(....)/g);
+            next if $a =~ m/^fe80/i or $a eq '0000:0000:0000:0000:0000:0000:0000:0001';
+            push @addr, $a;
+        }
+        close($fh);
+        return $addr[0];
+    }
+    open(my $fh, '<', '/proc/net/fib_trie') or return undef;
+    my ($prev, @addr, $private);
+    while(my $l = <$fh>){
+        if($l =~ m{/32 host LOCAL} and defined $prev and $prev =~ m/\|-- (\d+\.\d+\.\d+\.\d+)/){
+            my $a = $1;
+            next if $a =~ m/^127\./;
+            push @addr, $a;
+            $private //= $a if $a =~ m/^(?:10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/;
+        }
+        $prev = $l;
+    }
+    close($fh);
+    return $private // $addr[0];
+}
+
+# The QR code of an address, in the terminal, from qrencode (the dev image has
+# it). Run as a child through the loop, like any program.
+sub _qr {
+    my ($url) = @_;
+    my ($out, $exit) = utils::fork_run(sub {
+        exec('qrencode', '-t', 'ANSIUTF8', '-m', '2', $url) or POSIX::_exit(127);
+    }, timeout => 10);
+    if(defined $exit and $exit == 0 and length($out // '')){
+        print STDERR $out;
+    } else {
+        print STDERR "(no QR code: qrencode is not installed or failed)\n";
+    }
+    return;
 }
 
 sub stop {
@@ -65,6 +126,7 @@ sub stop {
     close($listen) if $listen;
     undef $listen;
     $ai::EVENT_SINK = undef;
+    $log::on_error = undef;
     return;
 }
 
