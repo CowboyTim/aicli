@@ -4985,7 +4985,11 @@ sub _devel_built {
 # at build time: the list of every profile that is not live, written to $dir
 sub devel_build {
     my ($dir) = @_;
-    -d $dir or mkdir($dir) or die "cannot make $dir: $!\n";
+    if(!-d $dir){
+        require File::Path;
+        File::Path::make_path($dir);
+        die "cannot make $dir\n" unless -d $dir;
+    }
     foreach my $lang (sort keys %DEVEL_PROFILE){
         next if $DEVEL_PROFILE{$lang}{live};
         my $raw = eval {_devel_run($DEVEL_PROFILE{$lang})};
