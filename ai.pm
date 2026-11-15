@@ -2193,6 +2193,8 @@ sub project_instructions {
 # so the prefix cache of the API keeps working.
 sub prompt_context {
     my $r = project_instructions();
+    # the web page draws markdown (ui.pm, ai/ui/index.html): the answers are written so
+    $r .= "\n\nWrite your answers in Markdown: headings, lists, code blocks and links are shown as such.\n" if defined $::UI;
     if(defined $WORKSPACE and $WORKSPACE ne '/'){
         $r .= "\n\nWorkspace: $WORKSPACE\nThe file tools only work inside this directory.\n";
         $r .= "bash, perl and grep can ".($::ORIG_ENV{AI_SANDBOX_READ} ? "only read the system and this directory" : "read everything")

@@ -58,6 +58,19 @@
   main { max-width: 960px; margin: 0; padding: 16px; } /* left: the text starts at the left edge */
   #log { overflow-wrap: anywhere; }
   .msg { margin: 0 0 14px; white-space: pre-wrap; }
+  /* an answer is markdown: the line breaks come from the markdown, not the source */
+  .answer { white-space: normal; overflow-wrap: anywhere; }
+  .answer p { margin: 0 0 0.7em; }
+  .answer h1, .answer h2, .answer h3, .answer h4, .answer h5, .answer h6 { margin: 0.9em 0 0.4em; font-size: 1em; line-height: 1.3; }
+  .answer h1 { font-size: 1.25em; } .answer h2 { font-size: 1.12em; }
+  .answer ul, .answer ol { margin: 0 0 0.7em 1.4em; padding: 0; }
+  .answer li { margin: 0.15em 0; }
+  .answer blockquote { margin: 0 0 0.7em; padding: 0 0 0 0.8em; border-left: 3px solid var(--line); color: var(--muted); }
+  .answer hr { border: none; border-top: 1px solid var(--line); margin: 0.9em 0; }
+  .answer pre { margin: 0 0 0.7em; padding: 8px 10px; background: var(--user-bg); border-radius: 6px; overflow-x: auto; white-space: pre; }
+  .answer code { font-family: var(--mono); font-size: 0.92em; }
+  .answer :not(pre) > code { background: var(--user-bg); padding: 0 0.3em; border-radius: 3px; }
+  .answer a { color: var(--accent); }
   .error { color: var(--err); }
   /* thinking: a spinner and the count while it thinks, a click shows the text */
   .thinking { margin-bottom: 10px; }
@@ -65,7 +78,7 @@
            font: inherit; font-size: 14px; cursor: pointer; text-align: left; }
   html[data-look] .think-head:hover { color: var(--fg); }
   .think-spin { display: inline-block; width: 1.4em; font-family: var(--mono); }
-  .think-body { color: var(--muted); font-style: italic; font-size: 14px; white-space: pre-wrap;
+  .think-body { color: var(--muted); font-style: italic; font-size: 14px; white-space: normal;
                 margin: 6px 0 0 1.4em; padding-left: 10px; border-left: 2px solid var(--line); }
   .tool { color: var(--accent); font-size: 13px; margin-top: 8px; }
   .result { color: var(--muted); font-size: 13px; margin-left: 1.5em; }
@@ -165,6 +178,101 @@
   try { savedTheme = localStorage.getItem("aicli-theme"); } catch (e) { /* no storage */ }
   setTheme(savedTheme || "system");
   theme.addEventListener("change", function () { setTheme(theme.value); });
+
+  // Markdown of an answer, as DOM nodes: never HTML from the text. Blocks:
+  // headings, paragraphs, lists, quotes, rules, fenced code. Inline: code, bold,
+  // italic, links (http and https only). Anything else is plain text.
+  function el(tag) { return document.createElement(tag); }
+  function txt(s) { return document.createTextNode(s); }
+  var INLINE = /`([^`\n]+)`|\*\*([^*\n]+)\*\*|(?<![\w])__([^_\n]+)__(?!\w)|\*([^*\s][^*\n]*)\*|(?<![\w])_([^_\s][^_\n]*)_(?!\w)|\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g;
+  function inline(s, parent) {
+    // its own copy of the pattern: inline() calls itself for bold and italic
+    var re = new RegExp(INLINE.source, "g"), last = 0, m;
+    while ((m = re.exec(s)) !== null) {
+      if (m.index > last) { parent.appendChild(txt(s.slice(last, m.index))); }
+      var node;
+      if (m[1] !== undefined) { node = el("code"); node.textContent = m[1]; }
+      else if (m[2] !== undefined || m[3] !== undefined) { node = el("strong"); inline(m[2] !== undefined ? m[2] : m[3], node); }
+      else if (m[4] !== undefined || m[5] !== undefined) { node = el("em"); inline(m[4] !== undefined ? m[4] : m[5], node); }
+      else { node = el("a"); node.href = m[7]; node.target = "_blank"; node.rel = "noopener noreferrer"; node.textContent = m[6]; }
+      parent.appendChild(node);
+      last = re.lastIndex;
+    }
+    if (last < s.length) { parent.appendChild(txt(s.slice(last))); }
+  }
+  var RE_FENCE = /^\s*```/, RE_HEAD = /^(#{1,6})\s+(.*)$/, RE_HR = /^\s*(---|\*\*\*|___)\s*$/,
+      RE_QUOTE = /^>\s?/, RE_ITEM = /^(\s*)([-*+]|\d+\.)\s+(.*)$/, RE_BLANK = /^\s*$/;
+  function startsBlock(l) {
+    return RE_FENCE.test(l) || RE_HEAD.test(l) || RE_HR.test(l) || RE_QUOTE.test(l) || RE_ITEM.test(l);
+  }
+  function blocks(src, parent) {
+    var lines = src.split("\n"), i = 0;
+    while (i < lines.length) {
+      var line = lines[i], m;
+      if (RE_FENCE.test(line)) {
+        var code = [];
+        i++;
+        while (i < lines.length && !RE_FENCE.test(lines[i])) { code.push(lines[i]); i++; }
+        i++; // the closing fence, or the end of what has come so far
+        var pre = el("pre"), c = el("code");
+        c.textContent = code.join("\n");
+        pre.appendChild(c);
+        parent.appendChild(pre);
+        continue;
+      }
+      if ((m = RE_HEAD.exec(line))) {
+        var h = el("h" + m[1].length);
+        inline(m[2], h);
+        parent.appendChild(h);
+        i++;
+        continue;
+      }
+      if (RE_HR.test(line)) { parent.appendChild(el("hr")); i++; continue; }
+      if (RE_QUOTE.test(line)) {
+        var q = [];
+        while (i < lines.length && RE_QUOTE.test(lines[i])) { q.push(lines[i].replace(RE_QUOTE, "")); i++; }
+        var bq = el("blockquote");
+        blocks(q.join("\n"), bq);
+        parent.appendChild(bq);
+        continue;
+      }
+      if ((m = RE_ITEM.exec(line))) {
+        var ordered = /\d/.test(m[2]);
+        var list = el(ordered ? "ol" : "ul");
+        while (i < lines.length) {
+          var n = RE_ITEM.exec(lines[i]);
+          if (!n || /\d/.test(n[2]) !== ordered) { break; }
+          var li = el("li");
+          inline(n[3], li);
+          list.appendChild(li);
+          i++;
+          // an indented line that is not an item goes on in the same item
+          while (i < lines.length && /^\s{2,}\S/.test(lines[i]) && !RE_ITEM.test(lines[i])) {
+            li.appendChild(txt(" "));
+            inline(lines[i].trim(), li);
+            i++;
+          }
+        }
+        parent.appendChild(list);
+        continue;
+      }
+      if (RE_BLANK.test(line)) { i++; continue; }
+      // a paragraph: up to a blank line or the start of another block
+      var para = [];
+      while (i < lines.length && !RE_BLANK.test(lines[i]) && !startsBlock(lines[i])) { para.push(lines[i]); i++; }
+      var p = el("p");
+      para.forEach(function (l, k) {
+        if (k) { p.appendChild(el("br")); }
+        inline(l.trim(), p);
+      });
+      parent.appendChild(p);
+    }
+  }
+  // an answer is drawn again as its text comes: the markdown is whole at each step
+  function drawAnswer(node) {
+    node.textContent = "";
+    blocks(node.raw, node);
+  }
 
   function add(cls, s) {
     var d = document.createElement("div");
@@ -290,7 +398,9 @@
   }
   function thinkAdd(t) {
     if (!think) { thinkStart(); }
-    think.body.textContent += t;
+    think.raw = (think.raw || "") + t;
+    think.body.textContent = "";
+    blocks(think.raw, think.body); // the thinking is markdown too
     think.chars += t.length;
     think.count.textContent = " \u00b7 " + think.chars + " chars";
     window.scrollTo(0, document.body.scrollHeight);
@@ -307,7 +417,8 @@
     var t = JSON.parse(e.data).text;
     thinkEnd();
     if (!current) { current = add("answer", ""); }
-    current.textContent += t;
+    current.raw = (current.raw || "") + t;
+    drawAnswer(current);
     window.scrollTo(0, document.body.scrollHeight);
   });
   es.addEventListener("think", function (e) {

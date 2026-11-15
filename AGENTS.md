@@ -146,7 +146,10 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   `_read_socket()`, `_flush()` and `_close()` branch on `$cn->{ssl}`, and
   `_close()` sends close_notify before the socket closes (without it a client
   drops the answer). The cookie gets `Secure` over https. Page:
-  `ai/ui/index.html`: the look (`simple`/`cards`), the theme (system, light,
+  `ai/ui/index.html`: answers and thinking are drawn as markdown (its own
+  renderer, DOM nodes only, never innerHTML); the system prompt says so in web
+  mode only (`prompt_context()`, when `$::UI` is set; a session keeps the prompt it
+  was made with). The look (`simple`/`cards`), the theme (system, light,
   dark; `data-theme` on `<html>`), the thinking block (a spinner and the
   character count while it comes, a click shows the text; `think` events), the
   mic (16 kHz WAV via `/voice`).

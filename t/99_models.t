@@ -199,4 +199,13 @@ sub mock_models {
     }
 }
 
+# the markdown line of the prompt: for the web interface only
+{
+    TestAI::setup();
+    local $::UI = undef;
+    unlike(ai::prompt_context(), qr/Markdown/, "prompt: no markdown line in the terminal");
+    local $::UI = 8080;
+    like(ai::prompt_context(), qr/Write your answers in Markdown/, "prompt: the markdown line in the web interface");
+}
+
 done_testing();
