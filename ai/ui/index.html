@@ -79,6 +79,7 @@
   <div id="log"></div>
   <form id="form">
     <textarea id="text" rows="2" placeholder="Message" aria-label="message"></textarea>
+    <button id="mic" type="button" aria-pressed="false" title="speak (click to start, click to stop)">mic</button>
     <button id="send" type="submit">Send</button>
     <button id="abort" type="button" disabled>Stop</button>
   </form>
@@ -94,6 +95,8 @@
   var send = document.getElementById("send");
   var abort = document.getElementById("abort");
   var look = document.getElementById("look");
+  var mic = document.getElementById("mic");
+  var rec = null; // the recording in progress: {stream, ctx, src, proc, chunks}
   var current = null;  // the element the answer streams into
   var thinking = null; // the element the thinking streams into
 
@@ -138,6 +141,10 @@
     if (!thinking) { thinking = add("think", ""); }
     thinking.textContent += t;
     window.scrollTo(0, document.body.scrollHeight);
+  });
+  // what the recognizer heard: the message as the chat gets it
+  es.addEventListener("heard", function (e) {
+    add("user", JSON.parse(e.data).text);
   });
   es.addEventListener("usage", function (e) {
     add("usage", JSON.parse(e.data).text);
@@ -187,6 +194,70 @@
     }).then(function (r) {
       if (!r.ok) { return r.json().then(function (j) { add("error", j.error || r.statusText); }); }
     }).catch(function (err) { add("error", String(err)); });
+  });
+
+  // speech: the browser records 16 kHz mono and sends it as WAV; the server
+  // recognizes it and the text goes to the chat as soon as it is ready
+  function startRec() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      add("error", "no microphone here: the page must be on localhost or https");
+      return;
+    }
+    navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true } }).then(function (stream) {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      var ctx = new AC({ sampleRate: 16000 });
+      var src = ctx.createMediaStreamSource(stream);
+      var proc = ctx.createScriptProcessor(4096, 1, 1);
+      var chunks = [];
+      proc.onaudioprocess = function (ev) { chunks.push(new Float32Array(ev.inputBuffer.getChannelData(0))); };
+      src.connect(proc);
+      proc.connect(ctx.destination);
+      rec = { stream: stream, ctx: ctx, src: src, proc: proc, chunks: chunks };
+      mic.textContent = "stop";
+      mic.setAttribute("aria-pressed", "true");
+    }).catch(function (err) { add("error", "microphone: " + err.message); });
+  }
+
+  function stopRec() {
+    var r = rec;
+    rec = null;
+    mic.textContent = "mic";
+    mic.setAttribute("aria-pressed", "false");
+    r.proc.disconnect();
+    r.src.disconnect();
+    r.stream.getTracks().forEach(function (t) { t.stop(); });
+    var rate = r.ctx.sampleRate;
+    r.ctx.close();
+    var wav = encodeWav(r.chunks, rate);
+    fetch("/voice", { method: "POST", headers: { "Content-Type": "audio/wav" }, body: wav }).then(function (resp) {
+      if (!resp.ok) { return resp.json().then(function (j) { add("error", j.error || resp.statusText); }); }
+    }).catch(function (err) { add("error", String(err)); });
+  }
+
+  // 16-bit PCM WAV, mono
+  function encodeWav(chunks, rate) {
+    var n = 0;
+    chunks.forEach(function (c) { n += c.length; });
+    var buf = new ArrayBuffer(44 + n * 2);
+    var v = new DataView(buf);
+    function str(off, s) { for (var i = 0; i < s.length; i++) { v.setUint8(off + i, s.charCodeAt(i)); } }
+    str(0, "RIFF"); v.setUint32(4, 36 + n * 2, true); str(8, "WAVE");
+    str(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+    v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+    str(36, "data"); v.setUint32(40, n * 2, true);
+    var off = 44;
+    chunks.forEach(function (c) {
+      for (var i = 0; i < c.length; i++) {
+        var x = Math.max(-1, Math.min(1, c[i]));
+        v.setInt16(off, x < 0 ? x * 0x8000 : x * 0x7fff, true);
+        off += 2;
+      }
+    });
+    return new Blob([buf], { type: "audio/wav" });
+  }
+
+  mic.addEventListener("click", function () {
+    if (rec) { stopRec(); } else { startRec(); }
   });
 
   abort.addEventListener("click", function () {

@@ -209,7 +209,9 @@ page is at C<http://127.0.0.1:8080/?token=...>; the address with the token is
 printed on stderr when it starts. Every request needs the token (a cookie set by
 that address, or an C<Authorization: Bearer> header). C<AI_UI_TOKEN> in the
 environment sets the token. Routes: C</events> (the stream), C<POST /message>,
-C<POST /abort>, C</state>. Slash commands and files come later.
+C<POST /abort>, C</state>, C<POST /voice> (a WAV recording, recognized
+by C<AI_ASR_URL> and sent to the chat as soon as it is ready). Slash commands
+and files come later.
 
 =item B<--ui-bind> I<address>
 

@@ -22,13 +22,15 @@ our %conn;      # fileno => connection
 our @clients;   # connections that read the event stream
 our @queue;     # messages waiting for chat_loop
 our $MAX_BODY    = 1_000_000; # bytes of a request body
+our $MAX_VOICE   = 20_000_000; # bytes of a recording (16 kHz mono WAV: about 2 minutes)
 our $MAX_QUEUE   = 20;        # messages waiting at once
 our $MAX_PENDING = 1_000_000; # bytes not yet sent to a client before it is dropped
 
 my %STATUS = (
     200 => 'OK', 202 => 'Accepted', 303 => 'See Other', 400 => 'Bad Request',
     401 => 'Unauthorized', 403 => 'Forbidden', 404 => 'Not Found',
-    405 => 'Method Not Allowed', 413 => 'Payload Too Large', 429 => 'Too Many Requests',
+    405 => 'Method Not Allowed', 413 => 'Payload Too Large', 415 => 'Unsupported Media Type',
+    429 => 'Too Many Requests', 500 => 'Internal Server Error',
     431 => 'Request Header Fields Too Large', 501 => 'Not Implemented',
 );
 
@@ -132,12 +134,33 @@ sub stop {
 
 # The next message for chat_loop: waits in the loop until one is queued or the
 # chat ends. A "/" line is refused for now, commands come with the next step.
+# The next input for chat_loop: a text message as it is, a recording first
+# written down and recognized (here, in the main flow: the recognizer is waited
+# for, a request must not wait). The text goes to the chat as soon as it is ready.
 sub input {
     return sub {
-        loop::run(sub { @queue or !$::LOOP });
-        return unless $::LOOP;
-        return shift @queue;
+        while(1){
+            loop::run(sub { @queue or !$::LOOP });
+            return unless $::LOOP;
+            my $item = shift @queue;
+            return $item unless ref $item;
+            my $text = _recognize($item->{audio});
+            next unless defined $text and length $text;
+            ai::emit(heard => {text => $text});
+            return $text;
+        }
     };
+}
+
+sub _recognize {
+    my ($wav) = @_;
+    my $file = "$ai::AI_SESSION_DIR/voice-web.wav";
+    open(my $fh, '>:raw', $file) or do { log::error("cannot write $file: $!"); return undef };
+    print {$fh} $wav;
+    close($fh);
+    my $text = ai::transcribe($file);
+    unlink($file);
+    return $text;
 }
 
 sub queued { return scalar @queue }
@@ -239,6 +262,9 @@ sub _close {
 
 # --- HTTP -------------------------------------------------------------------
 
+# a recording comes to POST /voice, with a bigger limit than the JSON bodies
+my $p_is_voice = sub { my ($m, $path) = @_; return $m eq 'POST' && $path =~ m{^/voice(?:\?|$)} };
+
 sub _feed {
     my ($cn, $bytes) = @_;
     $cn->{in} .= $bytes;
@@ -258,7 +284,8 @@ sub _feed {
     return _respond($cn, 501, 'text/plain', "no chunked request bodies\n") if exists $h{'transfer-encoding'};
     my $cl = $h{'content-length'} // 0;
     return _respond($cn, 400, 'text/plain', "bad content-length\n") unless $cl =~ m/^\d+$/;
-    return _respond($cn, 413, 'text/plain', "body too big\n") if $cl > $MAX_BODY;
+    my $cap = $p_is_voice->($m, $path) ? $MAX_VOICE : $MAX_BODY;
+    return _respond($cn, 413, 'text/plain', "body too big\n") if $cl > $cap;
     my $start = $i + 4;
     return if length($cn->{in}) < $start + $cl; # the rest of the body is still coming
     my $body = substr($cn->{in}, $start, $cl);
@@ -356,6 +383,16 @@ sub _dispatch {
         push @queue, $text;
         return _json($cn, 202, {queued => scalar @queue});
     }
+    if($p eq '/voice' and $m eq 'POST'){
+        my $type = $h->{'content-type'} // '';
+        return _json($cn, 415, {error => "a recording (audio/wav) is wanted"})
+            unless $type =~ m{^audio/(?:wav|x-wav|wave)\b}i;
+        return _json($cn, 400, {error => "an empty recording"}) unless length $body;
+        return _json($cn, 429, {error => "too many messages waiting"})
+            if @queue >= $MAX_QUEUE;
+        push @queue, {audio => $body};
+        return _json($cn, 202, {queued => scalar @queue});
+    }
     if($p eq '/abort' and $m eq 'POST'){
         $::ABORT = 1 if $ai::BUSY;
         return _json($cn, 200, {ok => \1});
@@ -363,7 +400,7 @@ sub _dispatch {
     if($p eq '/state' and $m eq 'GET'){
         return _json($cn, 200, _state());
     }
-    return _respond($cn, 405, 'text/plain', "method not allowed\n") if $p =~ m{^/(events|message|abort|state)$};
+    return _respond($cn, 405, 'text/plain', "method not allowed\n") if $p =~ m{^/(events|message|voice|abort|state)$};
     return _respond($cn, 404, 'text/plain', "not found\n");
 }
 

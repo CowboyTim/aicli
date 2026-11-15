@@ -126,7 +126,8 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
 - **ui.pm** – `ui`: the web interface (`ai.pl --ui`), headless: an HTTP/1.1 server
   on the event loop (`loop::watch`), routes, the SSE stream (`publish()`, the
   `$ai::EVENT_SINK` hook of the chat), the token (`_authed()`), the input queue
-  that `chat_loop` reads (`input()`). Page: `ai/ui/index.html`.
+  that `chat_loop` reads (`input()`; a recording is recognized there, in the main
+  flow, never in a request). Page: `ai/ui/index.html`.
 - **tui.pm** – `tui`: the screen. Two modes: `bar` (default when the terminal
   is big enough, at least 7 rows and 20 columns): a footer of two lines at
   the bottom, activity (`set`/`unset` items with spinner and elapsed time)

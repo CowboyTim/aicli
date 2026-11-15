@@ -143,6 +143,54 @@ is(status_of($r), 413, "a body too big is refused");
     $::LOOP = 1;
 }
 
+# voice: a recording is queued, recognized in the input, and goes to the chat
+
+{
+    my $wav = "RIFF".("\x00" x 40);
+    $r = request('POST', '/voice', body => $wav, cookie => $ok_cookie, raw => "Content-Type: audio/wav\r\n");
+    is(status_of($r), 202, "a recording is queued");
+    my ($item) = @ui::queue;
+    is(ref($item), 'HASH', "as a recording, not as text");
+    is(length($item->{audio}), length($wav), "with its bytes");
+    @ui::queue = ();
+
+    $r = request('POST', '/voice', body => 'x', cookie => $ok_cookie, raw => "Content-Type: text/plain\r\n");
+    is(status_of($r), 415, "a body that is not audio is refused");
+
+    $r = request('POST', '/voice', body => $wav);
+    is(status_of($r), 401, "a recording needs the token");
+
+    $r = request('POST', '/voice', body => '', cookie => $ok_cookie, raw => "Content-Type: audio/wav\r\n");
+    is(status_of($r), 400, "an empty recording is refused");
+
+    # a recording bigger than a JSON body, up to the voice limit
+    my $big = "RIFF".("\x00" x 2_000_000);
+    $r = request('POST', '/voice', body => $big, cookie => $ok_cookie, raw => "Content-Type: audio/wav\r\n");
+    is(status_of($r), 202, "a recording of 2 MB is accepted");
+    @ui::queue = ();
+}
+
+{
+    no warnings 'redefine';
+    local $ai::AI_SESSION_DIR = File::Temp::tempdir(CLEANUP => 1);
+    local *ai::transcribe = sub { "spoken words" };
+    my @got;
+    my $old_sink = $ai::EVENT_SINK;
+    $ai::EVENT_SINK = sub { push @got, [@_] };
+    local $::LOOP = 1;
+    @ui::queue = ({audio => "RIFF"}, "typed next");
+    my $input = ui::input();
+    is($input->(), "spoken words", "a recording comes out as its text");
+    is($got[-1][0], 'heard', "and the page is told what was heard");
+    is($got[-1][1]{text}, "spoken words", "the words");
+    is($input->(), "typed next", "text after it comes as it is");
+    @ui::queue = ({audio => "RIFF"}, "after silence");
+    $ai::EVENT_SINK = sub { push @got, [@_] };
+    local *ai::transcribe = sub { "" };
+    is($input->(), "after silence", "a recording with no words is skipped");
+    $ai::EVENT_SINK = $old_sink;
+}
+
 # the event stream: the hello, then what is published
 {
     my ($cn, $b) = conn();
