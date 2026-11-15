@@ -46,7 +46,8 @@ use TestAI;
     ok($req->{chat_template_kwargs}{enable_thinking}, "request: and thinking on");
     TestAI::setup(AI_LOCAL_SERVER => 'http://127.0.0.1:9/v1/', AI_MODEL => 'm', AI_SUMMARY_CHUNKS => 1);
     $req = $::JSON->decode(ai::build_request([{role => 'user', content => 'hi'}]));
-    ok(!exists $req->{chat_template_kwargs} && !exists $req->{reasoning_budget}, "request: nothing sent when not set");
+    ok(!exists $req->{chat_template_kwargs}, "request: no thinking setting sent when not set");
+    is($req->{reasoning_budget}, 2048, "request: a local server is capped at 2048 tokens when not set");
 
     TestAI::setup(AI_API_KEY => 'nvapi-x', AI_LOCAL_SERVER => undef, AI_MODEL => 'nemo', AI_SUMMARY_CHUNKS => 1);
     $req = $::JSON->decode(ai::build_request([{role => 'user', content => 'hi'}]));

@@ -243,7 +243,7 @@ Shift+Enter starts a new line, Stop ends the turn. Two looks (`simple`, like
 the terminal, and `cards`) and a theme (system, light, dark, amber, matrix, solarized, paper, neon) are chosen in the
 header and remembered in the browser. The mic records in the browser and sends
 the recording to `AI_ASR_URL`; without a recognizer, or when it is not
-reachable, the mic is off and the page says why. The model is chosen in the header: one
+reachable, the mic is off and the page says why. The model, the look and the theme are in the ☰ menu (phones and desktops alike); the mic, stop and send are small icons under the text. The model is chosen in the menu: one
 dropdown with the models of every provider (`provider/id`). Ctrl-C on the terminal ends
 the chat as it does without the interface.
 
@@ -560,7 +560,7 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 | `AI_VOICE_PAUSE` | silence after speech that ends a push-to-talk recording, in seconds | 1.2 |
 | `AI_VOICE_MAX` | longest push-to-talk recording, in seconds | 60 |
 | `AI_AUTO_COMPACT` | compact right after an answer when the conversation is over the threshold; 0: only before a request | 1 |
-| `AI_THINKING` | the reasoning of the model: `on`, `off` or a token budget; `/thinking` sets it per session | server decides |
+| `AI_THINKING` | the reasoning of the model: `on`, `off` or a token budget; `/thinking` sets it per session | a local server: a budget of 2048 tokens; others: their default |
 | `AI_TOKEN_BUDGET` | max tokens a session may use | no limit |
 | `AI_USAGE` | 0: don't ask the API for token usage | 1 |
 | `AI_SHOW_USAGE` | 1 shows the usage line after each answer, 0 hides it | shown, except while the footer is on |

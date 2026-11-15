@@ -151,6 +151,15 @@ sub _ask_models {
     return;
 }
 
+# the models event of the list the chat has now (the text of the event)
+sub _models_text {
+    my $data = {
+        current => ai::current_label(),
+        list    => [map {ai::model_label($_)} @ai::ALL_MODELS],
+    };
+    return "event: models\ndata: ".$::JSON->encode($data)."\n\n";
+}
+
 # the models of every provider, to the page; refresh asks the providers again
 sub _send_models {
     my ($refresh) = @_;
@@ -161,10 +170,7 @@ sub _send_models {
         ($pairs, $errors) = (\@ai::ALL_MODELS, []);
     }
     log::error("no model list from $_") for @$errors;
-    publish(models => {
-        current => ai::current_label(),
-        list    => [map {ai::model_label($_)} @$pairs],
-    });
+    _queue($_, _models_text()) for @{[@clients]};
     return;
 }
 
@@ -539,7 +545,8 @@ sub _dispatch {
             return _respond($cn, 303, 'text/plain', "see /\n", "Location: /",
                 "Set-Cookie: aicli_token=$token; Path=/; HttpOnly; SameSite=Strict".($tls_ctx ? '; Secure' : ''));
         }
-        return _respond($cn, 401, 'text/plain', "open the address aicli printed at start (it has the token)\n")
+        return _respond($cn, 401, 'text/plain', "no valid token: open the address that aicli printed at this start (with ?token=). "
+            ."A QR code or address of an earlier start has the token of that start, which is not kept (AI_UI_TOKEN sets one)\n")
             unless _authed($h);
         open(my $fh, '<:raw', $html_file) or return _respond($cn, 500, 'text/plain', "no page\n");
         local $/;
@@ -557,7 +564,6 @@ sub _dispatch {
     }
 
     if($p eq '/events' and $m eq 'GET'){
-        _ask_models(); # the page wants the list of models, once
         ai::web_note("page connected to the stream");
         $cn->{streaming} = 1;
         $cn->{handled} = 1;
@@ -568,6 +574,12 @@ sub _dispatch {
             ."Connection: keep-alive\r\n\r\n";
         push @clients, $cn;
         _queue($cn, "event: state\ndata: ".$::JSON->encode(_state())."\n\n");
+        # the page gets the models now: the list of the last time, or a new one
+        if (@ai::ALL_MODELS) {
+            _queue($cn, _models_text());
+        } else {
+            _ask_models();
+        }
         return;
     }
     if($p eq '/models' and $m eq 'POST'){

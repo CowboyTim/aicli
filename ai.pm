@@ -4233,6 +4233,9 @@ sub req {
     if(defined(my $th = ai::thinking_setting())){
         $req->{chat_template_kwargs} = {enable_thinking => $th eq 'off' ? $Types::Serialiser::false : $Types::Serialiser::true};
         $req->{reasoning_budget} = $th + 0 if $th =~ m/^\d+$/;
+    } elsif ($AI_PROVIDER eq 'local' or $PROVIDERS{$AI_PROVIDER}{local}) {
+        # no setting: a local server thinks as long as it likes, so a cap of 2048 tokens
+        $req->{reasoning_budget} = 2048;
     }
 
     return $req;
