@@ -72,23 +72,37 @@ sub mock_models {
     like($err, qr/not a regular expression/, "models: a broken filter is an error");
 }
 
-# the model tool: switch to an id the provider lists, refuse any other
+# the model tool: the switch is for the next turn, an id no list has is refused
 {
     TestAI::setup(AI_API_KEY => 'sk-test', AI_PROVIDER => 'openai', AI_LOCAL_SERVER => undef, AI_TOOL_CALLS => 'native');
     $ai::SESSION_MODEL = 'llama-b';
     mock_models('{"data":[{"id":"gpt-a"},{"id":"llama-b"}]}');
     my $out = tools::model_7e21(['gpt-a']);
-    like($out, qr{the model is now openai/gpt-a}, "model: switched");
-    is($ai::SESSION_MODEL, 'gpt-a', "model: the session's model is the new one");
+    like($out, qr{the model changes to openai/gpt-a when the next message comes}, "model: asked for, for the next message");
+    is($ai::SESSION_MODEL, 'llama-b', "model: this turn finishes with the current model");
+    ai::apply_pending_model();
+    is($ai::SESSION_MODEL, 'gpt-a', "model: the next turn uses the new one");
     is(ai::read_session_model(), 'gpt-a', "model: and it is kept in the session");
     is(ai::read_session_provider(), 'openai', "model: the provider is kept in the session too");
     mock_models('{"data":[{"id":"gpt-a"}]}');
     my $err = eval {tools::model_7e21(['not-there']); 1} ? '' : $@;
     like($err, qr/no model 'not-there' at any provider/, "model: an id no provider lists is refused");
-    is($ai::SESSION_MODEL, 'gpt-a', "model: and nothing changed");
+    is($ai::PENDING_MODEL, undef, "model: nothing pending after a refusal");
     mock_models('{"data":[{"id":"gpt-a"}]}');
     $err = eval {tools::model_7e21(['']); 1} ? '' : $@;
     like($err, qr/no model given/, "model: an empty id is refused");
+}
+
+# a part of the id finds the model: qwen3.6 finds Qwen3.6-35B-A3B-ROCMFP4
+{
+    TestAI::setup(AI_API_KEY => 'sk-test', AI_PROVIDER => 'openai', AI_LOCAL_SERVER => undef);
+    my $pairs = [['openai', 'Qwen3.5-4B-ROCMFP4'], ['openai', 'Qwen3.6-35B-A3B-ROCMFP4'], ['openai', 'gpt-a']];
+    is_deeply(ai::resolve_model('qwen3.6', $pairs), ['openai', 'Qwen3.6-35B-A3B-ROCMFP4'], "part: qwen3.6 is the 3.6 model");
+    is_deeply(ai::resolve_model('QWEN3.6-35b', $pairs), ['openai', 'Qwen3.6-35B-A3B-ROCMFP4'], "part: any case");
+    is_deeply(ai::resolve_model('qwen3.6 35b a3b', $pairs), ['openai', 'Qwen3.6-35B-A3B-ROCMFP4'], "part: spaces count as nothing");
+    my $err = eval {ai::resolve_model('qwen', $pairs); 1} ? '' : $@;
+    like($err, qr/part of more than one model, give the whole label: openai\/Qwen3\.5-4B-ROCMFP4, openai\/Qwen3\.6-35B/, "part: ambiguous lists the candidates");
+    ok(!defined ai::resolve_model('nothing-like-it', $pairs), "part: no part, no model");
 }
 
 # sub-agents cannot wait for the list, nor switch the model
@@ -162,6 +176,27 @@ sub mock_models {
     mock_models('{"data":[{"id":"gpt-first"}]}');
     ai::setup_commands();
     is($ai::SESSION_MODEL, 'chosen', "startup: a model that is set is kept");
+}
+
+# the theme tool: a name of the list, only in the web interface, never for a sub-agent
+{
+    TestAI::setup(AI_TOOL_CALLS => 'native');
+    my %names = map {($_->{function}{name} => 1)} @{tools::native_list()};
+    ok(!$names{theme}, "theme: not offered in the terminal");
+    my @got;
+    local $ai::EVENT_SINK = sub { push @got, [@_] };
+    %names = map {($_->{function}{name} => 1)} @{tools::native_list()};
+    ok($names{theme}, "theme: offered in the web interface");
+    is(tools::theme_5c2e(['Matrix']), "the web interface is now matrix\n", "theme: a name of the list, in any case");
+    is_deeply($got[0], ['theme', {text => 'matrix'}], "theme: the page gets the name, as an event");
+    my $err = eval {tools::theme_5c2e(['<style>body{}</style>']); 1} ? '' : $@;
+    like($err, qr/no theme/, "theme: anything else is refused, no code goes to the page");
+    is(scalar(@got), 1, "theme: nothing sent for a refusal");
+    {
+        local $ai::IN_AGENT = 1;
+        my %sub = map {($_->{function}{name} => 1)} @{tools::native_list(exclude => ['agent', 'image'])};
+        ok(!$sub{theme}, "theme: a sub-agent does not have it");
+    }
 }
 
 done_testing();

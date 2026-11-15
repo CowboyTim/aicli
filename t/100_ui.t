@@ -303,6 +303,39 @@ SKIP: {
     ui::stop();
 }
 
+# --- the page and the server agree on the themes ---------------------------------
+
+{
+    open(my $fh, '<', "$FindBin::Bin/../ai/ui/index.html") or die "no page: $!";
+    my $html = do { local $/; <$fh> };
+    my ($js) = $html =~ m/var THEMES = \[([^\]]*)\]/;
+    my @page = map {s/["\s]//gr} split /,/, ($js // '');
+    is_deeply(\@page, \@ai::THEMES, "themes: the page has the names of the server, in the same order");
+    my @options = $html =~ m/<option value="(\w+)">\w+<\/option>/g;
+    my %in_list = map {($_ => 1)} @ai::THEMES;
+    ok(scalar(grep {$in_list{$_} || $_ eq 'system'} @options) >= @ai::THEMES, "themes: the dropdown offers them");
+}
+
+# --- what happens goes to stderr in web mode -----------------------------------
+
+{
+    my $err = '';
+    {
+        local *STDERR;
+        open(STDERR, '>', \$err) or die;
+        local $ai::EVENT_SINK = sub {};
+        ai::web_note("request to openai/gpt-a at https://api.openai.com/v1/chat/completions");
+    }
+    like($err, qr{^\d\d:\d\d:\d\d request to openai/gpt-a at https://}, "web note: a time and the line on stderr");
+    $err = '';
+    {
+        local *STDERR;
+        open(STDERR, '>', \$err) or die;
+        ai::web_note("nobody listens");
+    }
+    is($err, '', "web note: nothing without the web interface");
+}
+
 # --- the models: the list and the choice go through the chat's flow ----------
 
 {

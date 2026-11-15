@@ -24,10 +24,31 @@
     --bg: #101010; --fg: #d8d8d4; --muted: #8a8a84; --line: #333330;
     --user-bg: #1f2a36; --err: #ff8a80; --accent: #d8d8d4;
   }
+  /* the fun ones: the names are the list of ai.pm (@THEMES), the model picks among them */
+  :root[data-theme="amber"] {
+    --bg: #140c00; --fg: #ffb000; --muted: #b57a00; --line: #4a3000;
+    --user-bg: #2a1c00; --err: #ff6a3d; --accent: #ffcc55;
+  }
+  :root[data-theme="matrix"] {
+    --bg: #000800; --fg: #33ff66; --muted: #1d9e42; --line: #0d3d1a;
+    --user-bg: #06240f; --err: #ff5555; --accent: #9dffb8;
+  }
+  :root[data-theme="solarized"] {
+    --bg: #002b36; --fg: #93a1a1; --muted: #657b83; --line: #073642;
+    --user-bg: #073642; --err: #dc322f; --accent: #eee8d5;
+  }
+  :root[data-theme="paper"] {
+    --bg: #f4ecd8; --fg: #3b2f1e; --muted: #7a6a50; --line: #d6c7a5;
+    --user-bg: #e8dcc0; --err: #a0301e; --accent: #3b2f1e;
+  }
+  :root[data-theme="neon"] {
+    --bg: #0b0716; --fg: #f0e6ff; --muted: #8f7fb8; --line: #2a1f4a;
+    --user-bg: #1d1238; --err: #ff3e9a; --accent: #00f0ff;
+  }
 
   * { box-sizing: border-box; }
   html, body { min-height: 100%; }
-  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 var(--sans); -webkit-text-size-adjust: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 17px/1.5 var(--sans); -webkit-text-size-adjust: 100%; }
 
   header { position: sticky; top: 0; z-index: 1; display: flex; gap: 12px; align-items: center; justify-content: space-between;
            padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--bg); color: var(--muted); font-size: 13px; }
@@ -41,7 +62,7 @@
   /* thinking: a spinner and the count while it thinks, a click shows the text */
   .thinking { margin-bottom: 10px; }
   html[data-look] .think-head { background: none; border: none; padding: 0; margin: 0; color: var(--muted);
-           font: inherit; font-size: 13px; cursor: pointer; text-align: left; }
+           font: inherit; font-size: 14px; cursor: pointer; text-align: left; }
   html[data-look] .think-head:hover { color: var(--fg); }
   .think-spin { display: inline-block; width: 1.4em; font-family: var(--mono); }
   .think-body { color: var(--muted); font-style: italic; font-size: 14px; white-space: pre-wrap;
@@ -51,13 +72,13 @@
   .usage { color: var(--muted); font-size: 13px; }
 
   /* simple: the terminal */
-  html[data-look="simple"] body { font-family: var(--mono); font-size: 15px; line-height: 1.5; }
+  html[data-look="simple"] body { font-family: var(--mono); font-size: 16px; line-height: 1.5; }
   html[data-look="simple"] header { font-family: var(--mono); }
   html[data-look="simple"] .user { color: var(--accent); margin-top: 18px; }
   html[data-look="simple"] .user::before { content: "> "; color: var(--muted); }
   html[data-look="simple"] .answer { margin-bottom: 4px; }
   html[data-look="simple"] form { font-family: var(--mono); }
-  html[data-look="simple"] textarea { font: inherit; font-size: 15px; border: none; border-top: 1px solid var(--line); border-radius: 0; padding: 10px 0 0; }
+  html[data-look="simple"] textarea { font: inherit; font-size: 16px; border: none; border-top: 1px solid var(--line); border-radius: 0; padding: 10px 0 0; }
   html[data-look="simple"] button { border: none; background: none; color: var(--muted); padding: 0 8px; }
   html[data-look="simple"] button:hover:not(:disabled) { color: var(--fg); }
 
@@ -84,6 +105,11 @@
       <option value="system">system</option>
       <option value="light">light</option>
       <option value="dark">dark</option>
+      <option value="amber">amber</option>
+      <option value="matrix">matrix</option>
+      <option value="solarized">solarized</option>
+      <option value="paper">paper</option>
+      <option value="neon">neon</option>
     </select>
   </span>
 </header>
@@ -123,13 +149,16 @@
   setLook(saved || "simple");
   look.addEventListener("change", function () { setLook(look.value); });
 
-  // the theme: the system's by default, light or dark when chosen (remembered)
+  // the theme: the system's by default; a name of the list when chosen
+  // (remembered). The model may pick one too, then it is not remembered.
+  var THEMES = ["system", "light", "dark", "amber", "matrix", "solarized", "paper", "neon"];
   var theme = document.getElementById("theme");
-  function setTheme(name) {
-    if (name !== "light" && name !== "dark") { name = "system"; }
+  function setTheme(name, remember) {
+    if (THEMES.indexOf(name) < 0) { name = "system"; }
     if (name === "system") { document.documentElement.removeAttribute("data-theme"); }
     else { document.documentElement.setAttribute("data-theme", name); }
     theme.value = name;
+    if (remember === false) { return; }
     try { localStorage.setItem("aicli-theme", name); } catch (e) { /* no storage: the system's */ }
   }
   var savedTheme = null;
@@ -216,6 +245,10 @@
   es.onopen = function () { status.textContent = "connected"; };
   es.onerror = function () { status.textContent = "disconnected, retrying…"; };
   es.addEventListener("state", function (e) { setState(JSON.parse(e.data)); });
+  // the model changed the look: a name of the list, applied for this page only
+  es.addEventListener("theme", function (e) { setTheme(JSON.parse(e.data).text, false); });
+  // the model the chat uses now (a switch made in a turn takes effect at the next one)
+  es.addEventListener("model", function (e) { setCurrent(JSON.parse(e.data).text); });
   es.addEventListener("models", function (e) {
     var d = JSON.parse(e.data);
     setModel(d.current, d.list || []);

@@ -240,7 +240,7 @@ The page shows the conversation with the tool calls and their results, errors
 and retries, the thinking of the model (a spinner with the count of characters
 while it thinks; a click shows the text), and the stats line. Enter sends,
 Shift+Enter starts a new line, Stop ends the turn. Two looks (`simple`, like
-the terminal, and `cards`) and a theme (system, light, dark) are chosen in the
+the terminal, and `cards`) and a theme (system, light, dark, amber, matrix, solarized, paper, neon) are chosen in the
 header and remembered in the browser. The mic records in the browser and sends
 the recording to `AI_ASR_URL`; without a recognizer, or when it is not
 reachable, the mic is off and the page says why. The model is chosen in the header: one
@@ -301,8 +301,9 @@ or `[WRITE_edf5 ERROR_9a78 ... ERROR_9a78]`. In native mode it is a tool message
 | `perl` | Perl code, with the modules of the image (PDL, Audio::Wav) | `eval` in a forked child, or `Safe->reval` with `AI_PERL_SAFE` (no modules there) |
 | `fetch` | a web page as text, links as `[text](url)` | async HTTP in the event loop |
 | `search` | web search through your SearXNG instance | async HTTP, only offered with `AI_SEARXNG_URL` |
+| `theme` | switch the colours of the web interface to one of its names (a look only, for this page); only in the web interface | an event to the page, main chat only |
 | `models` | the models of every provider of the chat, as `provider/id` (every page of each list), with the context size when known and the current one marked; an optional filter on the ids | HTTP in the chat's flow, main chat only |
-| `model` | switch the chat to one of them, `provider/id` (the next answer comes from it; the provider and the model are kept in the session) | the session's files, main chat only |
+| `model` | switch the chat to one of them, `provider/id`, for the next message (this answer finishes with the current model; a bare or partial id works when it is unique, e.g. `qwen3.6`); the provider and the model are kept in the session | the session's files, main chat only |
 | `devel` | what a language has installed, with versions: `perl` (modules under @INC), `python` (packages), `lua` (rocks), `c` (pkg-config), `bash` (tools on the PATH); an optional name filter | reads only, in a forked child |
 | `image` | a picture (PNG, JPEG, GIF or WebP) in the workspace, sent with the next message; a bigger one is made smaller with ImageMagick; only offered with `AI_VISION=1` | Perl, and ImageMagick in a forked child |
 | `convert` | a picture converted with ImageMagick: a smaller size, a crop, a turn, another format by the output name (png, jpg, gif, webp, bmp, tif), the quality. Metadata is removed. Only offered where ImageMagick is installed | ImageMagick in a forked child, no shell, with `ai/imagemagick/policy.xml` |

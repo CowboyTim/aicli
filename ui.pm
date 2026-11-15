@@ -230,6 +230,14 @@ sub queued { return scalar @queue }
 # Send one event to all clients that read the stream.
 sub publish {
     my ($type, $data) = @_;
+    if ($type eq 'tool' or $type eq 'failed') {
+        my $first = (split /\n/, ($data->{text} // ''))[0] // '';
+        ai::web_note(($type eq 'tool' ? "tool: " : "error: ").$first) if length $first;
+    } elsif ($type eq 'turn') {
+        ai::web_note("turn ".$data->{state});
+    } elsif ($type eq 'heard') {
+        ai::web_note("heard: ".$data->{text});
+    }
     return unless @clients;
     my $msg = "event: $type\ndata: ".$::JSON->encode($data // {})."\n\n";
     _queue($_, $msg) for @{[@clients]};
@@ -431,6 +439,7 @@ sub _flush {
 sub _close {
     my ($cn) = @_;
     return if $cn->{closed}++;
+    ai::web_note("page left the stream") if $cn->{streaming};
     my $fh = $cn->{fh};
     loop::unwatch($fh);
     delete $conn{fileno($fh)};
@@ -482,6 +491,7 @@ sub _feed {
 
 sub _respond {
     my ($cn, $code, $type, $body, @extra) = @_;
+    ai::web_note("$cn->{req} -> $code") if $cn->{req};
     my $head = "HTTP/1.1 $code $STATUS{$code}\r\n"
         ."Content-Type: $type\r\n"
         ."Content-Length: ".length($body)."\r\n"
@@ -521,6 +531,7 @@ sub _dispatch {
     my ($cn, $m, $path, $h, $body) = @_;
     my ($p, $q) = split /\?/, $path, 2;
     $q //= '';
+    $cn->{req} = "$m $p";
 
     if($p eq '/' and $m eq 'GET'){
         my ($given) = $q =~ m/(?:^|&)token=([0-9a-f]+)/;
@@ -547,6 +558,7 @@ sub _dispatch {
 
     if($p eq '/events' and $m eq 'GET'){
         _ask_models(); # the page wants the list of models, once
+        ai::web_note("page connected to the stream");
         $cn->{streaming} = 1;
         $cn->{handled} = 1;
         $cn->{out} .= "HTTP/1.1 200 OK\r\n"

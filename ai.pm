@@ -21,6 +21,8 @@ BEGIN {
 # Variables/Handles
 our ($api_key, $AI_ENDPOINT_URL, $SESSION_MODEL, $provider_name);
 our ($MAIN_PROVIDER, $MAIN_ENDPOINT, $MAIN_KEY); # the provider chat_setup chose, its endpoint and key
+# the colour themes of the web interface, the names of its page (ai/ui/index.html)
+our @THEMES = qw(system light dark amber matrix solarized paper neon);
 our @ALL_MODELS; # [provider, id] pairs of the last listing of every provider
 our ($AI_SESSION_DIR, $HISTORY_FILE, $PROMPT_FILE, $STATUS_FILE, $BASE_DIR, $AI_PROMPT_TEMPLATE, $AI_PROMPT_TEMPLATE_FILE, $AI_SESSION, $SESSIONS_DIR, $AI_PROVIDER, $AI_URL);
 our $cmds;
@@ -425,7 +427,34 @@ sub resolve_model {
     return $bare[0] if @bare == 1;
     die "'$choice' is at more than one provider: name one of ".join(', ', map {model_label($_)} @bare)."\n"
         if @bare > 1;
+    # a part of the id, in any case, and with spaces, _ and - left out: qwen3.6
+    # finds local/Qwen3.6-35B-A3B-ROCMFP4
+    my $norm = sub { my $x = lc shift; $x =~ s/[\s_-]+//g; return $x };
+    my $want = $norm->($choice);
+    my @part = grep {index($norm->($_->[1]), $want) >= 0} @$pairs;
+    my @part_here = grep {$_->[0] eq $AI_PROVIDER} @part;
+    return $part_here[0] if @part_here == 1;
+    return $part[0] if @part == 1;
+    if (@part > 1) {
+        my @names = map {model_label($_)} @part;
+        splice(@names, 10) if @names > 10;
+        die "'$choice' is part of more than one model, give the whole label: ".join(', ', @names)."\n";
+    }
     return undef;
+}
+
+# A switch asked for during a turn (the model tool) waits for the next turn:
+# the answer that asked for it finishes with the model it started with.
+our $PENDING_MODEL; # [provider, id], or undef
+
+sub apply_pending_model {
+    return unless $PENDING_MODEL;
+    my ($name, $id) = @{$PENDING_MODEL};
+    undef $PENDING_MODEL;
+    if (my $err = set_model($name, $id)) {
+        log::error("could not switch the model to $name/$id: $err");
+    }
+    return;
 }
 
 # the pair of a choice: from the lists, else as it is: "provider/id" when the
@@ -450,6 +479,8 @@ sub set_model {
     use_provider($name);
     $SESSION_MODEL = $id;
     status_info();
+    web_note("model is now ".current_label());
+    emit(model => {text => current_label()}); # the page shows it
     return undef;
 }
 
@@ -1407,6 +1438,16 @@ sub classify_error {
 # Returns ($content, $error, $info): $content is what the assistant said so
 # far (can be partial on error), $error is undef on success, $info has the
 # token usage, timing and, on error, what classify_error() says.
+# In web mode (the event sink is set) a line of what happens goes to stderr,
+# the terminal the server runs in: always, not only with --debug.
+sub web_note {
+    return unless $EVENT_SINK;
+    my ($msg) = @_;
+    my @t = localtime;
+    printf STDERR "%02d:%02d:%02d %s\n", $t[2], $t[1], $t[0], $msg;
+    return;
+}
+
 sub request_completion {
     my ($msgs, %o) = @_;
     my $req = build_request($msgs);
@@ -1418,6 +1459,17 @@ sub request_completion {
     STDOUT->autoflush(1);
     STDERR->autoflush(1);
     my $info = {t_start => Time::HiRes::time()};
+    my $where = ($AI_PROVIDER // '').'/'.($SESSION_MODEL // '<server default>');
+    web_note("request to $where at $AI_URL");
+    # while it waits, a line now and then: a model that is loading takes a while
+    my ($waited, $ended, $tick) = (0, 0, undef);
+    $tick = sub {
+        return if $ended;
+        $waited += 30;
+        web_note("still waiting for $where after ${waited}s (the Stop button ends the wait)");
+        loop::timer(30, $tick);
+    };
+    loop::timer(30, $tick) if $EVENT_SINK;
     my $printer = new_printer($o{quiet} ? sub {} : undef, hide_tools => (tool_display() eq 'brief' ? 1 : 0));
     # the status line tells that we wait, until there is something to show
     $TUI->set('model', $o{quiet} ? 'summarizing' : 'waiting for model');
@@ -1457,9 +1509,17 @@ sub request_completion {
     $info->{t_end} = Time::HiRes::time();
     $info->{usage} = $st->{usage};
     $info->{timings} = $st->{timings};
+    $ended = 1;
+    $tick = undef;
 
-    return ($st->{content}, "interrupted", $info) if utils::aborted();
+    if (utils::aborted()) {
+        web_note("interrupted: $where");
+        return ($st->{content}, "interrupted", $info);
+    }
     my ($err, $c) = completion_result($st, !defined $r, $utils::http_error, $utils::http_code, \%utils::http_headers);
+    web_note(sprintf("answer from %s: %s, %d characters, %.1fs", $where,
+        ($err ? "error: ".(ref($err) ? 'see the log' : $err) : 'ok'),
+        length($st->{content} // ''), $info->{t_end} - $info->{t_start}));
     $info->{$_} = $c->{$_} for keys %$c;
     $info->{tool_calls} = stream_tool_calls($st);
     return ($st->{content}, $err, $info);
@@ -1980,6 +2040,7 @@ sub retry_delay {
 sub chat_completion {
     my ($input) = @_;
     log::info("User input: $input");
+    apply_pending_model(); # a switch the model asked for in the last turn: this turn uses it
     return 0 if over_budget();
     append_messages({role => 'user', content => to_text($input)});
     my $ok = 1; # false when the turn ended with an error
@@ -4606,6 +4667,17 @@ EOb
         # only where the ImageMagick program is installed
         available => sub {tools::_magick() ? 1 : 0},
     },
+    theme => {
+        description => "change the colours of the web interface to one of: ".join(', ', @THEMES)
+            .". A look only, for fun or for reading; nothing else changes. Only in the web interface",
+        syntax => "///THEME_5c2e+EO_9a71\n{{name}}\nEO_9a71[LENGTH({{name}})]\nTHEME_5c2e",
+        properties  => {
+            "name" => {type => "string", enum => [@THEMES], description => "One of the names"},
+        },
+        required => ["name"],
+        # a look of the web page: the terminal has none, and a sub-agent is not asked
+        available => sub {($EVENT_SINK and !$IN_AGENT) ? 1 : 0},
+    },
     models => {
         description => "list the models the provider of this chat has (all of them, page by page), with the context size when it is known, the current one marked. Give a filter, a regular expression for the ids, to narrow it: the lists are long. Use it to find a model by name, then switch with model",
         syntax => "///MODELS_3c9a+EO_6d0f\n{{filter}}\nEO_6d0f[LENGTH({{filter}})]\nMODELS_3c9a",
@@ -5261,6 +5333,17 @@ sub devel_build {
     return;
 }
 
+
+# theme: a name of the list, sent to the page as an event: no code, only a name
+sub theme_5c2e {
+    my ($t_args) = @_;
+    my $name = lc(utils::trim($t_args->[0] // ''));
+    die "no theme '$name': the themes are ".join(', ', @ai::THEMES)."\n"
+        unless grep {$_ eq $name} @ai::THEMES;
+    ai::emit(theme => {text => $name});
+    return "the web interface is now $name\n";
+}
+
 # models: the models of every provider of the chat, as provider/id
 sub models_3c9a {
     my ($t_args) = @_;
@@ -5289,10 +5372,10 @@ sub model_7e21 {
     my ($pairs) = ai::all_models();
     my $pair = ai::resolve_model($choice, $pairs)
         or die "no model '$choice' at any provider: look for it with models\n";
-    if(my $err = ai::set_model(@$pair)){
-        die "could not switch the model: $err";
-    }
-    return "the model is now ".ai::model_label($pair).": the next answer comes from it\n";
+    # the switch is for the next message: this answer finishes with the current model
+    $ai::PENDING_MODEL = [@$pair];
+    return "the model changes to ".ai::model_label($pair)." when the next message comes; "
+        ."this answer finishes with the current model\n";
 }
 
 sub devel_9c3e {
