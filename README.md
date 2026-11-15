@@ -127,6 +127,7 @@ mounted project keep their owner; it never runs as root.
 ```bash
 # Debian/Ubuntu
 apt-get install perl libjson-xs-perl libwww-curl-perl libterm-readline-gnu-perl
+# for the web interface over https (--tls-cert): libnet-ssleay-perl
 
 export AI_API_KEY="csk-..."            # provider detected from the key
 export AI_PROMPT_TEMPLATE=coder        # the prompt with the tools
@@ -217,6 +218,37 @@ line sends it). **Ctrl-C while the model answers or a tool runs stops that
 turn** and returns to the prompt; ctrl-C at the prompt leaves. With input from
 a pipe it is the same: ctrl-C (SIGINT) stops the turn and the next line is
 read, a second one, or one while nothing runs, ends the program (exit 130).
+
+### The web interface
+
+`ai.pl --ui [port]` runs the chat headless and serves it to a browser: the
+output streams over server-sent events, the input comes in by POST. The default
+port is 8080, on `127.0.0.1`. The address is printed with a token; open that
+address once and the browser keeps the token in a cookie (`aicli_token`,
+HttpOnly, SameSite=Strict). The API of the page is `GET /events` (the stream),
+`POST /message`, `POST /voice` (a WAV recording), `POST /abort`, `GET /state`.
+A bearer token (`Authorization: Bearer`) works too; `AI_UI_TOKEN` sets the
+token.
+
+| option | |
+|--------|---|
+| `--ui [port]` | serve the interface (default 8080) |
+| `--ui-bind <address>` | the address to listen on: `127.0.0.1` (default), `::1`, `0.0.0.0` (any IPv4), `::` (any IPv6). The printed phone address is the one of this machine that a phone can reach, with a QR code on the terminal (`qrencode`) |
+| `--tls-cert <file> --tls-key <file>` | serve https, with a PEM certificate and key (needs `Net::SSLeay`, Debian `libnet-ssleay-perl`). A self-signed one: `openssl req -x509 -newkey rsa:2048 -nodes -days 365 -subj /CN=localhost -keyout key.pem -out cert.pem` |
+
+The page shows the conversation with the tool calls and their results, errors
+and retries, the thinking of the model (a spinner with the count of characters
+while it thinks; a click shows the text), and the stats line. Enter sends,
+Shift+Enter starts a new line, Stop ends the turn. Two looks (`simple`, like
+the terminal, and `cards`) and a theme (system, light, dark) are chosen in the
+header and remembered in the browser. The mic records in the browser and sends
+the recording to `AI_ASR_URL`; without a recognizer, or when it is not
+reachable, the mic is off and the page says why. Ctrl-C on the terminal ends
+the chat as it does without the interface.
+
+Not yet: file downloads and pictures from the model, uploads, slash commands
+in the page.
+
 
 ## How it works
 

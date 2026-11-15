@@ -28,7 +28,7 @@ $::DEBUG = $::ORIG_ENV{DEBUG} || 0;
 {
     no warnings 'once';
     require Getopt::Long;
-    my ($help, $man, $continue, $ui, $ui_bind);
+    my ($help, $man, $continue, $ui, $ui_bind, $tls_cert, $tls_key);
     my $ok = Getopt::Long::GetOptions(
         'help|h|?'    => \$help,
         'man'         => \$man,
@@ -37,10 +37,15 @@ $::DEBUG = $::ORIG_ENV{DEBUG} || 0;
         'prompt|p=s' => \$::PROMPT,
         'ui:s'       => \$ui,
         'ui-bind=s'  => \$ui_bind,
+        'tls-cert=s' => \$tls_cert,
+        'tls-key=s'  => \$tls_key,
     );
     if(defined $ui){
         $::UI = length($ui) ? $ui : 8080;
         $::UI_BIND = $ui_bind // '127.0.0.1';
+        $::UI_TLS = [$tls_cert, $tls_key] if defined $tls_cert;
+    } elsif(defined $tls_cert or defined $tls_key){
+        die "--tls-cert and --tls-key are for the web interface: they need --ui\n";
     }
     if(!$ok or $help or $man){
         # usage (-h, -help) or the whole manual (-man) from the POD of this file;
@@ -131,7 +136,7 @@ if(defined $::UI){
     # the web interface, headless: the chat reads what comes in over HTTP
     die "--ui and -p do not go together\n" if defined $::PROMPT;
     require ui;
-    ui::start(port => $::UI, bind => $::UI_BIND, token => (length($::ORIG_ENV{AI_UI_TOKEN} // "") ? $::ORIG_ENV{AI_UI_TOKEN} : undef));
+    ui::start(port => $::UI, bind => $::UI_BIND, (defined $::UI_TLS ? (tls_cert => $::UI_TLS->[0], tls_key => $::UI_TLS->[1]) : ()), token => (length($::ORIG_ENV{AI_UI_TOKEN} // "") ? $::ORIG_ENV{AI_UI_TOKEN} : undef));
     ai::chat_loop();
     ai::cleanup_chat();
     ui::stop();
@@ -212,6 +217,22 @@ environment sets the token. Routes: C</events> (the stream), C<POST /message>,
 C<POST /abort>, C</state>, C<POST /voice> (a WAV recording, recognized
 by C<AI_ASR_URL> and sent to the chat as soon as it is ready). Slash commands
 and files come later.
+
+=item B<--tls-cert> I<file>
+
+With C<--ui>: serve the web interface over HTTPS, with this certificate (PEM,
+the chain included). Needs C<--tls-key>. The URLs printed are C<https://>, the
+cookie is C<Secure>. The Perl module L<Net::SSLeay> is needed (Debian package
+C<libnet-ssleay-perl>); without this option it is not loaded. A self-signed
+certificate works, the browser asks once to trust it:
+
+  openssl req -x509 -newkey rsa:2048 -nodes -days 365 -subj /CN=localhost \
+      -keyout ui-key.pem -out ui-cert.pem
+
+=item B<--tls-key> I<file>
+
+The private key (PEM) of C<--tls-cert>. Read at start, after the privileges
+are dropped: the user the chat runs as must be able to read it.
 
 =item B<--ui-bind> I<address>
 

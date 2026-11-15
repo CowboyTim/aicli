@@ -18,10 +18,11 @@ FROM ${BASE_IMAGE} AS base
 ENV DEBIAN_FRONTEND=noninteractive
 
 # ai.pl dependencies: Perl, the JSON and readline modules, WWW::Curl for the HTTP
-# requests, and the CA certificates for the HTTPS APIs
+# requests, the CA certificates for the HTTPS APIs, and Net::SSLeay for the
+# web interface over https (ai.pl --tls-cert)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         perl libjson-xs-perl libwww-curl-perl libterm-readline-gnu-perl libdata-uuid-perl \
-        ca-certificates \
+        libnet-ssleay-perl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # the unix tools the model uses: a shell, the text tools, git, and the network tools

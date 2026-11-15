@@ -18,6 +18,8 @@ use File::Basename ();
 use Errno ();
 
 our ($listen, $token, $port, $bind, $html_file);
+our $tls_ctx;  # the TLS context, when the interface is https (--tls-cert and --tls-key)
+our $voice;     # the speech recognizer: undef (not checked yet), 'ok', 'none' (AI_ASR_URL unset), 'unreachable'
 our %conn;      # fileno => connection
 our @clients;   # connections that read the event stream
 our @queue;     # messages waiting for chat_loop
@@ -46,6 +48,7 @@ sub start {
     my (%o) = @_;
     $bind  = $o{bind} // '127.0.0.1';
     $token = $o{token} // _new_token();
+    $tls_ctx = $o{tls_cert} ? _tls_context($o{tls_cert}, $o{tls_key}) : undef;
     # an IPv6 address is in brackets in a URL; "::" is any IPv6 address
     $listen = IO::Socket::IP->new(
         LocalHost => $bind, LocalPort => ($o{port} // 8080), Listen => 16,
@@ -57,17 +60,19 @@ sub start {
     loop::watch($listen, \&_accept);
     loop::timer(15, \&_ping);
     $ai::EVENT_SINK = \&publish;
+    check_voice();
     $log::on_error = sub { publish(failed => {text => ai::web_text($_[0])}) };
     # "any" addresses (0.0.0.0, ::) are not a place to open: the loopback is
     my $shown = ($bind eq '0.0.0.0' or $bind eq '::') ? 'localhost' : $bind;
     my $host = $shown =~ m/:/ ? "[$shown]" : $shown;
-    print STDERR "aicli web interface: http://$host:$port/?token=$token\n";
+    my $scheme = $tls_ctx ? 'https' : 'http';
+    print STDERR "aicli web interface: $scheme://$host:$port/?token=$token\n";
     # the phone: an address of this machine it can reach, and a QR code for it
     my $phone = $bind eq '0.0.0.0' ? (_lan_address(4) // '127.0.0.1')
               : $bind eq '::'      ? (_lan_address(6) // '::1') # no global IPv6: the loopback
               : $bind;
     my $phone_host = $phone =~ m/:/ ? "[$phone]" : $phone;
-    my $phone_url = "http://$phone_host:$port/?token=$token";
+    my $phone_url = "$scheme://$phone_host:$port/?token=$token";
     print STDERR "aicli web interface on the phone: $phone_url\n" if $phone ne $shown;
     _qr($phone_url);
     return $port;
@@ -160,6 +165,7 @@ sub _recognize {
     close($fh);
     my $text = ai::transcribe($file);
     unlink($file);
+    check_voice() unless defined $text and length $text;
     return $text;
 }
 
@@ -188,32 +194,141 @@ sub _state {
         model   => $ai::SESSION_MODEL // '',
         busy    => $ai::BUSY ? \1 : \0,
         queued  => scalar(@queue),
+        voice   => $voice // 'unknown',
     };
 }
 
+# Is the speech recognizer there? A GET to its endpoint: any HTTP answer means
+# it is reachable (the endpoint itself only takes POST). Asynchronous: the
+# answer goes to the page's state and to stderr. Called at start and again
+# after a recognition failed.
+sub check_voice {
+    my $url = $::ORIG_ENV{AI_ASR_URL};
+    if(!length($url // '')){
+        $voice = 'none';
+        publish(state => _state());
+        print STDERR "aicli speech: AI_ASR_URL is not set, the mic is not available\n";
+        return;
+    }
+    loop::http(
+        method => 'get', url => $url, timeout => 5, connect_timeout => 3,
+        proxy => '', # the recognizer is local: no proxy
+        on_done => sub {
+            my ($req) = @_;
+            if($req->{code} > 0){
+                $voice = 'ok';
+            } else {
+                $voice = 'unreachable';
+                print STDERR "aicli speech: the recognizer endpoint $url is not reachable: ".($req->{error} // 'no answer')."\n";
+            }
+            publish(state => _state());
+        },
+    );
+    return;
+}
+
 # --- sockets ----------------------------------------------------------------
+
+# TLS, through Net::SSLeay (CPAN, loaded only with --tls-cert). The sockets stay
+# non-blocking and on the event loop: the handshake and every read and write
+# are retried when the socket is ready, and the handshake has a time limit.
+sub _tls_context {
+    my ($cert, $key) = @_;
+    $key //= $cert;
+    require Net::SSLeay;
+    Net::SSLeay::load_error_strings();
+    Net::SSLeay::SSLeay_add_ssl_algorithms();
+    my $ctx = Net::SSLeay::CTX_new() or die "ui: TLS: cannot make a context: "._ssl_error()."\n";
+    Net::SSLeay::CTX_set_options($ctx, Net::SSLeay::OP_NO_SSLv2() | Net::SSLeay::OP_NO_SSLv3()
+        | Net::SSLeay::OP_NO_TLSv1() | Net::SSLeay::OP_NO_TLSv1_1());
+    Net::SSLeay::CTX_use_certificate_chain_file($ctx, $cert) == 1
+        or die "ui: TLS: cannot read the certificate $cert: "._ssl_error()."\n";
+    Net::SSLeay::CTX_use_PrivateKey_file($ctx, $key, Net::SSLeay::FILETYPE_PEM()) == 1
+        or die "ui: TLS: cannot read the key $key: "._ssl_error()."\n";
+    Net::SSLeay::CTX_check_private_key($ctx) == 1
+        or die "ui: TLS: the key $key does not belong to the certificate $cert\n";
+    return $ctx;
+}
+
+sub _ssl_error {
+    my $e = Net::SSLeay::ERR_get_error();
+    return $e ? Net::SSLeay::ERR_error_string($e) : 'no details';
+}
 
 sub _accept {
     while(my $fh = $listen->accept){
         $fh->blocking(0);
         my $cn = {fh => $fh, in => '', out => ''};
         $conn{fileno($fh)} = $cn;
+        if($tls_ctx){
+            $cn->{ssl} = Net::SSLeay::new($tls_ctx) or do { _close($cn); next };
+            Net::SSLeay::set_fd($cn->{ssl}, fileno($fh));
+            $cn->{hs_timer} = loop::timer(10, sub {
+                delete $cn->{hs_timer};
+                _close($cn) unless $cn->{hs_done} or $cn->{closed};
+            });
+            loop::watch($fh, sub { _handshake($cn) });
+            next;
+        }
         loop::watch($fh, sub { _read($cn) });
     }
     return;
 }
 
+# the TLS handshake, one step per time the socket is ready
+sub _handshake {
+    my ($cn) = @_;
+    return if $cn->{closed} or $cn->{hs_done};
+    my $r = Net::SSLeay::accept($cn->{ssl});
+    if($r == 1){
+        $cn->{hs_done} = 1;
+        delete $cn->{hs_timer};
+        loop::watch($cn->{fh}, sub { _read($cn) });
+        return;
+    }
+    my $e = Net::SSLeay::get_error($cn->{ssl}, $r);
+    if($e == Net::SSLeay::ERROR_WANT_READ()){
+        return; # the socket is watched: the next data comes back here
+    }
+    if($e == Net::SSLeay::ERROR_WANT_WRITE()){
+        loop::timer(0.05, sub { _handshake($cn) unless $cn->{closed} });
+        return;
+    }
+    log::info("TLS handshake failed: "._ssl_error());
+    return _close($cn);
+}
+
+# bytes from the socket: plain, or decrypted by TLS
+sub _read_socket {
+    my ($cn) = @_;
+    if(!$cn->{ssl}){
+        my $n = sysread($cn->{fh}, my $buf, 65536);
+        return ($n, $buf);
+    }
+    my $buf = Net::SSLeay::read($cn->{ssl}, 65536);
+    if(defined $buf and length $buf){
+        return (length $buf, $buf);
+    }
+    my $e = Net::SSLeay::get_error($cn->{ssl}, -1);
+    return (undef, undef) if $e == Net::SSLeay::ERROR_WANT_READ() or $e == Net::SSLeay::ERROR_WANT_WRITE();
+    return (0, undef); # the peer closed (or the TLS layer failed): the end
+}
+
 sub _read {
     my ($cn) = @_;
-    return if $cn->{closed};
-    my $n = sysread($cn->{fh}, my $buf, 65536);
-    if(!defined $n){
-        return if $!{EAGAIN} or $!{EWOULDBLOCK} or $!{EINTR};
-        return _close($cn);
+    while(!$cn->{closed}){
+        my ($n, $buf) = _read_socket($cn);
+        if(!defined $n){
+            return if $cn->{ssl}; # TLS wants more from the socket
+            return if $!{EAGAIN} or $!{EWOULDBLOCK} or $!{EINTR};
+            return _close($cn);
+        }
+        return _close($cn) if $n == 0;
+        return if $cn->{streaming} or $cn->{handled}; # nothing more is read from them
+        _feed($cn, $buf);
+        # TLS can hold decrypted bytes the socket will not report again
+        return unless $cn->{ssl} and Net::SSLeay::pending($cn->{ssl});
     }
-    return _close($cn) if $n == 0;
-    return if $cn->{streaming} or $cn->{handled}; # nothing more is read from them
-    _feed($cn, $buf);
     return;
 }
 
@@ -231,7 +346,17 @@ sub _queue {
 sub _flush {
     my ($cn) = @_;
     while(length $cn->{out}){
-        my $n = syswrite($cn->{fh}, $cn->{out}, 65536);
+        my $n;
+        if($cn->{ssl}){
+            $n = Net::SSLeay::write($cn->{ssl}, substr($cn->{out}, 0, 65536));
+            if(!defined $n or $n <= 0){
+                my $e = Net::SSLeay::get_error($cn->{ssl}, $n // -1);
+                $n = undef;
+                $! = Errno::EAGAIN() if $e == Net::SSLeay::ERROR_WANT_READ() or $e == Net::SSLeay::ERROR_WANT_WRITE();
+            }
+        } else {
+            $n = syswrite($cn->{fh}, $cn->{out}, 65536);
+        }
         if(!defined $n){
             if($!{EAGAIN} or $!{EWOULDBLOCK}){
                 # try again in a moment, the loop goes on meanwhile
@@ -256,6 +381,13 @@ sub _close {
     loop::unwatch($fh);
     delete $conn{fileno($fh)};
     @clients = grep {$_ != $cn} @clients;
+    delete $cn->{hs_timer};
+    if($cn->{ssl}){
+        # close_notify: the peer then knows the answer is complete (one try, the socket is not waited for)
+        Net::SSLeay::shutdown($cn->{ssl}) if $cn->{hs_done};
+        Net::SSLeay::free($cn->{ssl});
+    }
+    undef $cn->{ssl};
     close($fh);
     return;
 }
@@ -340,7 +472,7 @@ sub _dispatch {
         my ($given) = $q =~ m/(?:^|&)token=([0-9a-f]+)/;
         if(defined $given and $given eq $token){
             return _respond($cn, 303, 'text/plain', "see /\n", "Location: /",
-                "Set-Cookie: aicli_token=$token; Path=/; HttpOnly; SameSite=Strict");
+                "Set-Cookie: aicli_token=$token; Path=/; HttpOnly; SameSite=Strict".($tls_ctx ? '; Secure' : ''));
         }
         return _respond($cn, 401, 'text/plain', "open the address aicli printed at start (it has the token)\n")
             unless _authed($h);

@@ -3492,9 +3492,19 @@ sub transcribe {
     if(utils::aborted()){
         return;
     }
+    # say why when the recognizer did not answer (no connection, a timeout, an
+    # HTTP error): the reason is the one thing the user needs to see
+    if(defined $utils::http_error){
+        log::error("${colors::red_color}speech recognizer endpoint $url is not reachable: $utils::http_error".$colors::reset_color);
+        return;
+    }
+    if($utils::http_code >= 300){
+        log::error("${colors::red_color}speech recognizer at $url answered HTTP $utils::http_code: ".(length($resp) ? ($resp =~ s/\s+/ /gr) : 'nothing').$colors::reset_color);
+        return;
+    }
     my $d = eval {$::JSON->decode($resp)};
     if(ref($d) ne 'HASH' or !defined $d->{text}){
-        log::error("${colors::red_color}no text from the speech recognizer: ".($resp =~ s/\s+/ /gr).$colors::reset_color);
+        log::error("${colors::red_color}no text from the speech recognizer ($url, HTTP $utils::http_code): ".(length($resp) ? ($resp =~ s/\s+/ /gr) : 'an empty answer').$colors::reset_color);
         return;
     }
     my $text = $d->{text} =~ s/\A\s+|\s+\z//gr;

@@ -33,6 +33,34 @@ user's view) and AGENTS.md (the code, and "Status" for the history), not here.
 - **Terminals other than tmux 3.4** for the footer (kitty and others). Emoji
   and wide-character widths may differ.
 
+## Open: web interface
+
+- **Not started:** file downloads and inline pictures for what the model
+  generates (`GET /files`, `tools::_path()`, `Content-Disposition: attachment`
+  for downloads, `file` events from `tools::_changing`).
+- **Not started:** uploads into `./uploads/` (`POST /upload`, a multipart
+  parser, `AI_UPLOAD_MAX`, names sanitized, pictures into the next message with
+  `AI_VISION=1`).
+- **Not started:** slash commands over `POST /command` (refused with 400 now).
+- **The sync/flow issue** the user saw in the page: not investigated yet.
+- **Thinking not shown in the page** for the user's model: the server emits
+  `think` events for both forms (`reasoning_content` and `<think>` tags) in
+  tests, and the page has a thinking block now. Not reproduced in a browser.
+  Check: `/thinking` (a session setting can turn it off), the browser console.
+- **Not run in a real browser:** the page (both looks, both themes, the mobile
+  layout), the QR code (`qrencode` is in the image, not scanned here), the
+  microphone and the speech warnings, the TLS trust prompt for a self-signed
+  certificate.
+- **TLS:** tested with a generated certificate and `openssl s_client`. Not
+  yet: a certificate from a real CA, the key read after the privilege drop.
+
+## Open: devel and hardware
+
+- **Devel probe counts:** `devel` reports `lua: 0` and `python: 1` on the
+  test machine. Check what the probes count and whether they are right.
+- **Hardware tests:** `--usb`, `--rtlsdr`, `--nrf-sniffer`, `--bluetooth` have
+  not been run against real devices in a while.
+
 ## Ideas, not started
 
 - **Sub-agent roles:** a config file with endpoints and models, a `role`

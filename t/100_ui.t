@@ -234,6 +234,104 @@ for my $bind ('::1', '::', '127.0.0.1') {
     }
 }
 
+# --- stop and start again on the same port -------------------------------------
+
+{
+    my $probe = IO::Socket::IP->new(LocalHost => '127.0.0.1', LocalPort => 0, Listen => 1, Proto => 'tcp');
+    my $port = $probe->sockport;
+    close($probe);
+    for my $round (1 .. 3){
+        my $got = ui::start(port => $port, bind => '127.0.0.1', token => $TOKEN);
+        is($got, $port, "stop and start: round $round listens on the same port");
+        ui::stop();
+    }
+}
+
+# --- TLS: https with a certificate, the handshake on the event loop ---------
+# a https GET with a plain Net::SSLeay client: the whole answer, the headers too
+sub _https_get {
+    my ($port, $path) = @_;
+    my $sock = IO::Socket::IP->new(PeerHost => '127.0.0.1', PeerPort => $port, Timeout => 5) or return;
+    my $ctx = Net::SSLeay::CTX_new();
+    my $ssl = Net::SSLeay::new($ctx);
+    Net::SSLeay::set_fd($ssl, fileno($sock));
+    my $all;
+    if(Net::SSLeay::connect($ssl) > 0){
+        Net::SSLeay::write($ssl, "GET $path HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+        $all = '';
+        while(1){
+            my $chunk = Net::SSLeay::read($ssl);
+            last unless defined $chunk and length $chunk;
+            $all .= $chunk;
+        }
+    }
+    Net::SSLeay::free($ssl);
+    Net::SSLeay::CTX_free($ctx);
+    return $all;
+}
+
+
+SKIP: {
+    skip "Net::SSLeay is not installed" unless eval { require Net::SSLeay; 1 };
+    skip "no openssl program" unless -x '/usr/bin/openssl' or -x '/bin/openssl';
+    my $dir = File::Temp::tempdir("aicli_tls_XXXXXX", TMPDIR => 1, CLEANUP => 1);
+    my $rc = system('openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2',
+        '-subj', '/CN=localhost', '-keyout', "$dir/key.pem", '-out', "$dir/cert.pem",
+        '-batch') >> 8;
+    skip "cannot make a test certificate" if $rc;
+    my $probe = IO::Socket::IP->new(LocalHost => '127.0.0.1', LocalPort => 0, Listen => 1, Proto => 'tcp');
+    my $port = $probe->sockport;
+    close($probe);
+    my $tls_port = ui::start(port => $port, bind => '127.0.0.1', token => $TOKEN,
+        tls_cert => "$dir/cert.pem", tls_key => "$dir/key.pem");
+    is($tls_port, $port, "tls: listens on $port");
+    # the client is a child: the TLS client is blocking, the server is this loop
+    my $cpid = fork() // die "fork: $!";
+    if(!$cpid){
+        alarm 15;
+        my $bits = 0;
+        my $one = _https_get($port, '/state');
+        $bits |= 1 if defined $one and $one =~ m{^HTTP/1\.1 401};
+        my $two = _https_get($port, "/?token=$TOKEN");
+        $bits |= 2 if defined $two and $two =~ m{^HTTP/1\.1 303}
+            and $two =~ /^Set-Cookie: aicli_token=\S+;.*Secure/mi;
+        POSIX::_exit($bits);
+    }
+    my $waited = 0;
+    loop::run(sub { $waited = waitpid($cpid, POSIX::WNOHANG()) if !$waited; $waited && $waited > 0 });
+    is($? >> 8, 3, "tls: a https request gets the 401, the token gets the redirect with a Secure cookie");
+    ui::stop();
+}
+
+# --- the speech recognizer: the page is told whether the mic can work -------
+
+{
+    local $::ORIG_ENV{AI_ASR_URL};
+    delete $::ORIG_ENV{AI_ASR_URL};
+    my $err = '';
+    {
+        local *STDERR;
+        open(STDERR, '>', \$err) or die;
+        ui::check_voice();
+    }
+    is($ui::voice, 'none', "voice: no AI_ASR_URL is 'none'");
+    is(ui::_state()->{voice}, 'none', "voice: the state says so");
+    like($err, qr/AI_ASR_URL is not set, the mic is not available/, "voice: said on stderr");
+}
+{
+    local $::ORIG_ENV{AI_ASR_URL} = 'http://127.0.0.1:1/v1/audio/transcriptions';
+    my $err = '';
+    $ui::voice = undef;
+    {
+        local *STDERR;
+        open(STDERR, '>', \$err) or die;
+        ui::check_voice();
+        loop::run(sub { defined $ui::voice });
+    }
+    is($ui::voice, 'unreachable', "voice: an endpoint that is not there is 'unreachable'");
+    like($err, qr/endpoint http:\S+ is not reachable/, "voice: said on stderr as not reachable");
+}
+
 # --- end to end: ai.pl --ui as a child process, read over HTTP ----------------
 
 my $llm = FakeLLM::start();

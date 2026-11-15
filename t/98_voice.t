@@ -177,6 +177,14 @@ PL
     is_deeply($ai::TUI->{calls}, ['set recording', 'set heard', 'unset recording', 'unset heard'], "preview: the footer items come and go");
 }
 
+# the recognizer does not answer: the reason is said, not just "no text"
+{
+    TestAI::setup(AI_RECORDER => $rec, AI_ASR_URL => 'http://127.0.0.1:1/v1/audio/transcriptions');
+    my $err = TestAI::capture {ok(!defined ai::voice_once(0.1), "asr: no connection, no text")};
+    like($err, qr/endpoint \S+ is not reachable: .+/, "asr: the endpoint is said to be not reachable");
+    unlike($err, qr/no text from the speech recognizer \(/, "asr: not the generic message");
+}
+
 # AI_ASR_PROMPT goes to the recognizer, with the model
 {
     my $f = "$tmp/prompt.wav";

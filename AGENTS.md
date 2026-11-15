@@ -67,7 +67,8 @@ These are requirements, not suggestions.
   error and returns to the prompt. No `die` may escape to the top.
 - **Few dependencies**: core Perl plus `JSON::XS`, `Net::Curl` (or
   `WWW::Curl`), `Term::ReadLine::Gnu`. `Data::UUID` is optional. Ask before
-  adding a CPAN module. The image also has `PDL` and `Audio::Wav` (Debian
+  adding a CPAN module. `Net::SSLeay` (Debian `libnet-ssleay-perl`) is loaded
+  only for the web interface over https (`--tls-cert`). The image also has `PDL` and `Audio::Wav` (Debian
   packages) for the `perl` tool, and the `lame` MP3 encoder; aicli itself does
   not load them.
 - **Keep the docs in sync**: README.md, the POD in `ai.pl` and this file
@@ -97,6 +98,14 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   the privilege drop as root in docker with a user other than 1000, and voice
   in a real terminal (a recording of real speech has been recognized; Esc
   cancel and the level meter have not been seen in a real terminal).
+- November 2026, the web interface (`ai.pl --ui`): SSE, routes, token, IPv4 and
+  IPv6, Ctrl-C, tool and error blocks, speech input, the thinking block, theme
+  and look choice, TLS with `Net::SSLeay`. Tested with socket pairs, a forked
+  client, `ai.pl --ui` as a child, and `openssl s_client`. Not yet tested in a
+  real browser or on a phone: the page, the QR code, the microphone, the
+  thinking block, the TLS trust prompt. Not built yet: file downloads and
+  inline pictures, uploads to `./uploads/`, slash commands over `POST /command`
+  (refused with 400 for now).
 - What is open is in PLAN.md. What is built is in README.md and in this
   "Status", not in PLAN.md.
 
@@ -127,7 +136,20 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   on the event loop (`loop::watch`), routes, the SSE stream (`publish()`, the
   `$ai::EVENT_SINK` hook of the chat), the token (`_authed()`), the input queue
   that `chat_loop` reads (`input()`; a recording is recognized there, in the main
-  flow, never in a request). Page: `ai/ui/index.html`.
+  flow, never in a request). `check_voice()` asks the recognizer (AI_ASR_URL)
+  for a GET at start and after a failed recognition: the state's `voice` (`ok`,
+  `none`, `unreachable`) disables the mic on the page, and stderr says why.
+  The listener is `IO::Socket::IP` with `ReuseAddr`, so a stop and a start on
+  the same port work. TLS (`--tls-cert`, `--tls-key`): `_tls_context()` loads
+  the certificate once; each client gets a `Net::SSLeay` object on its
+  non-blocking socket. `_handshake()` runs on the loop (a 10 s limit),
+  `_read_socket()`, `_flush()` and `_close()` branch on `$cn->{ssl}`, and
+  `_close()` sends close_notify before the socket closes (without it a client
+  drops the answer). The cookie gets `Secure` over https. Page:
+  `ai/ui/index.html`: the look (`simple`/`cards`), the theme (system, light,
+  dark; `data-theme` on `<html>`), the thinking block (a spinner and the
+  character count while it comes, a click shows the text; `think` events), the
+  mic (16 kHz WAV via `/voice`).
 - **tui.pm** – `tui`: the screen. Two modes: `bar` (default when the terminal
   is big enough, at least 7 rows and 20 columns): a footer of two lines at
   the bottom, activity (`set`/`unset` items with spinner and elapsed time)
@@ -422,8 +444,8 @@ Other APIs are reached through an OpenAI compatible gateway, such as LiteLLM or 
 | `t/88_markdown.t` | markdown of the answer: headings, emphasis, code, lists, tables, streaming, the printer |
 | `t/89_context_thinking.t` | the reasoning setting, what the request says, the first request through compactions, `/context` |
 | `t/97_live.t` | a real model, only when `AI_LIVE_SERVER` is set (`AI_LIVE_MODEL`, optional `AI_LIVE_SEARXNG`): one answer, a native tool call, the thinking setting, search. Skipped otherwise |
-| `t/100_ui.t` | the web interface: routes, the token, origin check, body limits, the input queue, the event stream on socket pairs; then `ai.pl --ui` as a child, a message in and the streamed answer out |
-| `t/98_voice.t` | speech: the multipart upload, the recorder child stopped by SIGINT, the text of the recognizer, `/voice` |
+| `t/100_ui.t` | the web interface: routes, the token, origin check, body limits, the input queue, the event stream on socket pairs; the listen addresses (IPv4, IPv6, `::`), stop and start on the same port, TLS with a generated certificate (a https request, the Secure cookie), the state of the speech recognizer; then `ai.pl --ui` as a child, a message in and the streamed answer out, Ctrl-C |
+| `t/98_voice.t` | speech: the multipart upload, the recorder child stopped by SIGINT, the text of the recognizer, its errors (endpoint not reachable, HTTP status, no text), `/voice` |
 | `t/95_cli.t` | `-p` (one request, exit codes, stdin) and `-c` (continue per directory), as a process |
 | `t/85_web.t` | proxy selection, HTML to text, fetch, search (mocked HTTP layer), a real fetch, `/retry`, `/rewind` |
 | `t/90_prompt_display_undo.t` | project file and date in the prompt, byte-stable request prefix, brief display, diffs, `/undo` |

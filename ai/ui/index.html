@@ -27,30 +27,37 @@
 
   * { box-sizing: border-box; }
   html, body { min-height: 100%; }
-  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 var(--sans); -webkit-text-size-adjust: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 var(--sans); -webkit-text-size-adjust: 100%; }
 
   header { position: sticky; top: 0; z-index: 1; display: flex; gap: 12px; align-items: center; justify-content: space-between;
            padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--bg); color: var(--muted); font-size: 13px; }
   header select { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 2px 4px; }
   #status { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 
-  main { max-width: 860px; margin: 0 auto; padding: 16px; }
+  main { max-width: 960px; margin: 0; padding: 16px; } /* left: the text starts at the left edge */
   #log { overflow-wrap: anywhere; }
   .msg { margin: 0 0 14px; white-space: pre-wrap; }
   .error { color: var(--err); }
-  .think { color: var(--muted); font-style: italic; }
+  /* thinking: a spinner and the count while it thinks, a click shows the text */
+  .thinking { margin-bottom: 10px; }
+  html[data-look] .think-head { background: none; border: none; padding: 0; margin: 0; color: var(--muted);
+           font: inherit; font-size: 13px; cursor: pointer; text-align: left; }
+  html[data-look] .think-head:hover { color: var(--fg); }
+  .think-spin { display: inline-block; width: 1.4em; font-family: var(--mono); }
+  .think-body { color: var(--muted); font-style: italic; font-size: 14px; white-space: pre-wrap;
+                margin: 6px 0 0 1.4em; padding-left: 10px; border-left: 2px solid var(--line); }
   .tool { color: var(--accent); font-size: 13px; margin-top: 8px; }
   .result { color: var(--muted); font-size: 13px; margin-left: 1.5em; }
   .usage { color: var(--muted); font-size: 13px; }
 
   /* simple: the terminal */
-  html[data-look="simple"] body { font-family: var(--mono); font-size: 14px; line-height: 1.5; }
+  html[data-look="simple"] body { font-family: var(--mono); font-size: 15px; line-height: 1.5; }
   html[data-look="simple"] header { font-family: var(--mono); }
   html[data-look="simple"] .user { color: var(--accent); margin-top: 18px; }
   html[data-look="simple"] .user::before { content: "> "; color: var(--muted); }
   html[data-look="simple"] .answer { margin-bottom: 4px; }
   html[data-look="simple"] form { font-family: var(--mono); }
-  html[data-look="simple"] textarea { font: inherit; font-size: 14px; border: none; border-top: 1px solid var(--line); border-radius: 0; padding: 10px 0 0; }
+  html[data-look="simple"] textarea { font: inherit; font-size: 15px; border: none; border-top: 1px solid var(--line); border-radius: 0; padding: 10px 0 0; }
   html[data-look="simple"] button { border: none; background: none; color: var(--muted); padding: 0 8px; }
   html[data-look="simple"] button:hover:not(:disabled) { color: var(--fg); }
 
@@ -72,6 +79,11 @@
     <select id="look" aria-label="look">
       <option value="simple">simple</option>
       <option value="cards">cards</option>
+    </select>
+    <select id="theme" aria-label="theme">
+      <option value="system">system</option>
+      <option value="light">light</option>
+      <option value="dark">dark</option>
     </select>
   </span>
 </header>
@@ -98,7 +110,6 @@
   var mic = document.getElementById("mic");
   var rec = null; // the recording in progress: {stream, ctx, src, proc, chunks}
   var current = null;  // the element the answer streams into
-  var thinking = null; // the element the thinking streams into
 
   // the look is a per-browser choice, remembered when the browser allows it
   function setLook(name) {
@@ -112,6 +123,20 @@
   setLook(saved || "simple");
   look.addEventListener("change", function () { setLook(look.value); });
 
+  // the theme: the system's by default, light or dark when chosen (remembered)
+  var theme = document.getElementById("theme");
+  function setTheme(name) {
+    if (name !== "light" && name !== "dark") { name = "system"; }
+    if (name === "system") { document.documentElement.removeAttribute("data-theme"); }
+    else { document.documentElement.setAttribute("data-theme", name); }
+    theme.value = name;
+    try { localStorage.setItem("aicli-theme", name); } catch (e) { /* no storage: the system's */ }
+  }
+  var savedTheme = null;
+  try { savedTheme = localStorage.getItem("aicli-theme"); } catch (e) { /* no storage */ }
+  setTheme(savedTheme || "system");
+  theme.addEventListener("change", function () { setTheme(theme.value); });
+
   function add(cls, s) {
     var d = document.createElement("div");
     d.className = "msg " + cls;
@@ -121,26 +146,89 @@
     return d;
   }
 
+  // the mic needs the speech recognizer: without one it is not offered
+  var voiceNote = {
+    none: "mic not available: no speech recognizer is set (AI_ASR_URL)",
+    unreachable: "mic not available: the speech recognizer is not reachable"
+  };
+  var voiceWarned = null;
+  function setVoice(v) {
+    var note = voiceNote[v];
+    mic.disabled = !!note || v === "unknown";
+    mic.title = note || "speak (click to start, click to stop)";
+    if (note && voiceWarned !== v) { voiceWarned = v; add("error", note); }
+    if (!note) { voiceWarned = null; }
+  }
+
   function setState(s) {
     model.textContent = s.model || "";
     status.textContent = s.session ? "session " + s.session : "";
+    setVoice(s.voice);
   }
 
   var es = new EventSource("/events");
   es.onopen = function () { status.textContent = "connected"; };
   es.onerror = function () { status.textContent = "disconnected, retrying…"; };
   es.addEventListener("state", function (e) { setState(JSON.parse(e.data)); });
+  // thinking: a block with a spinner and the count of characters while it
+  // comes; a click on it shows the text. It stops when the answer starts.
+  var FRAMES = ["\u280b", "\u2819", "\u2839", "\u2838", "\u283c", "\u2834", "\u2826", "\u2827", "\u2807", "\u280f"];
+  var think = null; // {box, spin, label, count, body, chars, started, timer}
+  function thinkStart() {
+    var box = document.createElement("div");
+    box.className = "msg thinking";
+    var head = document.createElement("button");
+    head.type = "button";
+    head.className = "think-head";
+    head.setAttribute("aria-expanded", "false");
+    var spin = document.createElement("span");
+    spin.className = "think-spin";
+    var label = document.createElement("span");
+    label.textContent = "thinking";
+    var count = document.createElement("span");
+    count.textContent = " \u00b7 0 chars";
+    head.appendChild(spin);
+    head.appendChild(label);
+    head.appendChild(count);
+    var body = document.createElement("div");
+    body.className = "think-body";
+    body.hidden = true;
+    head.addEventListener("click", function () {
+      body.hidden = !body.hidden;
+      head.setAttribute("aria-expanded", String(!body.hidden));
+    });
+    box.appendChild(head);
+    box.appendChild(body);
+    log.appendChild(box);
+    var i = 0;
+    spin.textContent = FRAMES[0];
+    var timer = setInterval(function () { i = (i + 1) % FRAMES.length; spin.textContent = FRAMES[i]; }, 90);
+    think = {box: box, spin: spin, label: label, count: count, body: body, chars: 0, started: Date.now(), timer: timer};
+  }
+  function thinkAdd(t) {
+    if (!think) { thinkStart(); }
+    think.body.textContent += t;
+    think.chars += t.length;
+    think.count.textContent = " \u00b7 " + think.chars + " chars";
+    window.scrollTo(0, document.body.scrollHeight);
+  }
+  function thinkEnd() {
+    if (!think) { return; }
+    clearInterval(think.timer);
+    think.spin.textContent = "\u2713";
+    think.label.textContent = "thought for " + ((Date.now() - think.started) / 1000).toFixed(1) + "s";
+    think = null;
+  }
+
   es.addEventListener("text", function (e) {
     var t = JSON.parse(e.data).text;
+    thinkEnd();
     if (!current) { current = add("answer", ""); }
     current.textContent += t;
     window.scrollTo(0, document.body.scrollHeight);
   });
   es.addEventListener("think", function (e) {
-    var t = JSON.parse(e.data).text;
-    if (!thinking) { thinking = add("think", ""); }
-    thinking.textContent += t;
-    window.scrollTo(0, document.body.scrollHeight);
+    thinkAdd(JSON.parse(e.data).text);
   });
   // what the recognizer heard: the message as the chat gets it
   es.addEventListener("heard", function (e) {
@@ -151,11 +239,12 @@
   });
   // a tool line or its result is a block of its own: the next text starts a new one
   es.addEventListener("tool", function (e) {
+    thinkEnd();
     add("tool", JSON.parse(e.data).text);
     current = null;
-    thinking = null;
   });
   es.addEventListener("result", function (e) {
+    thinkEnd();
     add("result", JSON.parse(e.data).text);
     current = null;
   });
@@ -169,8 +258,8 @@
     var st = JSON.parse(e.data).state;
     send.disabled = st === "start";
     abort.disabled = st !== "start";
+    thinkEnd();
     current = null;
-    thinking = null;
   });
 
   // Enter sends, Shift+Enter is a new line (not while an IME is composing)
@@ -259,6 +348,7 @@
   mic.addEventListener("click", function () {
     if (rec) { stopRec(); } else { startRec(); }
   });
+  mic.disabled = true; // until the state says the recognizer is there
 
   abort.addEventListener("click", function () {
     fetch("/abort", { method: "POST" });
