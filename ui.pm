@@ -142,12 +142,66 @@ sub stop {
 # The next input for chat_loop: a text message as it is, a recording first
 # written down and recognized (here, in the main flow: the recognizer is waited
 # for, a request must not wait). The text goes to the chat as soon as it is ready.
+# The model list and the model choice are work for the chat's own flow: they
+# go through the queue like the messages, and run where the HTTP waits are allowed.
+our $models_asked = 0;
+
+sub _ask_models {
+    push @queue, {models => 1} unless $models_asked++;
+    return;
+}
+
+# the models of every provider, to the page; refresh asks the providers again
+sub _send_models {
+    my ($refresh) = @_;
+    my ($pairs, $errors);
+    if($refresh or !@ai::ALL_MODELS){
+        ($pairs, $errors) = ai::all_models();
+    } else {
+        ($pairs, $errors) = (\@ai::ALL_MODELS, []);
+    }
+    log::error("no model list from $_") for @$errors;
+    publish(models => {
+        current => ai::current_label(),
+        list    => [map {ai::model_label($_)} @$pairs],
+    });
+    return;
+}
+
+# the page chose a model: the provider and the model of the session change
+sub _switch_model {
+    my ($choice) = @_;
+    my $ok = eval {
+        my $pairs = @ai::ALL_MODELS ? \@ai::ALL_MODELS : (ai::all_models())[0];
+        my $pair = ai::choice_pair($choice, $pairs);
+        my $err = ai::set_model(@$pair);
+        die $err if defined $err;
+        1;
+    };
+    if(!$ok){
+        my $msg = $@ // 'unknown error';
+        $msg =~ s/\s+\z//;
+        log::error("could not switch the model: $msg");
+    }
+    publish(state => _state());
+    _send_models(0);
+    return;
+}
+
 sub input {
     return sub {
         while(1){
             loop::run(sub { @queue or !$::LOOP });
             return unless $::LOOP;
             my $item = shift @queue;
+            if(ref $item eq 'HASH' and exists $item->{models}){
+                _send_models(1);
+                next;
+            }
+            if(ref $item eq 'HASH' and exists $item->{model}){
+                _switch_model($item->{model});
+                next;
+            }
             return $item unless ref $item;
             my $text = _recognize($item->{audio});
             next unless defined $text and length $text;
@@ -191,7 +245,7 @@ sub _ping {
 sub _state {
     return {
         session => $ai::AI_SESSION // '',
-        model   => $ai::SESSION_MODEL // '',
+        model   => ai::current_label(),
         busy    => $ai::BUSY ? \1 : \0,
         queued  => scalar(@queue),
         voice   => $voice // 'unknown',
@@ -492,6 +546,7 @@ sub _dispatch {
     }
 
     if($p eq '/events' and $m eq 'GET'){
+        _ask_models(); # the page wants the list of models, once
         $cn->{streaming} = 1;
         $cn->{handled} = 1;
         $cn->{out} .= "HTTP/1.1 200 OK\r\n"
@@ -502,6 +557,20 @@ sub _dispatch {
         push @clients, $cn;
         _queue($cn, "event: state\ndata: ".$::JSON->encode(_state())."\n\n");
         return;
+    }
+    if($p eq '/models' and $m eq 'POST'){
+        return _json($cn, 429, {error => "too many requests waiting"}) if @queue >= $MAX_QUEUE;
+        push @queue, {models => 1};
+        return _json($cn, 202, {queued => scalar @queue});
+    }
+    if($p eq '/model' and $m eq 'POST'){
+        my $d = eval {$::JSON->decode($body)};
+        my $id = ref($d) eq 'HASH' ? $d->{id} : undef;
+        return _json($cn, 400, {error => 'a JSON object with the id of the model is wanted'})
+            unless defined $id and !ref($id) and $id =~ m/\S/ and length($id) <= 300;
+        return _json($cn, 429, {error => "too many requests waiting"}) if @queue >= $MAX_QUEUE;
+        push @queue, {model => $id};
+        return _json($cn, 202, {queued => scalar @queue});
     }
     if($p eq '/message' and $m eq 'POST'){
         my $d = eval {$::JSON->decode($body)};

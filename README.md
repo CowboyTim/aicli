@@ -194,7 +194,7 @@ the model:
 | `/session create\|delete\|switch <name>` | manage sessions, `/session <name>` switches too; deleting the current one continues in a new, empty session |
 | `/session rename [<old>] <new>` | rename a session, with one name the current one |
 | `/session reset` | start the current session over: conversation, archive, token counters, undo journal and agent transcripts go, its name, prompt, model and input history stay |
-| `/model [name]` | list the models of the API, or set the model of this session |
+| `/model [provider/id]` | list the models of every provider of this chat as `provider/id`, or switch the session to one (a bare id works when only one provider has it) |
 | `/prompt [name]` | list the prompt templates, or switch the system prompt |
 | `/undo [list]` | take back the last file change a tool made, `list` shows them |
 | `/usage [reset]` | token usage and context size of this session |
@@ -243,7 +243,8 @@ Shift+Enter starts a new line, Stop ends the turn. Two looks (`simple`, like
 the terminal, and `cards`) and a theme (system, light, dark) are chosen in the
 header and remembered in the browser. The mic records in the browser and sends
 the recording to `AI_ASR_URL`; without a recognizer, or when it is not
-reachable, the mic is off and the page says why. Ctrl-C on the terminal ends
+reachable, the mic is off and the page says why. The model is chosen in the header: one
+dropdown with the models of every provider (`provider/id`). Ctrl-C on the terminal ends
 the chat as it does without the interface.
 
 Not yet: file downloads and pictures from the model, uploads, slash commands
@@ -300,6 +301,8 @@ or `[WRITE_edf5 ERROR_9a78 ... ERROR_9a78]`. In native mode it is a tool message
 | `perl` | Perl code, with the modules of the image (PDL, Audio::Wav) | `eval` in a forked child, or `Safe->reval` with `AI_PERL_SAFE` (no modules there) |
 | `fetch` | a web page as text, links as `[text](url)` | async HTTP in the event loop |
 | `search` | web search through your SearXNG instance | async HTTP, only offered with `AI_SEARXNG_URL` |
+| `models` | the models of every provider of the chat, as `provider/id` (every page of each list), with the context size when known and the current one marked; an optional filter on the ids | HTTP in the chat's flow, main chat only |
+| `model` | switch the chat to one of them, `provider/id` (the next answer comes from it; the provider and the model are kept in the session) | the session's files, main chat only |
 | `devel` | what a language has installed, with versions: `perl` (modules under @INC), `python` (packages), `lua` (rocks), `c` (pkg-config), `bash` (tools on the PATH); an optional name filter | reads only, in a forked child |
 | `image` | a picture (PNG, JPEG, GIF or WebP) in the workspace, sent with the next message; a bigger one is made smaller with ImageMagick; only offered with `AI_VISION=1` | Perl, and ImageMagick in a forked child |
 | `convert` | a picture converted with ImageMagick: a smaller size, a crop, a turn, another format by the output name (png, jpg, gif, webp, bmp, tif), the quality. Metadata is removed. Only offered where ImageMagick is installed | ImageMagick in a forked child, no shell, with `ai/imagemagick/policy.xml` |
@@ -523,9 +526,10 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `AI_API_KEY` | API key | required, except for local servers |
+| `AI_API_KEY_<NAME>` | a key of another provider, e.g. `AI_API_KEY_OPENAI`, `AI_API_KEY_OPENROUTER`: its models join the one list (`provider/id`) and the chat can switch to them | none |
 | `AI_PROVIDER` | `cerebras`, `openrouter`, `nvidia`, `openai`, `anthropic`, `lemonade` | detected from the key prefix |
 | `AI_LOCAL_SERVER` | URL of an OpenAI compatible server, instead of a provider | |
-| `AI_MODEL` | model for sessions without their own | provider-dependent |
+| `AI_MODEL` | model for sessions without their own; when none is set, the first model of the provider's list is used (not saved) | the first of the list |
 | `AI_SESSION` | session name | new `session-<uuid>` |
 | `AI_SESSION_KEEP_DAYS` | at start, remove sessions not used for that many days, without asking; also the default of `/session prune` | never |
 | `AI_PROMPT_TEMPLATE` | `default` (chat), `coder` (with tools) or `perl` (a Perl developer with the tools), a file in `ai/` | `default` |

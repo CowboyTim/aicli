@@ -20,6 +20,8 @@ BEGIN {
 
 # Variables/Handles
 our ($api_key, $AI_ENDPOINT_URL, $SESSION_MODEL, $provider_name);
+our ($MAIN_PROVIDER, $MAIN_ENDPOINT, $MAIN_KEY); # the provider chat_setup chose, its endpoint and key
+our @ALL_MODELS; # [provider, id] pairs of the last listing of every provider
 our ($AI_SESSION_DIR, $HISTORY_FILE, $PROMPT_FILE, $STATUS_FILE, $BASE_DIR, $AI_PROMPT_TEMPLATE, $AI_PROMPT_TEMPLATE_FILE, $AI_SESSION, $SESSIONS_DIR, $AI_PROVIDER, $AI_URL);
 our $cmds;
 our @MODELS;
@@ -156,11 +158,11 @@ sub chat_setup {
     # Normalize URL: no trailing / and no /v1, that is added per endpoint
     $AI_ENDPOINT_URL =~ s|/+$||;
     $AI_ENDPOINT_URL =~ s|/v1$||;
+    $MAIN_PROVIDER = $AI_PROVIDER;
+    $MAIN_ENDPOINT = $AI_ENDPOINT_URL;
+    $MAIN_KEY      = $api_key;
 
-    # AI_RAW point for e.g. non-jinja
-    $AI_URL = "$AI_ENDPOINT_URL/v1/chat/completions";
-    $AI_URL = "$AI_ENDPOINT_URL/v1/completions" if $::ORIG_ENV{AI_RAW};
-    $AI_URL = "$AI_ENDPOINT_URL/v1/messages" if $AI_PROVIDER eq 'anthropic';
+    $AI_URL = ai_url();
 
     set_workspace($::ORIG_ENV{AI_WORKSPACE});
     tidy_sessions($AI_SESSION);
@@ -267,6 +269,9 @@ sub use_session {
     $PROMPT_FILE    = "$AI_SESSION_DIR/prompt";
     $STATUS_FILE    = "$AI_SESSION_DIR/chat";
     $SESSION_MODEL  = read_session_model() || $::ORIG_ENV{AI_MODEL};
+    # the provider of the session (its model file names it); a session without one has the main provider
+    my $sp = read_session_provider() // $MAIN_PROVIDER;
+    use_provider($sp) if defined $sp and $sp ne $AI_PROVIDER and grep {$_ eq $sp} @{provider_names()};
     # where it is used, for --continue
     eval {spew("$AI_SESSION_DIR/cwd", Cwd::cwd()."\n")} if -d $AI_SESSION_DIR;
     # the footer: the numbers of this session, not the speed of a request of another
@@ -306,6 +311,146 @@ sub read_session_model {
     my $m = <$mfh>;
     close $mfh;
     return clean_model_name($m);
+}
+
+sub read_session_provider {
+    open(my $pfh, '<', "$AI_SESSION_DIR/provider")
+        or return undef;
+    my $p = <$pfh>;
+    close $pfh;
+    $p = clean_model_name($p);
+    return length($p) ? $p : undef;
+}
+
+# --- providers and models ---------------------------------------------------
+# The chat has one provider at a time: the main one (chat_setup chose it from
+# AI_PROVIDER, AI_API_KEY or AI_LOCAL_SERVER). Every other provider that has a
+# key of its own, AI_API_KEY_<NAME> (e.g. AI_API_KEY_OPENAI), is reached too.
+# A model is named "provider/id" in lists and choices. The session keeps the id
+# in its model file and the provider in its provider file.
+
+sub ai_url {
+    return "$AI_ENDPOINT_URL/v1/messages" if $AI_PROVIDER eq 'anthropic';
+    return "$AI_ENDPOINT_URL/v1/completions" if $::ORIG_ENV{AI_RAW};
+    return "$AI_ENDPOINT_URL/v1/chat/completions";
+}
+
+# name => key, for the cloud providers that have a key of their own
+sub provider_keys {
+    my %keys;
+    for my $name (keys %PROVIDERS) {
+        next if $PROVIDERS{$name}{local};
+        my $key = $::ORIG_ENV{'AI_API_KEY_'.uc($name)};
+        $keys{$name} = $key if length($key // '');
+    }
+    return \%keys;
+}
+
+# the providers of the chat: the main one first, then the others with a key
+sub provider_names {
+    my $main = $MAIN_PROVIDER // $AI_PROVIDER // '';
+    return [grep {length} $main, grep {$_ ne $main} sort keys %{provider_keys()}];
+}
+
+sub endpoint_of {
+    my ($name) = @_;
+    my $url = (defined $MAIN_PROVIDER and $name eq $MAIN_PROVIDER) ? $MAIN_ENDPOINT : $PROVIDERS{$name}{url};
+    $url //= '';
+    $url =~ s|/+$||;
+    $url =~ s|/v1$||;
+    return $url;
+}
+
+# make one of provider_names() the provider of the chat
+sub use_provider {
+    my ($name) = @_;
+    my $is_main = $name eq ($MAIN_PROVIDER // '');
+    $AI_PROVIDER     = $name;
+    $AI_ENDPOINT_URL = endpoint_of($name);
+    $api_key         = $is_main ? $MAIN_KEY : provider_keys()->{$name};
+    $AI_URL          = ai_url();
+    return;
+}
+
+# run code with another provider as the chat's provider, then the chat's own again
+sub with_provider {
+    my ($name, $code) = @_;
+    local ($AI_PROVIDER, $AI_ENDPOINT_URL, $api_key, $AI_URL) = ($AI_PROVIDER, $AI_ENDPOINT_URL, $api_key, $AI_URL);
+    use_provider($name);
+    return $code->();
+}
+
+sub model_label {
+    my ($pair) = @_;
+    return "$pair->[0]/$pair->[1]";
+}
+
+# the choice of the session, as a label; '' when there is none
+sub current_label {
+    return '' unless length($SESSION_MODEL // '');
+    return "$AI_PROVIDER/$SESSION_MODEL";
+}
+
+# the models of every provider of the chat: [provider, id] pairs, and the
+# errors of the providers that gave no list
+sub all_models {
+    my (@pairs, @errors);
+    for my $name (@{provider_names()}) {
+        my ($ids, $err) = with_provider($name, sub {
+            my $ids = fetch_models();
+            return ($ids, $ids ? undef : ($utils::http_error // 'no list'));
+        });
+        if (!$ids) {
+            push @errors, "$name: $err";
+            next;
+        }
+        push @pairs, map {[$name, $_]} @$ids;
+    }
+    @ALL_MODELS = @pairs;
+    return (\@pairs, \@errors);
+}
+
+# the pair a choice names: "provider/id" of the list, or a bare id (of this
+# provider, else of the one provider that has it). undef when the list has no
+# such model; dies when a bare id is at more than one provider.
+sub resolve_model {
+    my ($choice, $pairs) = @_;
+    $choice = clean_model_name($choice);
+    return undef unless length $choice;
+    my @exact = grep {model_label($_) eq $choice} @$pairs;
+    return $exact[0] if @exact;
+    my @bare = grep {$_->[1] eq $choice} @$pairs;
+    my @here = grep {$_->[0] eq $AI_PROVIDER} @bare;
+    return $here[0] if @here;
+    return $bare[0] if @bare == 1;
+    die "'$choice' is at more than one provider: name one of ".join(', ', map {model_label($_)} @bare)."\n"
+        if @bare > 1;
+    return undef;
+}
+
+# the pair of a choice: from the lists, else as it is: "provider/id" when the
+# provider is one of the chat's, a bare id at the chat's provider otherwise
+sub choice_pair {
+    my ($choice, $pairs) = @_;
+    my $pair = resolve_model($choice, $pairs);
+    return $pair if $pair;
+    $choice = clean_model_name($choice);
+    for my $name (@{provider_names()}) {
+        return [$name, substr($choice, length($name) + 1)] if index($choice, "$name/") == 0 and length($choice) > length($name) + 1;
+    }
+    return [$AI_PROVIDER, $choice];
+}
+
+# the model and the provider of the session, kept in its files, used by the next request
+sub set_model {
+    my ($name, $id) = @_;
+    if(!eval {spew("$AI_SESSION_DIR/model", $id); spew("$AI_SESSION_DIR/provider", $name); 1}){
+        return $@ || "unknown error\n";
+    }
+    use_provider($name);
+    $SESSION_MODEL = $id;
+    status_info();
+    return undef;
 }
 
 sub slurp {
@@ -1540,14 +1685,14 @@ sub over_budget {
 #------------------------------------------------------------------------------
 # context management: keep the conversation within the context window
 
-our %MODEL_CONTEXT;  # model id => context size, from the model list of the API
+our %MODEL_CONTEXT;  # "provider/model id" => context size, from the model list of the API
 our $SERVER_CONTEXT; # context size of a local server (llama.cpp /props)
 
 # context window in tokens, 0 when unknown
 sub context_limit {
     my $env = $::ORIG_ENV{AI_CONTEXT_TOKENS};
     return $env + 0 if defined $env and $env =~ m/^\d+$/;
-    return $MODEL_CONTEXT{$SESSION_MODEL // ''} || $SERVER_CONTEXT || 0;
+    return $MODEL_CONTEXT{"$AI_PROVIDER/".($SESSION_MODEL // '')} || $SERVER_CONTEXT || 0;
 }
 
 sub is_tool_result {
@@ -2270,38 +2415,53 @@ sub rename_session {
 }
 
 sub switch_model {
-    my ($new_model) = @_;
-    $new_model = clean_model_name($new_model) || clean_model_name($::ORIG_ENV{AI_MODEL});
-    if(!length($new_model)){
+    my ($choice) = @_;
+    $choice = clean_model_name($choice) || clean_model_name($::ORIG_ENV{AI_MODEL});
+    if(!length($choice)){
         print "No model given.\n";
         return;
     }
-    if(!eval {spew("$AI_SESSION_DIR/model", $new_model); 1}){
-        print "Failed to switch model: $@";
+    my ($pairs, $errors) = all_models();
+    log::error("no model list from $_") for @$errors;
+    my $pair = eval {choice_pair($choice, $pairs)};
+    if(!$pair){
+        print $@;
         return;
     }
-    $SESSION_MODEL = $new_model;
-    status_info();
-    print "Switched model to '$new_model'.\n";
+    if(my $err = set_model(@$pair)){
+        print "Failed to switch model: $err";
+        return;
+    }
+    print "Switched model to '".model_label($pair)."'.\n";
 }
 
 # the model list of the API, undef when it can't be fetched
+# Every page of it: Anthropic pages its list (20 by default, 1000 at most, the
+# last id of a page is the next page's after_id).
 sub fetch_models {
-    my $response = eval {utils::http("get", "$AI_ENDPOINT_URL/v1/models", undef, $api_key, undef, provider_headers($api_key))};
-    return unless $response;
-    my $resp = eval {JSON::XS::decode_json($response)};
     my @models;
-    if (ref($resp) eq 'HASH' and ref($resp->{data}) eq 'ARRAY') {
-        @models = @{$resp->{data}};
-    } elsif (ref($resp) eq 'ARRAY') {
-        @models = @$resp;
-    } else {
-        return;
+    my $after;
+    for my $page (1 .. 50) {
+        my @q = ($AI_PROVIDER // '') eq 'anthropic' ? ('limit=1000') : ();
+        push @q, "after_id=$after" if defined $after;
+        my $url = "$AI_ENDPOINT_URL/v1/models".(@q ? '?'.join('&', @q) : '');
+        my $response = eval {utils::http("get", $url, undef, $api_key, undef, provider_headers($api_key))};
+        return unless $response;
+        my $resp = eval {JSON::XS::decode_json($response)};
+        if (ref($resp) eq 'HASH' and ref($resp->{data}) eq 'ARRAY') {
+            push @models, @{$resp->{data}};
+        } elsif (ref($resp) eq 'ARRAY') {
+            push @models, @$resp;
+        } else {
+            return;
+        }
+        last unless ref($resp) eq 'HASH' and $resp->{has_more} and defined $resp->{last_id} and length $resp->{last_id};
+        $after = $resp->{last_id};
     }
     foreach my $m (grep {ref($_) eq 'HASH' and defined $_->{id}} @models){
         my $ctx = $m->{context_length} // $m->{context_window}
                // (ref($m->{meta}) eq 'HASH' ? $m->{meta}{n_ctx} : undef);
-        $MODEL_CONTEXT{$m->{id}} = $ctx + 0 if defined $ctx and $ctx =~ m/^\d+$/ and $ctx > 0;
+        $MODEL_CONTEXT{"$AI_PROVIDER/$m->{id}"} = $ctx + 0 if defined $ctx and $ctx =~ m/^\d+$/ and $ctx > 0;
     }
     return [grep {defined and length} map {ref($_) eq 'HASH' ? $_->{id} : $_} @models];
 }
@@ -2317,21 +2477,22 @@ sub fetch_server_context {
 }
 
 sub list_models {
-    my $models = fetch_models();
-    if(!$models){
-        log::error("Failed to fetch models".($utils::http_error ? ": $utils::http_error" : ""));
-        print "Current model: ".($SESSION_MODEL || '<server default>')."\n";
+    my ($pairs, $errors) = all_models();
+    log::error("no model list from $_") for @$errors;
+    if(!@$pairs){
+        print "Current model: ".(current_label() || '<server default>')."\n";
         return;
     }
-    @MODELS = @$models;
-    $cmds->{'/model'} = {map {($_, sub {0})} @MODELS} if $cmds;
-    foreach my $id (@MODELS) {
-        if ($id eq ($SESSION_MODEL // '')) {
-            print "${colors::green_color}* $id${colors::reset_color}\n";
+    my $current = current_label();
+    foreach my $pair (@$pairs) {
+        my $label = model_label($pair);
+        if ($label eq $current) {
+            print "${colors::green_color}* $label${colors::reset_color}\n";
         } else {
-            print "  $id\n";
+            print "  $label\n";
         }
     }
+    $cmds->{'/model'} = {map {(model_label($_), sub {0})} @$pairs} if $cmds;
     return;
 }
 
@@ -2842,6 +3003,12 @@ sub setup_commands {
         @MODELS = @{fetch_models() // []};
         fetch_server_context()
             if $::ORIG_ENV{AI_LOCAL_SERVER} and !defined $::ORIG_ENV{AI_CONTEXT_TOKENS};
+        # no model set (AI_MODEL, the session's): the first one of the provider's list
+        if (!length($SESSION_MODEL // '') and @MODELS) {
+            $SESSION_MODEL = $MODELS[0];
+            status_info();
+            log::info("no model set: using $SESSION_MODEL, the first model of $AI_PROVIDER");
+        }
     }
     $cmds = {map {
         my $c = $COMMANDS{$_};
@@ -4439,6 +4606,25 @@ EOb
         # only where the ImageMagick program is installed
         available => sub {tools::_magick() ? 1 : 0},
     },
+    models => {
+        description => "list the models the provider of this chat has (all of them, page by page), with the context size when it is known, the current one marked. Give a filter, a regular expression for the ids, to narrow it: the lists are long. Use it to find a model by name, then switch with model",
+        syntax => "///MODELS_3c9a+EO_6d0f\n{{filter}}\nEO_6d0f[LENGTH({{filter}})]\nMODELS_3c9a",
+        properties  => {
+            "filter" => {type => "string", description => "A regular expression for the model ids; empty for all"},
+        },
+        required => [],
+        # a sub-agent cannot wait for the list, and does not switch the model
+        available => sub {$ai::IN_AGENT ? 0 : 1},
+    },
+    model => {
+        description => "switch the model of this chat to another one the provider has: give its id exactly, as models lists it. The next answer comes from that model; the conversation is kept",
+        syntax => "///MODEL_7e21+EO_4a19\n{{id}}\nEO_4a19[LENGTH({{id}})]\nMODEL_7e21",
+        properties  => {
+            "id" => {type => "string", description => "The id of the model, as models lists it"},
+        },
+        required => ["id"],
+        available => sub {$ai::IN_AGENT ? 0 : 1},
+    },
     devel => {
         description => "find what a development language has installed, with versions, when you do not know the exact name: perl (modules: a filter is required, a regular expression for the module names), python (packages), lua (rocks), c and c++ (compilers, and libraries known to pkg-config), bash (the common tools on the PATH). Filters are regular expressions for the names; at most 40 lines come back. If you know the module name, run perl -MName -e 'print \$Name::VERSION' instead",
         syntax => "///DEVEL_9c3e+EO_5b7a+EO_e21d\n{{language}}\nEO_5b7a[LENGTH({{language}})]\n{{filter}}\nEO_e21d[LENGTH({{filter}})]\nDEVEL_9c3e",
@@ -5073,6 +5259,40 @@ sub devel_build {
         print "devel $lang: ".scalar(@lines)." lines\n";
     }
     return;
+}
+
+# models: the models of every provider of the chat, as provider/id
+sub models_3c9a {
+    my ($t_args) = @_;
+    my $filter = utils::trim($t_args->[0] // '');
+    my $rx = length($filter) ? (eval {qr/$filter/i} // die "the filter is not a regular expression: $filter\n") : undef;
+    my ($pairs, $errors) = ai::all_models();
+    die "no provider gave a model list: ".join('; ', @$errors)."\n" if !@$pairs and @$errors;
+    my $current = ai::current_label();
+    # the filter is for the model ids; the labels show the provider in front
+    my @shown = $rx ? grep {$_->[1] =~ $rx} @$pairs : @$pairs;
+    my @labels = map {ai::model_label($_)} @shown;
+    my $total = @labels;
+    my $head = "models: $total".($rx ? " matching '$filter'" : "")
+        .(@$errors ? " (no list from: ".join('; ', @$errors).")" : "");
+    return "$head\n" unless $total;
+    my @lines = map {my $ctx = $ai::MODEL_CONTEXT{$_}; $_.(defined $ctx ? "  (context $ctx)" : "").($_ eq $current ? "  current" : "")} @labels;
+    splice(@lines, 200) if $total > 200;
+    return join("\n", $head, @lines, ($total > 200 ? ("... ".($total - 200)." more, give a filter") : ()))."\n";
+}
+
+# model: switch to one of them, as provider/id (or a bare id, when it is in one list only)
+sub model_7e21 {
+    my ($t_args) = @_;
+    my $choice = utils::trim($t_args->[0] // '');
+    die "no model given: an id from models, as provider/id\n" unless length $choice;
+    my ($pairs) = ai::all_models();
+    my $pair = ai::resolve_model($choice, $pairs)
+        or die "no model '$choice' at any provider: look for it with models\n";
+    if(my $err = ai::set_model(@$pair)){
+        die "could not switch the model: $err";
+    }
+    return "the model is now ".ai::model_label($pair).": the next answer comes from it\n";
 }
 
 sub devel_9c3e {

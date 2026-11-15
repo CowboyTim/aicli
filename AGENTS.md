@@ -335,6 +335,7 @@ How they run:
 | delete, move, mkdir, list | in-process Perl (`unlink`/`rmdir`, `rename`, `File::Path`, `readdir`) |
 | find | in-process Perl: `walk_tree()`, opendir/readdir/closedir, a filter and a prune sub; `-l` before descending, so links are not followed |
 | image | in-process Perl: `_image_type()` checks the format; a picture bigger than `AI_IMAGE_MAX` is made smaller by `_shrink()` (ImageMagick, forked); the picture waits in `@tools::IMAGES`, and `handle_llm_response()` sends it in a user message after the results, as `wire_message()` makes it (OpenAI form) or `provider::anthropic::message_content()` (Anthropic). Only with `AI_VISION=1`, never for a sub-agent |
+| models, model | `models`: `all_models()` (`fetch_models()` of every provider: Anthropic pages its list, `after_id`), the filter as a regex on the ids, the context from `MODEL_CONTEXT`; `model`: a choice must be in the list (`resolve_model()`), then `set_model()` writes the session's model and provider files. Both are main chat only (`available` is false for sub-agents): a sub-agent cannot wait for the list, and does not switch the model |
 | devel | a probe per language in `%DEVEL_PROFILE`: `perl` reads the `$VERSION` of each `.pm` under `@INC` (nothing is loaded), `bash` looks at the PATH, the others run their list tool (`python3`, `luarocks`, `pkg-config`) through `_run`; the list is cached per process in `%DEVEL_CACHE`, and a missing program is an answer, not an error. The system prompt does not carry it, the model asks |
 | convert | ImageMagick (`magick` or `convert`, `_magick()`) in a forked child through `_run` (`_magick_run`, `_magick_args`): a list, no shell, the input checked by its first bytes (`_picture_ok()`), the output written to a temp name and renamed when it worked, `_changing(..., binary => 1)` for the journal. Works for sub-agents too (a job) |
 | grep | `_run` → `exec grep -rn -e <pattern> -- <path>` |
@@ -406,6 +407,21 @@ with an answer, `one_shot()` makes the exit code of `-p` out of that.
 
 ## Providers
 
+The chat has one main provider (`chat_setup`: `AI_PROVIDER`, the key's prefix,
+or `AI_LOCAL_SERVER`), kept in `$MAIN_PROVIDER`, `$MAIN_ENDPOINT`, `$MAIN_KEY`.
+Every other provider with a key of its own (`AI_API_KEY_<NAME>`, from
+`provider_keys()`) is reached too: `provider_names()` lists them, `use_provider()`
+makes one the chat's (endpoint, key, `$AI_URL` from `ai_url()`), `with_provider()`
+does it for the time of a call. `all_models()` lists every provider as
+`[provider, id]` pairs (`@ALL_MODELS`), and the label is `provider/id`
+(`model_label()`, `current_label()`). `resolve_model()` and `choice_pair()` read a
+choice: a label of the list, a bare id (the chat's provider first, else the one
+provider that has it), or a label of a provider the list does not have. `set_model()`
+writes the session's `model` and `provider` files, `read_session_provider()` reads
+the second on `use_session()`. The context is keyed `"provider/id"` in `%MODEL_CONTEXT`.
+The web page gets the list as `models` events (`ui::_send_models`); its choices
+come as `POST /model` and are switched in the chat's flow (`ui::input()`).
+
 `%ai::PROVIDERS` (URL, key prefix) and a `provider::<name>` package with
 `req()` (chat request) and `raw()` (raw completion request). All are OpenAI
 compatible streaming APIs: cerebras, openrouter, nvidia, openai, lemonade, and `local`
@@ -445,6 +461,7 @@ Other APIs are reached through an OpenAI compatible gateway, such as LiteLLM or 
 | `t/89_context_thinking.t` | the reasoning setting, what the request says, the first request through compactions, `/context` |
 | `t/97_live.t` | a real model, only when `AI_LIVE_SERVER` is set (`AI_LIVE_MODEL`, optional `AI_LIVE_SEARXNG`): one answer, a native tool call, the thinking setting, search. Skipped otherwise |
 | `t/100_ui.t` | the web interface: routes, the token, origin check, body limits, the input queue, the event stream on socket pairs; the listen addresses (IPv4, IPv6, `::`), stop and start on the same port, TLS with a generated certificate (a https request, the Secure cookie), the state of the speech recognizer; then `ai.pl --ui` as a child, a message in and the streamed answer out, Ctrl-C |
+| `t/99_models.t` | the models: every page of the list (Anthropic), one list for the others, several providers in one list (`provider/id`, the keys of each), resolving a choice, the session's provider, the context per provider, the `models` tool (a filter, the current model, the context), the `model` tool (switch, an unknown id refused), the sub-agents without them |
 | `t/98_voice.t` | speech: the multipart upload, the recorder child stopped by SIGINT, the text of the recognizer, its errors (endpoint not reachable, HTTP status, no text), `/voice` |
 | `t/95_cli.t` | `-p` (one request, exit codes, stdin) and `-c` (continue per directory), as a process |
 | `t/85_web.t` | proxy selection, HTML to text, fetch, search (mocked HTTP layer), a real fetch, `/retry`, `/rewind` |

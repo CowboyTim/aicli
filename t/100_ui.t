@@ -303,6 +303,36 @@ SKIP: {
     ui::stop();
 }
 
+# --- the models: the list and the choice go through the chat's flow ----------
+
+{
+    my $r = request('POST', '/model', body => '{"id":"openrouter/llama-b"}');
+    is(status_of($r), 401, "model: needs the token");
+    @ui::queue = ();
+    $r = request('POST', '/model', cookie => $ok_cookie, body => '{"id":"openrouter/llama-b"}');
+    is(status_of($r), 202, "model: a choice is accepted");
+    is_deeply($ui::queue[0], {model => 'openrouter/llama-b'}, "model: queued for the chat's flow");
+    $r = request('POST', '/model', cookie => $ok_cookie, body => '{"id":""}');
+    is(status_of($r), 400, "model: an empty id is refused");
+    $r = request('POST', '/model', cookie => $ok_cookie, body => 'not json');
+    is(status_of($r), 400, "model: not JSON is refused");
+    $r = request('POST', '/models', cookie => $ok_cookie);
+    is(status_of($r), 202, "models: a refresh is accepted");
+    is_deeply($ui::queue[1], {models => 1}, "models: queued for the chat's flow");
+    @ui::queue = ();
+}
+
+{
+    TestAI::setup(AI_API_KEY => 'sk-test', AI_PROVIDER => 'openai', AI_LOCAL_SERVER => undef, AI_API_KEY_OPENROUTER => 'sk-or-test');
+    @ai::ALL_MODELS = (['openai', 'gpt-a'], ['openrouter', 'llama-b']);
+    ui::_switch_model('openrouter/llama-b');
+    is($ai::AI_PROVIDER, 'openrouter', "switch from the page: the provider changes");
+    is($ai::SESSION_MODEL, 'llama-b', "switch from the page: the model changes");
+    is(ui::_state()->{model}, 'openrouter/llama-b', "the state names the current choice");
+    my $err = TestAI::capture {ui::_switch_model('openrouter/no-such')};
+    is($ai::SESSION_MODEL, 'no-such', "a choice that is not listed is taken as a bare id at the provider (as /model does)");
+}
+
 # --- the speech recognizer: the page is told whether the mic can work -------
 
 {

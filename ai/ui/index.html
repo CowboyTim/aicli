@@ -75,7 +75,7 @@
 <header>
   <span id="status">connecting…</span>
   <span>
-    <span id="model"></span>
+    <select id="model" aria-label="model" title="model"></select>
     <select id="look" aria-label="look">
       <option value="simple">simple</option>
       <option value="cards">cards</option>
@@ -160,8 +160,54 @@
     if (!note) { voiceWarned = null; }
   }
 
+  // the model list: "provider/model" in one list; a choice is sent to the chat
+  function setModel(current, list) {
+    model.textContent = "";
+    var names = list.slice();
+    if (current && names.indexOf(current) < 0) { names.unshift(current); }
+    if (!names.length) {
+      var none = document.createElement("option");
+      none.textContent = "no models";
+      none.value = "";
+      model.appendChild(none);
+      model.disabled = true;
+      return;
+    }
+    names.forEach(function (name) {
+      var o = document.createElement("option");
+      o.value = name;
+      o.textContent = name;
+      model.appendChild(o);
+    });
+    model.disabled = false;
+    model.value = current || names[0];
+  }
+
+  model.addEventListener("change", function () {
+    fetch("/model", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: model.value })
+    }).then(function (r) {
+      if (!r.ok) { return r.json().then(function (j) { add("error", j.error || r.statusText); }); }
+    }).catch(function (err) { add("error", String(err)); });
+  });
+
+  // the state names the current model: selected, added first when the list lacks it
+  function setCurrent(current) {
+    if (!current) { return; }
+    var has = Array.prototype.some.call(model.options, function (o) { return o.value === current; });
+    if (!has) {
+      var o = document.createElement("option");
+      o.value = current;
+      o.textContent = current;
+      model.insertBefore(o, model.firstChild);
+    }
+    model.value = current;
+  }
+
   function setState(s) {
-    model.textContent = s.model || "";
+    setCurrent(s.model);
     status.textContent = s.session ? "session " + s.session : "";
     setVoice(s.voice);
   }
@@ -170,6 +216,10 @@
   es.onopen = function () { status.textContent = "connected"; };
   es.onerror = function () { status.textContent = "disconnected, retrying…"; };
   es.addEventListener("state", function (e) { setState(JSON.parse(e.data)); });
+  es.addEventListener("models", function (e) {
+    var d = JSON.parse(e.data);
+    setModel(d.current, d.list || []);
+  });
   // thinking: a block with a spinner and the count of characters while it
   // comes; a click on it shows the text. It stops when the answer starts.
   var FRAMES = ["\u280b", "\u2819", "\u2839", "\u2838", "\u283c", "\u2834", "\u2826", "\u2827", "\u2807", "\u280f"];

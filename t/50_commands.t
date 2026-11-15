@@ -144,7 +144,7 @@ sub cmd {
 # /model
 {
     my ($r, $out) = cmd("/model 'big-model' ");
-    like($out, qr/Switched model to 'big-model'/, "/model: switched");
+    like($out, qr{Switched model to 'local/big-model'}, "/model: switched");
     is($ai::SESSION_MODEL, "big-model", "/model: in use");
     is(ai::slurp("$tmp/aicli/sessions/test/model"), "big-model", "/model: saved");
     is(provider::req({role => 'user', content => 'x'})->{model}, "big-model", "/model: used for requests");
@@ -155,12 +155,12 @@ sub cmd {
         return '{"data":[{"id":"small-model"},{"id":"big-model"}]}';
     });
     ($r, $out) = cmd("/model");
-    like($out, qr/^  small-model$/m, "/model: lists models");
-    like($out, qr/\* big-model/, "/model: marks the current one");
+    like($out, qr{^  local/small-model$}m, "/model: lists models");
+    like($out, qr{\* local/big-model}, "/model: marks the current one");
     TestAI::mock_http(undef);
     ($r, $out) = cmd("/model");
     is($r, 0, "/model: survives a failing API");
-    like($out, qr/Failed to fetch models.*Current model: big-model/s, "/model: says what it knows");
+    like($out, qr{no model list from local.*Current model: local/big-model}s, "/model: says what it knows");
     TestAI::mock_http();
 }
 

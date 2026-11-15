@@ -61,7 +61,7 @@ like($out, qr/Deleted session 'renamed-session'/, "Output should confirm deletio
 print "Testing a session over several commands...\n";
 $ENV{AI_SESSION} = "kept";
 $out = ai_pl("/model my-model", "/session create other", "/session list", "/session kept", "/session delete other", "/session list");
-like($out, qr/Switched model to 'my-model'/, "model switched");
+like($out, qr{Switched model to 'local/my-model'}, "model switched");
 like($out, qr/\* other.*Switched to session: kept.*Deleted session 'other'/s, "create, switch back, delete in one run");
 $out = ai_pl("/session list");
 like($out, qr/\* kept/, "AI_SESSION selects the session");

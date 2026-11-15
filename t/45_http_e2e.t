@@ -36,7 +36,7 @@ my ($Y, $G, $R, $T) = ($colors::yellow_color1, $colors::green_color, $colors::re
 {
     is_deeply(ai::fetch_models(), ["fake-1", "fake-2"], "models: fetched");
     my $out = TestAI::capture {ai::handle_command("/model")};
-    like($out, qr/\* fake-1.*  fake-2/s, "models: /model lists them");
+    like($out, qr{\* local/fake-1.*  local/fake-2}s, "models: /model lists them");
 }
 
 # API errors don't kill the chat
@@ -134,7 +134,7 @@ my ($Y, $G, $R, $T) = ($colors::yellow_color1, $colors::green_color, $colors::re
     ai::spew("$tmp/input", "/model fake-2\n/pwd\nplease run it\n/exit\nnot reached\n");
     my $out = `$^X $TestAI::ROOT/ai.pl < $tmp/input 2>&1`;
     is($?, 0, "ai.pl: exit 0");
-    like($out, qr/Switched model to 'fake-2'/, "ai.pl: command ran");
+    like($out, qr{Switched model to 'local/fake-2'}, "ai.pl: command ran");
     (my $plain = $out) =~ s/\e\[[0-9;]*m//g;
     like($plain, qr/The tool said: e2e-42 \(messages: 4, model: fake-2, auth: none\)/, "ai.pl: agent loop end to end");
     local $ai::STATUS_FILE = "$tmp/e2e/sessions/e2e/chat";
