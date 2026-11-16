@@ -217,6 +217,38 @@ waitpid($bpid, 0);
     unlike($text, qr/"mounts"|privileged/, "the body of a request is not logged");
 }
 
+# --- the program itself: started as the container starts it, it logs and listens
+
+{
+    my $cfg = "$tmp/broker.json";
+    open(my $cf, '>', $cfg) or die "cfg: $!";
+    print {$cf} $J->encode({root => $root, images => ['x:latest'], memory => '1g', pids => 64});
+    close $cf;
+    my $err = "$tmp/start.err";
+    my $sock = "$tmp/start.sock";
+    my $pid = fork() // die "fork: $!";
+    if (!$pid) {
+        open(STDERR, '>', $err) or POSIX::_exit(9);
+        open(STDOUT, '>', "$tmp/start.out") or POSIX::_exit(9);
+        $ENV{AI_BROKER_CONFIG} = $cfg;
+        $ENV{AI_BROKER_HOST_ROOT} = '/host/projects';
+        $ENV{AI_BROKER_SOCKET} = $sock;
+        $ENV{AI_BROKER_ENGINE} = "$tmp/none.sock";
+        exec($^X, "$FindBin::Bin/../broker.pl", 'serve') or POSIX::_exit(9);
+    }
+    for (1 .. 100) { last if -S $sock; select(undef, undef, undef, 0.05) }
+    my $answer = main::ask($sock, {op => 'list'});
+    kill 'TERM', $pid;
+    waitpid($pid, 0);
+    open(my $ef, '<', $err) or die "err: $!";
+    my $log = do { local $/; <$ef> } // '';
+    close $ef;
+    like($log, qr/broker\[\d+\]: starting: root=\S+ host_root=\/host\/projects/, "the program logs its start, with the settings");
+    like($log, qr/listening on \S+ as uid \d+/, "and that it listens, as which user");
+    like($log, qr/request op=list project=- -> /, "and the requests it answers");
+    ok(!$answer->{ok}, "list without an engine is refused, as it should be");
+}
+
 # --- the chunked answers of the engine ---------------------------------------
 
 is(broker::_dechunk("5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n"), "hello world", "a chunked answer is put together");

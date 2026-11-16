@@ -272,7 +272,7 @@ sub main {
     $cfg->{socket}    = $ENV{AI_BROKER_SOCKET}    if length($ENV{AI_BROKER_SOCKET} // '');
     $cfg->{engine}    = $ENV{AI_BROKER_ENGINE}    if length($ENV{AI_BROKER_ENGINE} // '');
     my $b = broker->new(%$cfg);
-    _log(sprintf("starting: root=%s host_root=%s engine=%s images=%s memory=%s pids=%s",
+    broker::_log(sprintf("starting: root=%s host_root=%s engine=%s images=%s memory=%s pids=%s",
         $b->{root}, $b->{host_root}, $b->{engine}, join(',', @{$b->{images}}), $b->{memory}, $b->{pids}));
     $b->serve();
     return 0;
