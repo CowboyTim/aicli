@@ -93,6 +93,8 @@
   .tool { color: var(--accent); font-size: 13px; margin-top: 8px; }
   .result { color: var(--muted); font-size: 13px; margin-left: 1.5em; }
   .usage { color: var(--muted); font-size: 13px; }
+  /* waiting: a spinner and the seconds while a request has no answer yet */
+  .wait { color: var(--muted); font-size: 13px; margin: 0 0 8px; }
 
   /* simple: the terminal */
   html[data-look="simple"] body { font-family: var(--mono); font-size: 16px; line-height: 1.5; }
@@ -148,6 +150,7 @@
 </header>
 <main>
   <div id="log"></div>
+  <div id="wait" class="wait" hidden><span id="wait-spin" class="think-spin"></span><span id="wait-label"></span></div>
   <form id="form">
     <textarea id="text" rows="2" placeholder="Message" aria-label="message" autocomplete="off" autocorrect="off" autocapitalize="sentences" spellcheck="false"></textarea>
     <div class="bar">
@@ -424,7 +427,30 @@
     var timer = setInterval(function () { i = (i + 1) % FRAMES.length; spin.textContent = FRAMES[i]; }, 90);
     think = {box: box, spin: spin, label: label, count: count, body: body, chars: 0, started: Date.now(), timer: timer};
   }
+  // waiting: shown while a request has no answer yet (a model can take a while);
+  // it stops at the first text, thinking or tool line, or when the turn ends
+  var waitEl = document.getElementById("wait");
+  var waitSpin = document.getElementById("wait-spin");
+  var waitLabel = document.getElementById("wait-label");
+  var waitTimer = null, waitI = 0, waitFrom = 0, waitBase = "";
+  function waitTick() {
+    waitI = (waitI + 1) % FRAMES.length;
+    waitSpin.textContent = FRAMES[waitI];
+    waitLabel.textContent = waitBase + " · " + Math.floor((Date.now() - waitFrom) / 1000) + "s";
+  }
+  function waitShow(label) {
+    waitBase = label;
+    waitFrom = Date.now();
+    waitEl.hidden = false;
+    if (!waitTimer) { waitTimer = setInterval(waitTick, 90); }
+    waitTick();
+  }
+  function waitHide() {
+    if (waitTimer) { clearInterval(waitTimer); waitTimer = null; }
+    waitEl.hidden = true;
+  }
   function thinkAdd(t) {
+    waitHide();
     if (!think) { thinkStart(); }
     think.raw = (think.raw || "") + t;
     think.body.textContent = "";
@@ -441,8 +467,12 @@
     think = null;
   }
 
+  es.addEventListener("wait", function (e) {
+    waitShow(JSON.parse(e.data).text);
+  });
   es.addEventListener("text", function (e) {
     var t = JSON.parse(e.data).text;
+    waitHide();
     thinkEnd();
     if (!current) { current = add("answer", ""); }
     current.raw = (current.raw || "") + t;
@@ -461,11 +491,13 @@
   });
   // a tool line or its result is a block of its own: the next text starts a new one
   es.addEventListener("tool", function (e) {
+    waitHide();
     thinkEnd();
     add("tool", JSON.parse(e.data).text);
     current = null;
   });
   es.addEventListener("result", function (e) {
+    waitHide();
     thinkEnd();
     add("result", JSON.parse(e.data).text);
     current = null;
@@ -474,12 +506,14 @@
     add("usage", JSON.parse(e.data).text);
   });
   es.addEventListener("failed", function (e) {
+    waitHide();
     if (e.data) { add("error", JSON.parse(e.data).text); }
   });
   es.addEventListener("turn", function (e) {
     var st = JSON.parse(e.data).state;
     send.disabled = st === "start";
     abort.disabled = st !== "start";
+    waitHide();
     thinkEnd();
     current = null;
   });

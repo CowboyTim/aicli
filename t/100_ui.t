@@ -203,6 +203,14 @@ is(status_of($r), 413, "a body too big is refused");
     like($got, qr/event: text\ndata: \{"text":"h[^\n]*llo\\nworld"\}\n\n/, "a published event arrives as one SSE event (json on one line)");
     ui::publish(turn => {state => 'start'});
     like(drain($b), qr/event: turn\ndata: \{"state":"start"\}/, "turn events too");
+    ui::publish(wait => {text => 'waiting for model'});
+    like(drain($b), qr/event: wait\ndata: \{"text":"waiting for model"\}/, "the wait event (the spinner) arrives");
+    # the page shows the spinner for it and hides it at the first output
+    open(my $wfh, '<', "$FindBin::Bin/../ai/ui/index.html") or die "no page: $!";
+    my $page = do { local $/; <$wfh> };
+    close $wfh;
+    like($page, qr/addEventListener\("wait"/, "the page listens for wait");
+    like($page, qr/id="wait" class="wait" hidden/, "the page has the waiting line, hidden at first");
     ok(scalar(@ui::clients) == 1, "one client is listening");
     ui::_close($cn);
     ok(scalar(@ui::clients) == 0, "closing the client takes it off the list");

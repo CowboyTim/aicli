@@ -1473,6 +1473,7 @@ sub request_completion {
     my $printer = new_printer($o{quiet} ? sub {} : undef, hide_tools => (tool_display() eq 'brief' ? 1 : 0));
     # the status line tells that we wait, until there is something to show
     $TUI->set('model', $o{quiet} ? 'summarizing' : 'waiting for model');
+    emit(wait => {text => 'waiting for model'}) unless $o{quiet}; # the web page's spinner
     my $st;
     $st = new_stream(sub {
         my ($kind) = @_;

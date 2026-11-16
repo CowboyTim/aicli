@@ -155,6 +155,9 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   was made with). The look (`simple`/`cards`), the theme (system, light,
   dark; `data-theme` on `<html>`), the thinking block (a spinner and the
   character count while it comes, a click shows the text; `think` events), the
+  waiting line above the message box (a spinner and the seconds while a request
+  has no answer yet; `wait` event before each request, hidden at the first
+  text, thinking or tool line, or at the turn's end), the
   mic (16 kHz WAV via `/voice`).
 - **tui.pm** – `tui`: the screen. Two modes: `bar` (default when the terminal
   is big enough, at least 7 rows and 20 columns): a footer of two lines at
