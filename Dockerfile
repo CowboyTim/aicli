@@ -1,4 +1,4 @@
-# Two stages share one "base" stage:
+# Two stages share one "system" stage:
 #
 #   base   small: ai.pl and the basic unix tools (bash, git, curl, text tools).
 #   dev    base + the development languages (python, lua, C/C++ with make, cmake and
@@ -8,13 +8,18 @@
 # The default target (the last stage) is dev, which is what aicli.sh runs.
 # docker build --target base gives the small image.
 #
+# The package installs come before the COPY of ai.pl and ai/ in each stage. Docker
+# caches layers in order, so a change to the code would otherwise rebuild every
+# install after it. Both stages copy the code themselves (dev does not build on
+# base), so a code change rebuilds only the copy and the steps after it.
+#
 # Ubuntu, not Debian: the specific stages that come later (ROCm, arduino-cli) start
 # from Ubuntu images, so the layers share one distribution.
 
 ARG BASE_IMAGE=ubuntu:24.04
 
 # --------------------------------------------------------------------------
-FROM ${BASE_IMAGE} AS base
+FROM ${BASE_IMAGE} AS system
 ENV DEBIAN_FRONTEND=noninteractive
 
 # ai.pl dependencies: Perl, the JSON and readline modules, WWW::Curl for the HTTP
@@ -32,6 +37,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         curl wget socat \
     && rm -rf /var/lib/apt/lists/*
 
+# --------------------------------------------------------------------------
+FROM system AS base
+ENV DEBIAN_FRONTEND=noninteractive
+
 # ai.pl and its modules, named one by one (a glob would also take scratch files)
 COPY ai.pl ai.pm md.pm tui.pm utils.pm ui.pm /
 COPY ai /ai
@@ -48,7 +57,7 @@ VOLUME /ai
 ENTRYPOINT ["/usr/bin/perl", "/ai.pl"]
 
 # --------------------------------------------------------------------------
-FROM base AS dev
+FROM system AS dev
 ENV DEBIAN_FRONTEND=noninteractive
 
 # python, lua, and the C/C++ toolchain (build-essential has no pkg-config, make is
@@ -97,6 +106,20 @@ RUN curl -fsSL -o /usr/local/bin/nrfutil "${NRFUTIL_URL}" \
  && HOME=/opt/nrfutil nrfutil device --help >/dev/null \
  && HOME=/opt/nrfutil nrfutil ble-sniffer --help >/dev/null
 
+# ai.pl and its modules, as in base (the code comes after the installs above)
+COPY ai.pl ai.pm md.pm tui.pm utils.pm ui.pm /
+COPY ai /ai
+COPY aicli-devices.sh /usr/local/bin/aicli-devices
+RUN chmod 0755 /usr/local/bin/aicli-devices \
+ && perl -cw /ai.pl
+
 # the lists of the development languages (devel tool): made now, they are the same
 # for every session of this image; bash is not listed, it is the PATH of the run
 RUN perl -I/ -Mai -e 'tools::devel_build("/usr/share/aicli/devel")'
+
+ENV HOME=/ai
+USER root
+WORKDIR /ai
+VOLUME /ai
+#ENTRYPOINT ["strace", "-f", "-tt", "-s", "512", "/usr/bin/perl", "/ai.pl"]
+ENTRYPOINT ["/usr/bin/perl", "/ai.pl"]
