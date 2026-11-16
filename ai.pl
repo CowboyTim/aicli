@@ -28,12 +28,13 @@ $::DEBUG = $::ORIG_ENV{DEBUG} || 0;
 {
     no warnings 'once';
     require Getopt::Long;
-    my ($help, $man, $continue, $ui, $ui_bind, $tls_cert, $tls_key);
+    my ($help, $man, $continue, $new, $ui, $ui_bind, $tls_cert, $tls_key);
     my $ok = Getopt::Long::GetOptions(
         'help|h|?'    => \$help,
         'man'         => \$man,
         'debug'      => \$::DEBUG,
         'continue|c' => \$continue,
+        'new'        => \$new,
         'prompt|p=s' => \$::PROMPT,
         'ui:s'       => \$ui,
         'ui-bind=s'  => \$ui_bind,
@@ -68,7 +69,10 @@ $::DEBUG = $::ORIG_ENV{DEBUG} || 0;
             -output => ($ok ? \*STDOUT : \*STDERR));
         exit($ok ? 0 : 2);
     }
-    $::ORIG_ENV{AI_CONTINUE} = 1 if $continue;
+    die "--new and -c do not go together\n" if $new and $continue;
+    die "--new is for the web interface: it needs --ui\n" if $new and !defined $ui;
+    # the web interface goes on where the directory left off, unless --new
+    $::ORIG_ENV{AI_CONTINUE} = 1 if $continue or (defined $ui and !$new);
 }
 
 # init/setup
@@ -167,6 +171,7 @@ ai.pl [options]
    -man             the whole manual
    -debug           enable debug mode
    -c, -continue    continue the session last used in this directory
+   -new             with --ui: a new session, not the last one of this directory
    -p, -prompt TEXT one request, then exit ("-" reads it from stdin)
 
  Examples:
@@ -215,8 +220,17 @@ printed on stderr when it starts. Every request needs the token (a cookie set by
 that address, or an C<Authorization: Bearer> header). C<AI_UI_TOKEN> in the
 environment sets the token. Routes: C</events> (the stream), C<POST /message>,
 C<POST /abort>, C</state>, C<POST /voice> (a WAV recording, recognized
-by C<AI_ASR_URL> and sent to the chat as soon as it is ready). Slash commands
-and files come later.
+by C<AI_ASR_URL> and sent to the chat as soon as it is ready), C<POST /session>
+(switch to another session by its name, or C<{"new": true}> for a new one).
+The session last used in this directory is continued, as with C<-c>, unless
+C<--new> or C<AI_SESSION> says otherwise. The page shows the conversation of
+the session when it connects and after a switch: what was said, not the tool
+calls. Slash commands and files come later.
+
+=item B<--new>
+
+With C<--ui>: start a new session instead of continuing the last one of this
+directory. Not with C<-c>.
 
 =item B<--tls-cert> I<file>
 

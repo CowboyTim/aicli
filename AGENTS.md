@@ -104,6 +104,13 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   client, `ai.pl --ui` as a child, and `openssl s_client`. Checked on a phone:
   the QR code opens the page and the token cookie holds (`SameSite=Lax`, after
   a link from another app `Strict` was not sent and the page answered 401).
+  Sessions in the web interface: `ai.pl --ui` continues the last session of
+  the directory (`--new` for a fresh one); the page has a session select
+  (`POST /session`, a switch goes through the chat's queue like a model
+  switch) and gets the conversation on connect and after a switch (`history`
+  event, the messages of `load_messages()` that were said, not tool calls or
+  summaries). Tested with the socket pairs, `ai.pl --ui` as a child, and
+  curl; not yet in a browser (no Chromium here this time).
   Not yet tested in a browser: both looks and themes, the microphone, the
   thinking block, the TLS trust prompt. Not built yet: file downloads and
   inline pictures, uploads to `./uploads/`, slash commands over `POST /command`
@@ -158,7 +165,10 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   waiting line above the message box (a spinner and the seconds while a request
   has no answer yet; `wait` event before each request, hidden at the first
   text, thinking or tool line, or at the turn's end), the
-  mic (16 kHz WAV via `/voice`).
+  mic (16 kHz WAV via `/voice`), the session select (`sessions` event,
+  `ai::session_choices()`) and the conversation of the session (`history`
+  event, `_history_text()`, on connect and after a switch; a switch is
+  `_switch_session()` in the chat's queue, like `_switch_model()`).
 - **tui.pm** – `tui`: the screen. Two modes: `bar` (default when the terminal
   is big enough, at least 7 rows and 20 columns): a footer of two lines at
   the bottom, activity (`set`/`unset` items with spinner and elapsed time)

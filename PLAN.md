@@ -47,7 +47,8 @@ user's view) and AGENTS.md (the code, and "Status" for the history), not here.
   `think` events for both forms (`reasoning_content` and `<think>` tags) in
   tests, and the page has a thinking block now. Not reproduced in a browser.
   Check: `/thinking` (a session setting can turn it off), the browser console.
-- **Not run in a real browser:** the page in both looks and both themes, the
+- **Not run in a real browser:** the session select and the replayed history
+  (only tested with the socket pairs, the child process and curl), the page in both looks and both themes, the
   microphone and the speech warnings, the TLS trust prompt for a self-signed
   certificate. The QR code and the page on a phone work (checked); the desktop
   browser cookie with `SameSite=Lax` is not checked on its own.

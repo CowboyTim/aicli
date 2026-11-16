@@ -62,7 +62,8 @@
   #menu.open { display: flex; }
   #menu label { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 13px; }
   #menu select { flex: 1; min-width: 0; max-width: 70%; font-size: 15px; }
-  #model { max-width: 100% !important; }
+  #model, #session { max-width: 100% !important; }
+  #session option { max-width: 40em; }
   @media (min-width: 700px) { #menu { left: auto; width: 340px; border-left: 1px solid var(--line); } }
 
   main { max-width: 960px; margin: 0; padding: 16px; } /* left: the text starts at the left edge */
@@ -132,6 +133,7 @@
   </button>
   <div id="menu">
     <label>model <select id="model" aria-label="model" title="model"></select></label>
+    <label>session <select id="session" aria-label="session" title="session"></select></label>
     <label>look <select id="look" aria-label="look">
       <option value="simple">simple</option>
       <option value="cards">cards</option>
@@ -172,6 +174,7 @@
   var log = document.getElementById("log");
   var status = document.getElementById("status");
   var model = document.getElementById("model");
+  var session = document.getElementById("session");
   var form = document.getElementById("form");
   var text = document.getElementById("text");
   var send = document.getElementById("send");
@@ -361,6 +364,40 @@
     }).catch(function (err) { add("error", String(err)); });
   });
 
+  // the sessions to switch to, the new one first. A choice goes to the chat's
+  // flow; the page is drawn again by the history event that follows the switch.
+  function setSessions(current, list) {
+    session.textContent = "";
+    var fresh = document.createElement("option");
+    fresh.value = "";
+    fresh.textContent = "new session";
+    session.appendChild(fresh);
+    var items = list.slice();
+    if (current && !items.some(function (s) { return s.name === current; })) {
+      items.unshift({ name: current, first: "" });
+    }
+    items.forEach(function (s) {
+      var o = document.createElement("option");
+      o.value = s.name;
+      o.textContent = s.name + (s.first ? "  " + s.first : "");
+      o.title = s.cwd || s.name;
+      session.appendChild(o);
+    });
+    session.value = current || "";
+    session.disabled = false;
+  }
+
+  session.addEventListener("change", function () {
+    var body = session.value ? { name: session.value } : { new: true };
+    fetch("/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    }).then(function (r) {
+      if (!r.ok) { return r.json().then(function (j) { add("error", j.error || r.statusText); }); }
+    }).catch(function (err) { add("error", String(err)); });
+  });
+
   // the state names the current model: selected, added first when the list lacks it
   function setCurrent(current) {
     if (!current) { return; }
@@ -391,6 +428,24 @@
   es.addEventListener("models", function (e) {
     var d = JSON.parse(e.data);
     setModel(d.current, d.list || []);
+  });
+  es.addEventListener("sessions", function (e) {
+    var d = JSON.parse(e.data);
+    setSessions(d.current, d.list || []);
+  });
+  // the conversation of the session, drawn again on connect and after a switch
+  es.addEventListener("history", function (e) {
+    var d = JSON.parse(e.data);
+    log.textContent = "";
+    waitHide();
+    thinkEnd();
+    current = null;
+    if (d.more) { add("usage", "earlier messages of this session are not shown"); }
+    (d.messages || []).forEach(function (m) {
+      if (m.role === "user") { add("user", m.text); }
+      else { var node = add("answer", ""); node.raw = m.text; drawAnswer(node); }
+    });
+    window.scrollTo(0, document.body.scrollHeight);
   });
   // thinking: a block with a spinner and the count of characters while it
   // comes; a click on it shows the text. It stops when the answer starts.

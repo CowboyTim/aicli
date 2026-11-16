@@ -194,6 +194,68 @@ sub _switch_model {
     return;
 }
 
+# The conversation of the session as the page shows it: what the user typed
+# and what the model answered. Tool calls and results, summaries and the system
+# prompt are not shown. The last $HISTORY_MAX messages at most.
+our $HISTORY_MAX = 200;
+
+sub _history_text {
+    my @all = defined $ai::STATUS_FILE ? eval {ai::load_messages()} : ();
+    my @msgs = grep {ai::is_user_input($_) or (($_->{role} // '') eq 'assistant' and length($_->{content} // ''))} @all;
+    my $more = @msgs > $HISTORY_MAX ? 1 : 0;
+    splice(@msgs, 0, @msgs - $HISTORY_MAX) if $more;
+    my $data = {
+        session  => $ai::AI_SESSION // '',
+        more     => $more ? \1 : \0,
+        messages => [map {{role => ($_->{role} eq 'user' ? 'user' : 'assistant'), text => $_->{content}}} @msgs],
+    };
+    return "event: history\ndata: ".$::JSON->encode($data)."\n\n";
+}
+
+# the sessions to choose from, to the page
+sub _sessions_text {
+    my $list = defined $ai::SESSIONS_DIR ? ai::session_choices() : [];
+    my $data = {current => $ai::AI_SESSION // '', list => $list};
+    return "event: sessions\ndata: ".$::JSON->encode($data)."\n\n";
+}
+
+sub _send_history {
+    _queue($_, _history_text()) for @{[@clients]};
+    return;
+}
+
+sub _send_sessions {
+    _queue($_, _sessions_text()) for @{[@clients]};
+    return;
+}
+
+# the page chose a session, or a new one: the chat changes to it, and every page
+# is sent the conversation of the new session
+sub _switch_session {
+    my ($item) = @_;
+    my $ok = eval {
+        my $name = $item->{session};
+        if ($item->{new}) {
+            $name = "session-".ai::new_session_id();
+            $ai::AUTO_SESSION{$name} = 1; # ours: removed at the end when nothing was said
+            ai::init_session($name);
+        } elsif (!ai::valid_session_name($name) or !-d "$ai::SESSIONS_DIR/$name") {
+            die "there is no session '".($name // '')."'\n";
+        }
+        ai::use_session($name);
+        1;
+    };
+    if (!$ok) {
+        my $msg = $@ // 'unknown error';
+        $msg =~ s/\s+\z//;
+        log::error("could not switch the session: $msg");
+    }
+    publish(state => _state());
+    _send_history();
+    _send_sessions();
+    return;
+}
+
 sub input {
     return sub {
         while(1){
@@ -206,6 +268,10 @@ sub input {
             }
             if(ref $item eq 'HASH' and exists $item->{model}){
                 _switch_model($item->{model});
+                next;
+            }
+            if(ref $item eq 'HASH' and exists $item->{session}){
+                _switch_session($item);
                 next;
             }
             return $item unless ref $item;
@@ -574,6 +640,8 @@ sub _dispatch {
             ."Connection: keep-alive\r\n\r\n";
         push @clients, $cn;
         _queue($cn, "event: state\ndata: ".$::JSON->encode(_state())."\n\n");
+        _queue($cn, _history_text());
+        _queue($cn, _sessions_text());
         # the page gets the models now: the list of the last time, or a new one
         if (@ai::ALL_MODELS) {
             _queue($cn, _models_text());
@@ -608,6 +676,20 @@ sub _dispatch {
         push @queue, $text;
         return _json($cn, 202, {queued => scalar @queue});
     }
+    if($p eq '/session' and $m eq 'POST'){
+        my $d = eval {$::JSON->decode($body)};
+        return _json($cn, 400, {error => 'a JSON object with the name of a session, or "new": true, is wanted'})
+            unless ref($d) eq 'HASH';
+        my $new = $d->{new} ? 1 : 0;
+        my $name = $d->{name};
+        return _json($cn, 400, {error => 'a session name is wanted'})
+            unless $new or (defined $name and !ref($name) and length($name));
+        return _json($cn, 400, {error => 'not a session name'})
+            unless $new or ai::valid_session_name($name);
+        return _json($cn, 429, {error => "too many requests waiting"}) if @queue >= $MAX_QUEUE;
+        push @queue, {session => ($new ? undef : $name), new => $new};
+        return _json($cn, 202, {queued => scalar @queue});
+    }
     if($p eq '/voice' and $m eq 'POST'){
         my $type = $h->{'content-type'} // '';
         return _json($cn, 415, {error => "a recording (audio/wav) is wanted"})
@@ -625,7 +707,7 @@ sub _dispatch {
     if($p eq '/state' and $m eq 'GET'){
         return _json($cn, 200, _state());
     }
-    return _respond($cn, 405, 'text/plain', "method not allowed\n") if $p =~ m{^/(events|message|voice|abort|state)$};
+    return _respond($cn, 405, 'text/plain', "method not allowed\n") if $p =~ m{^/(events|message|session|voice|abort|state)$};
     return _respond($cn, 404, 'text/plain', "not found\n");
 }
 

@@ -11,6 +11,7 @@ use IO::Socket::IP ();
 use IO::Socket::INET ();
 use POSIX ();
 use File::Temp ();
+use Cwd ();
 use lib "$FindBin::Bin/..", "$FindBin::Bin/lib";
 no warnings 'once';
 
@@ -374,6 +375,58 @@ SKIP: {
     is($ai::SESSION_MODEL, 'no-such', "a choice that is not listed is taken as a bare id at the provider (as /model does)");
 }
 
+# --- the sessions: the picker and the switch go through the chat's flow -------
+
+{
+    my $r = request('POST', '/session', body => '{"name":"other"}');
+    is(status_of($r), 401, "session: needs the token");
+    @ui::queue = ();
+    $r = request('POST', '/session', cookie => $ok_cookie, body => '{"name":"other"}');
+    is(status_of($r), 202, "session: a switch is accepted");
+    is_deeply($ui::queue[0], {session => 'other', new => 0}, "session: queued for the chat's flow");
+    $r = request('POST', '/session', cookie => $ok_cookie, body => '{"new":true}');
+    is(status_of($r), 202, "session: a new one is accepted");
+    is_deeply($ui::queue[1], {session => undef, new => 1}, "session: a new one is queued");
+    $r = request('POST', '/session', cookie => $ok_cookie, body => '{"name":"../etc"}');
+    is(status_of($r), 400, "session: a bad name is refused");
+    $r = request('POST', '/session', cookie => $ok_cookie, body => '{}');
+    is(status_of($r), 400, "session: neither a name nor new is refused");
+    @ui::queue = ();
+}
+
+{
+    TestAI::setup();
+    ai::init_session('hist-a');
+    ai::use_session('hist-a');
+    ai::append_messages({role => 'user', content => 'first question'},
+        {role => 'assistant', content => ''},
+        {role => 'user', content => "[BASH_7c48 RESULT_d170\nlisting\nRESULT_d170]"},
+        {role => 'assistant', content => 'first answer'},
+        {role => 'user', content => "[Summary of the conversation so far]\nold"},
+        {role => 'tool', tool_call_id => 'x', content => 'tool out'});
+    my $t = ui::_history_text();
+    like($t, qr/^event: history\n/, "history: an event of its own");
+    like($t, qr/first question/, "history: what the user said");
+    like($t, qr/first answer/, "history: what the model answered");
+    unlike($t, qr/RESULT_d170|tool out|Summary of the conversation/, "history: no tool results, no summaries");
+    like($t, qr/"more":false/, "history: not cut when short");
+
+    ai::init_session('hist-b');
+    ui::_switch_session({session => 'hist-b', new => 0});
+    is($ai::AI_SESSION, 'hist-b', "switch: the chat is in the other session");
+    ui::_switch_session({session => undef, new => 1});
+    like($ai::AI_SESSION, qr/^session-/, "switch: a new session, named by the chat");
+    ok($ai::AUTO_SESSION{$ai::AI_SESSION}, "switch: a new session of ours (removed at the end when empty)");
+    my $before = $ai::AI_SESSION;
+    TestAI::capture { ui::_switch_session({session => 'no-such', new => 0}) };
+    is($ai::AI_SESSION, $before, "switch: a session that does not exist is refused, the chat stays");
+
+    my $list = ai::session_choices();
+    ok((grep {$_->{name} eq 'hist-a'} @$list), "sessions: one with a conversation is listed");
+    like(ui::_sessions_text(), qr/^event: sessions\n/, "sessions: an event of its own");
+    ui::_switch_session({session => 'hist-a', new => 0});
+}
+
 # --- the speech recognizer: the page is told whether the mic can work -------
 
 {
@@ -613,4 +666,73 @@ ok(1, "the chat child is stopped");
 }
 
 FakeLLM::stop();
+# --- ai.pl --ui: the last session of the directory is continued, --new is not
+
+sub _first_state {
+    my ($port) = @_;
+    my $s = IO::Socket::INET->new(PeerAddr => '127.0.0.1', PeerPort => $port, Timeout => 5) or return undef;
+    print {$s} "GET /events HTTP/1.1\r\nHost: 127.0.0.1:$port\r\nCookie: aicli_token=$TOKEN\r\n\r\n";
+    my $got = '';
+    local $SIG{ALRM} = sub { die "timeout\n" };
+    eval {
+        alarm 10;
+        while (my $l = <$s>) {
+            $got .= $l;
+            last if $got =~ m/event: state\ndata: (\{[^\n]*\})/;
+        }
+        alarm 0;
+    };
+    alarm 0;
+    close($s);
+    return undef unless $got =~ m/event: state\ndata: (\{[^\n]*\})/;
+    return $::JSON->decode($1);
+}
+
+sub _ui_child {
+    my ($aidir, $dir, @args) = @_;
+    my $probe = IO::Socket::INET->new(Listen => 1, LocalAddr => '127.0.0.1', LocalPort => 0, ReuseAddr => 1)
+        or die "probe: $!";
+    my $port = $probe->sockport;
+    close($probe);
+    my $pid = fork() // die "fork: $!";
+    if(!$pid){
+        open(STDOUT, '>', "$aidir.out") or POSIX::_exit(1);
+        open(STDERR, '>', "$aidir.err") or POSIX::_exit(1);
+        chdir($dir) or POSIX::_exit(1);
+        %ENV = (
+            PATH => $ENV{PATH}, HOME => $tmp, AI_DIR => $aidir, AI_CONFIG => "$tmp/noconfig",
+            AI_LOCAL_SERVER => 'http://127.0.0.1:9', AI_API_KEY => 'sk-ui', AI_MODEL => 'fake-1',
+            AI_UI_TOKEN => $TOKEN,
+        );
+        exec($^X, "-I$ROOT", "$ROOT/ai.pl", "--ui=$port", "--ui-bind=127.0.0.1", @args) or POSIX::_exit(1);
+    }
+    my $up = 0;
+    for (1 .. 100){
+        if(IO::Socket::INET->new(PeerAddr => '127.0.0.1', PeerPort => $port, Timeout => 1)){ $up = 1; last }
+        select(undef, undef, undef, 0.1);
+    }
+    return ($pid, $port, $up);
+}
+
+{
+    my $dir = Cwd::abs_path(File::Temp::tempdir(CLEANUP => 1));
+    my $aidir = "$tmp/aicli-continue";
+    mkdir $aidir; mkdir "$aidir/sessions"; mkdir "$aidir/sessions/earlier-talk";
+    my $sd = "$aidir/sessions/earlier-talk";
+    open(my $c, '>', "$sd/cwd") or die $!; print {$c} "$dir\n"; close $c;
+    open($c, '>', "$sd/chat") or die $!;
+    print {$c} qq({"role":"system","content":"sys"}\n{"role":"user","content":"earlier"}\n); close $c;
+
+    my ($pid, $port, $up) = _ui_child($aidir, $dir);
+    ok($up, "ui: the web interface starts");
+    my $st = $up ? _first_state($port) : undef;
+    is($st && $st->{session}, 'earlier-talk', "ui: the last session of this directory is continued by default");
+    kill 'TERM', $pid; waitpid($pid, 0);
+
+    ($pid, $port, $up) = _ui_child($aidir, $dir, '--new');
+    $st = $up ? _first_state($port) : undef;
+    like($st && $st->{session} // '', qr/^session-/, "ui: --new starts a new session");
+    kill 'TERM', $pid; waitpid($pid, 0);
+}
+
 done_testing();

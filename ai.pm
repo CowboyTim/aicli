@@ -2259,6 +2259,23 @@ sub list_sessions {
     }
 }
 
+# the sessions the web page can switch to: the ones with something in them and
+# the current one, newest first (at most 50), with what each starts with and
+# the directory it was used in
+sub session_choices {
+    my @out;
+    foreach my $s (@{get_sessions()}) {
+        my $i = session_info($s);
+        next if $i->{empty} and $s ne $AI_SESSION;
+        my $cwd = slurp("$SESSIONS_DIR/$s/cwd") // '';
+        chomp $cwd;
+        push @out, {name => $s, age => $i->{age}, first => clip_text($i->{first}, 60), cwd => $cwd};
+    }
+    @out = sort {$a->{age} <=> $b->{age}} @out;
+    splice(@out, 50) if @out > 50;
+    return \@out;
+}
+
 sub format_age {
     my ($seconds) = @_;
     return sprintf("%dd", $seconds / 86400) if $seconds >= 86400;

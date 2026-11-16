@@ -226,13 +226,20 @@ output streams over server-sent events, the input comes in by POST. The default
 port is 8080, on `127.0.0.1`. The address is printed with a token; open that
 address once and the browser keeps the token in a cookie (`aicli_token`,
 HttpOnly, SameSite=Lax: Strict is not sent after a link from another app, such as the QR code scan on a phone). The API of the page is `GET /events` (the stream),
-`POST /message`, `POST /voice` (a WAV recording), `POST /abort`, `GET /state`.
+`POST /message`, `POST /voice` (a WAV recording), `POST /abort`, `GET /state`,
+`POST /session` (`{"name": ...}` to switch, `{"new": true}` for a new session;
+the session select in the menu lists the sessions of every directory, newest
+first). It continues the last session used in this directory, as `-c` does,
+unless `--new` or `AI_SESSION` says otherwise. The page shows the conversation
+of the session when it connects and after a switch (what was said, not the tool
+calls; the last 200 messages).
 A bearer token (`Authorization: Bearer`) works too; `AI_UI_TOKEN` sets the
 token.
 
 | option | |
 |--------|---|
-| `--ui [port]` | serve the interface (default 8080) |
+| `--ui [port]` | serve the interface (default 8080); continues the last session of this directory |
+| `--new` | with `--ui`: a new session instead of the last one of this directory |
 | `--ui-bind <address>` | the address to listen on: `127.0.0.1` (default), `::1`, `0.0.0.0` (any IPv4), `::` (any IPv6). The printed phone address is the one of this machine that a phone can reach, with a QR code on the terminal (`qrencode`) |
 | `--tls-cert <file> --tls-key <file>` | serve https, with a PEM certificate and key (needs `Net::SSLeay`, Debian `libnet-ssleay-perl`). A self-signed one: `openssl req -x509 -newkey rsa:2048 -nodes -days 365 -subj /CN=localhost -keyout key.pem -out cert.pem` |
 
