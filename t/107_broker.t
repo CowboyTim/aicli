@@ -154,6 +154,8 @@ ok($s->{no_new_privileges}, "no new privileges");
 is($s->{resource_limits}{memory}{limit}, 2 * 1024**3, "the memory limit of the config");
 is($s->{resource_limits}{pids}{limit}, 512, "and the process limit");
 unlike($spec->{body}, qr/\.sock|engine|docker/, "no socket of any engine in the spec");
+like($spec->{body}, qr/"limit":2147483648[,}]/, "the memory limit is a number in the JSON, not a string");
+like($spec->{body}, qr/"limit":512[,}]/, "and so is the process limit");
 
 clear_records();
 $r = $b->handle($J->encode({op => 'open', project => 'alpha'}));

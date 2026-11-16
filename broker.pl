@@ -138,7 +138,8 @@ sub _container_spec {
         cap_drop       => ['ALL'],
         no_new_privileges => JSON::XS::true(),
         userns         => {nsmode => $self->{userns}},
-        resource_limits => {memory => {limit => $self->{memory}}, pids => {limit => $self->{pids}}},
+        # numbers, not text: a value used as text (in a log line) would be encoded as a string
+        resource_limits => {memory => {limit => 0 + $self->{memory}}, pids => {limit => 0 + $self->{pids}}},
     };
 }
 
