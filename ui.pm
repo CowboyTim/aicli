@@ -152,12 +152,15 @@ sub _ask_models {
 }
 
 # the models event of the list the chat has now (the text of the event)
-sub _models_text {
-    my $data = {
+sub _models_data {
+    return {
         current => ai::current_label(),
         list    => [map {ai::model_label($_)} @ai::ALL_MODELS],
     };
-    return "event: models\ndata: ".$::JSON->encode($data)."\n\n";
+}
+
+sub _models_text {
+    return "event: models\ndata: ".$::JSON->encode(_models_data())."\n\n";
 }
 
 # the models of every provider, to the page; refresh asks the providers again
@@ -170,7 +173,7 @@ sub _send_models {
         ($pairs, $errors) = (\@ai::ALL_MODELS, []);
     }
     log::error("no model list from $_") for @$errors;
-    _queue($_, _models_text()) for @{[@clients]};
+    publish(models => _models_data());
     return;
 }
 
@@ -306,6 +309,8 @@ sub queued { return scalar @queue }
 # --- the event stream -------------------------------------------------------
 
 # Send one event to all clients that read the stream.
+our $RELAY; # set by a session worker: called as ($type, $data) for each event
+
 sub publish {
     my ($type, $data) = @_;
     if ($type eq 'tool' or $type eq 'failed') {
@@ -316,6 +321,8 @@ sub publish {
     } elsif ($type eq 'heard') {
         ai::web_note("heard: ".$data->{text});
     }
+    # a session worker (worker.pm) sends its events to the master instead
+    return $RELAY->($type, $data // {}) if $RELAY;
     return unless @clients;
     my $msg = "event: $type\ndata: ".$::JSON->encode($data // {})."\n\n";
     _queue($_, $msg) for @{[@clients]};

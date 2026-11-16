@@ -54,7 +54,13 @@ These are requirements, not suggestions.
 - **A forked child ends with `POSIX::_exit()`**, never `exit`: END blocks and
   destructors of the chat (terminal cleanup) must not run in a child.
 - **No secrets to children**: `AI_*` variables and the API key stay in the chat
-  process (`utils::tool_env()`, `@utils::CHILD_INIT`).
+  process (`utils::tool_env()`, `@utils::CHILD_INIT`). The exception is a session
+  worker (`worker.pm`, forked by the master of the web interface): it is a chat
+  and holds the key to make requests, so it is marked as one. Tool children
+  (`bash`, `perl`, `grep`, sub-agents' tools) never get the key, and no process
+  of the chat is readable through `/proc` by them: the chat and its workers are
+  `sandbox::not_dumpable()` (`/proc/<pid>/environ` is root's), since `%ENV` is
+  cleared but the process's own environment still holds the key.
 - **Children get a curated environment, every time**: `utils::fork_child()` is
   the only `fork()`, and it sets `%ENV` to `utils::tool_env()`, an allow-list
   (PATH, HOME, TMPDIR, LANG, the runtime variables of the recorder, `GIT_*`,
@@ -141,6 +147,12 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
 - **md.pm** – `md`: markdown of the answer, line by line as it streams (`new_printer()` uses it on a terminal)
 - **/voice** (in `ai.pm`, section "Speech"): `voice_record()` runs the recorder as a child (`loop::spawn`), stopped with SIGINT by a timer; `transcribe()` sends the recording as multipart/form-data (`multipart_body()`) to AI_ASR_URL; `voice_quiet()` skips a recording with no sound (the recognizer answers silence with "you"). The recording goes to `voice_dir()` (`/tmp/aicli-<uid>`, the sandbox lets the recorder write there, not in the session directory). While it is made: `voice_meter_start()` samples the level for the footer, `voice_preview_start()` sends the audio since the last final words every three seconds (verbose JSON segments), `heard_agree()` (LocalAgreement) makes the segments that two passes agree on final and drops their audio.
 - **FastFlowLM** is used for voice (`flm serve ... --asr 1`, port 52625), not for chat work. Its chat defaults (8192 tokens) stay as they are; there is no `agent` tool with it.
+- **worker.pm** – `worker`: one session as a chat in a process of its own,
+  served over a socket (`worker::serve($fh, session => ...)`): input lines
+  (`{"text"}`, `{"model"}`, `{"models"}`, `{"abort"}`) into the web interface's
+  queue, the events of `ui::publish` back out (`ui::$RELAY`), as JSON lines. Ends
+  when the socket closes. Used by the master (phase 2 of the session workers);
+  landlock and projects come with it.
 - **ui.pm** – `ui`: the web interface (`ai.pl --ui`), headless: an HTTP/1.1 server
   on the event loop (`loop::watch`), routes, the SSE stream (`publish()`, the
   `$ai::EVENT_SINK` hook of the chat), the token (`_authed()`), the input queue
@@ -486,6 +498,7 @@ Other APIs are reached through an OpenAI compatible gateway, such as LiteLLM or 
 | `t/89_context_thinking.t` | the reasoning setting, what the request says, the first request through compactions, `/context` |
 | `t/97_live.t` | a real model, only when `AI_LIVE_SERVER` is set (`AI_LIVE_MODEL`, optional `AI_LIVE_SEARXNG`): one answer, a native tool call, the thinking setting, search. Skipped otherwise |
 | `t/100_ui.t` | the web interface: routes, the token, origin check, body limits, the input queue, the event stream on socket pairs; the listen addresses (IPv4, IPv6, `::`), stop and start on the same port, TLS with a generated certificate (a https request, the Secure cookie), the state of the speech recognizer; then `ai.pl --ui` as a child, a message in and the streamed answer out, Ctrl-C |
+| `t/101_worker.t` | a session worker over a socket pair: the state and the events of a turn, the message in the session's chat file, the models, a slash command refused, the end when the socket closes |
 | `t/99_models.t` | the models: every page of the list (Anthropic), one list for the others, several providers in one list (`provider/id`, the keys of each), resolving a choice, the session's provider, the context per provider, the `models` tool (a filter, the current model, the context), the `model` tool (switch, an unknown id refused), the sub-agents without them |
 | `t/98_voice.t` | speech: the multipart upload, the recorder child stopped by SIGINT, the text of the recognizer, its errors (endpoint not reachable, HTTP status, no text), `/voice` |
 | `t/95_cli.t` | `-p` (one request, exit codes, stdin) and `-c` (continue per directory), as a process |
