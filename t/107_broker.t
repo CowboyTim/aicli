@@ -197,6 +197,26 @@ ok(!$answer->{ok}, "over the socket: a bad project is refused");
 kill 'TERM', $bpid;
 waitpid($bpid, 0);
 
+# --- the log: every request and every engine call, one line each ------------------
+
+{
+    my $logf = "$tmp/broker.log";
+    open(my $lf, '>', $logf) or die "log: $!";
+    my $old = $broker::LOG;
+    $broker::LOG = $lf;
+    $b->handle('{"op":"open","project":"../etc"}');
+    $b->handle($J->encode({op => 'open', project => 'alpha'}));
+    close($lf);
+    $broker::LOG = $old;
+    open(my $in, '<', $logf) or die "log: $!";
+    my $text = do { local $/; <$in> };
+    close($in);
+    like($text, qr/request op=open project=\.\.\/etc -> refused: no such project/, "a refused request is logged, with the reason");
+    like($text, qr/engine GET \/libpod\/pods\/json -> 200/, "an engine call is logged, with its status");
+    like($text, qr/request op=open project=alpha -> ok/, "and an accepted one");
+    unlike($text, qr/"mounts"|privileged/, "the body of a request is not logged");
+}
+
 # --- the chunked answers of the engine ---------------------------------------
 
 is(broker::_dechunk("5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n"), "hello world", "a chunked answer is put together");

@@ -27,6 +27,17 @@ package broker;
 
 my $JSON = JSON::XS->new->canonical(1)->utf8;
 
+# the log: one line per event on stderr, which `docker logs` shows. Never a request's
+# whole body, and nothing of the engine's answers but the status code.
+our $LOG = \*STDERR;
+sub _log {
+    my ($msg) = @_;
+    my @t = localtime;
+    printf {$LOG} "%04d-%02d-%02d %02d:%02d:%02d broker[%d]: %s\n",
+        $t[5] + 1900, $t[4] + 1, $t[3], $t[2], $t[1], $t[0], $$, $msg;
+    return;
+}
+
 sub new {
     my ($class, %c) = @_;
     die "broker: host_root (the host path of the projects) is needed\n" unless length($c{host_root} // '');
@@ -53,8 +64,19 @@ sub _bytes {
     return $n * $m{lc $u};
 }
 
-# the answer to one request (a JSON text), as a hash
+# the answer to one request (a JSON text), as a hash; every request is logged
 sub handle {
+    my ($self, $line) = @_;
+    my $res = $self->_dispatch($line);
+    my $req = eval {$JSON->decode($line)};
+    my $what = ref($req) eq 'HASH'
+        ? sprintf("op=%s project=%s", $req->{op} // '-', substr($req->{project} // '-', 0, 80))
+        : 'not a JSON object: '.substr($line // '', 0, 60);
+    _log("request $what -> ".($res->{ok} ? 'ok' : "refused: $res->{error}"));
+    return $res;
+}
+
+sub _dispatch {
     my ($self, $line) = @_;
     my $req = eval {$JSON->decode($line)};
     return {ok => JSON::XS::false(), error => "a JSON object is wanted"} unless ref($req) eq 'HASH';
@@ -165,6 +187,7 @@ sub _engine {
     close($sock);
     my ($head, $body) = split /\r\n\r\n/, $raw, 2;
     my ($code) = ($head // '') =~ m{\AHTTP/1\.[01] (\d+)};
+    _log("engine $method $path -> ".($code // 'no answer'));
     return (500, "no answer from the engine") unless defined $code;
     $body //= '';
     if (($head // '') =~ m/^Transfer-Encoding:\s*chunked/mi) {
@@ -193,6 +216,8 @@ sub serve {
     my $srv = IO::Socket::UNIX->new(Local => $path, Type => Socket::SOCK_STREAM(), Listen => 8)
         or die "broker: cannot listen on $path: $!\n";
     chmod(0660, $path);
+    my ($gid) = split ' ', $(;
+    _log("listening on $path as uid $< gid ".($gid // '?'));
     local $SIG{PIPE} = 'IGNORE';
     while (my $c = $srv->accept) {
         my $line = eval {
@@ -203,6 +228,7 @@ sub serve {
             $l;
         };
         alarm 0;
+        _log("a client sent no request in 10 s") unless defined $line;
         my $res = defined $line ? $self->handle($line) : {ok => JSON::XS::false(), error => "no request in time"};
         print {$c} $JSON->encode($res)."\n";
         close($c);
@@ -245,7 +271,10 @@ sub main {
     $cfg->{host_root} = $ENV{AI_BROKER_HOST_ROOT} if length($ENV{AI_BROKER_HOST_ROOT} // '');
     $cfg->{socket}    = $ENV{AI_BROKER_SOCKET}    if length($ENV{AI_BROKER_SOCKET} // '');
     $cfg->{engine}    = $ENV{AI_BROKER_ENGINE}    if length($ENV{AI_BROKER_ENGINE} // '');
-    broker->new(%$cfg)->serve();
+    my $b = broker->new(%$cfg);
+    _log(sprintf("starting: root=%s host_root=%s engine=%s images=%s memory=%s pids=%s",
+        $b->{root}, $b->{host_root}, $b->{engine}, join(',', @{$b->{images}}), $b->{memory}, $b->{pids}));
+    $b->serve();
     return 0;
 }
 
