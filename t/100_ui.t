@@ -425,6 +425,15 @@ SKIP: {
     ok((grep {$_->{name} eq 'hist-a'} @$list), "sessions: one with a conversation is listed");
     like(ui::_sessions_text(), qr/^event: sessions\n/, "sessions: an event of its own");
     ui::_switch_session({session => 'hist-a', new => 0});
+
+    # a session without a model of its own keeps the model in use
+    ai::set_model('openai', 'gpt-keep');
+    ai::init_session('hist-c');
+    ui::_switch_session({session => 'hist-c', new => 0});
+    is($ai::SESSION_MODEL, 'gpt-keep', "switch: a session without a model keeps the one in use");
+    is(ai::current_label(), 'openai/gpt-keep', "switch: the label names it, so the page shows it");
+    ui::_switch_session({session => undef, new => 1});
+    is($ai::SESSION_MODEL, 'gpt-keep', "switch: a new session keeps the model in use");
 }
 
 # --- the speech recognizer: the page is told whether the mic can work -------

@@ -233,6 +233,7 @@ sub _send_sessions {
 # is sent the conversation of the new session
 sub _switch_session {
     my ($item) = @_;
+    my ($prev_provider, $prev_model) = ($ai::AI_PROVIDER, $ai::SESSION_MODEL);
     my $ok = eval {
         my $name = $item->{session};
         if ($item->{new}) {
@@ -243,6 +244,11 @@ sub _switch_session {
             die "there is no session '".($name // '')."'\n";
         }
         ai::use_session($name);
+        # a session with no model of its own keeps the one the page was using
+        if (!length($ai::SESSION_MODEL // '') and length($prev_model // '')) {
+            my $err = ai::set_model($prev_provider, $prev_model);
+            die $err if defined $err;
+        }
         1;
     };
     if (!$ok) {
