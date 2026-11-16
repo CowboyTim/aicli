@@ -118,7 +118,9 @@ sub _open {
     }
     # the container is asked for every time: a pod can be there without it (a failed open)
     my ($code2, $body2) = $self->_engine('POST', '/libpod/containers/create', $self->_container_spec($name, $pod, $image));
-    return $self->_failed("the dev container could not be made", $code2, $body2) unless $code2 == 201 or $code2 == 409;
+    # a name in use is the container of an earlier open: the engine says so with 409, or 500 (storage)
+    my $exists = $code2 == 409 || ($code2 == 500 && ($body2 // '') =~ m/already in use/);
+    return $self->_failed("the dev container could not be made", $code2, $body2) unless $code2 == 201 or $exists;
     $made = 1 if $code2 == 201;
     my ($c2, $b2) = $self->_engine('POST', "/libpod/pods/$pod/start");
     return $self->_failed("the pod could not be started", $c2, $b2) unless $c2 == 200 or $c2 == 304;
