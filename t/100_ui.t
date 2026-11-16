@@ -80,7 +80,7 @@ is(status_of($r), 401, "a wrong token is refused");
 
 $r = request('GET', "/?token=$TOKEN");
 is(status_of($r), 303, "the token in the address sets the cookie and redirects");
-like($r, qr/Set-Cookie: aicli_token=$TOKEN; Path=\/; HttpOnly; SameSite=Strict/, "the cookie is HttpOnly and strict");
+like($r, qr/Set-Cookie: aicli_token=$TOKEN; Path=\/; HttpOnly; SameSite=Lax/, "the cookie is HttpOnly and Lax");
 like($r, qr{Location: /}, "the redirect goes to the page");
 
 $r = request('GET', '/', cookie => $ok_cookie);

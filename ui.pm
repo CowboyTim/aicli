@@ -543,7 +543,7 @@ sub _dispatch {
         my ($given) = $q =~ m/(?:^|&)token=([0-9a-f]+)/;
         if(defined $given and $given eq $token){
             return _respond($cn, 303, 'text/plain', "see /\n", "Location: /",
-                "Set-Cookie: aicli_token=$token; Path=/; HttpOnly; SameSite=Strict".($tls_ctx ? '; Secure' : ''));
+                "Set-Cookie: aicli_token=$token; Path=/; HttpOnly; SameSite=Lax".($tls_ctx ? '; Secure' : ''));
         }
         return _respond($cn, 401, 'text/plain', "no valid token: open the address that aicli printed at this start (with ?token=). "
             ."A QR code or address of an earlier start has the token of that start, which is not kept (AI_UI_TOKEN sets one)\n")

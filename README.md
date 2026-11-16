@@ -225,7 +225,7 @@ read, a second one, or one while nothing runs, ends the program (exit 130).
 output streams over server-sent events, the input comes in by POST. The default
 port is 8080, on `127.0.0.1`. The address is printed with a token; open that
 address once and the browser keeps the token in a cookie (`aicli_token`,
-HttpOnly, SameSite=Strict). The API of the page is `GET /events` (the stream),
+HttpOnly, SameSite=Lax: Strict is not sent after a link from another app, such as the QR code scan on a phone). The API of the page is `GET /events` (the stream),
 `POST /message`, `POST /voice` (a WAV recording), `POST /abort`, `GET /state`.
 A bearer token (`Authorization: Bearer`) works too; `AI_UI_TOKEN` sets the
 token.
