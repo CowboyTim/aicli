@@ -170,8 +170,9 @@ sub _list {
 sub _failed {
     my ($self, $what, $code, $body) = @_;
     my $why = $self->_decoded($body);
+    # libpod: "cause" or "message"; a pod start that fails lists "Errs" (one per container)
     my $msg = ref($why) eq 'HASH'
-        ? ($why->{cause} // $why->{message} // '')
+        ? join('; ', grep {length} ($why->{cause} // (), $why->{message} // (), ref($why->{Errs}) eq 'ARRAY' ? @{$why->{Errs}} : ()))
         : substr($body // '', 0, 200); # the broker's own reasons (not reachable, no answer) are plain text
     return {ok => JSON::XS::false(), error => "$what (engine answered $code".(length($msg) ? ": $msg" : '').")"};
 }
