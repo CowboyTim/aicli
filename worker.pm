@@ -20,6 +20,22 @@ use ui;
 our ($sock, $inbuf);
 
 # Serve one session on $fd (a connected socket); returns when the chat ends.
+# The kernel confines the worker (landlock, see utils.pm package sandbox): it may
+# write in the workspace, the temp directory, the devices of the sandbox policy
+# (ai::sandbox_policy) and its own session directory, and nowhere else. Reads are
+# not limited. The tools' children inherit the limit: they cannot write elsewhere
+# either. Irreversible, so only ever done in the worker. Returns 1 when confined,
+# 0 when there is nothing to confine (no workspace, or AI_SANDBOX=off).
+sub confine {
+    my %p = ai::sandbox_policy() or return 0;
+    push @{$p{write}}, $ai::AI_SESSION_DIR if defined $ai::AI_SESSION_DIR;
+    return 1 if sandbox::confine(%p);
+    # the kernel has no landlock: fine, unless it was asked for
+    die "no sandbox: this kernel has no landlock (AI_SANDBOX=".($::ORIG_ENV{AI_SANDBOX} // '').")\n"
+        if lc($::ORIG_ENV{AI_SANDBOX} // 'auto') =~ m/^(?:on|yes|1|require)$/;
+    return 0;
+}
+
 sub serve {
     my ($fh, %o) = @_;
     $sock = $fh;
@@ -28,6 +44,7 @@ sub serve {
     local $SIG{PIPE} = 'IGNORE'; # a master that went away is an EOF, not a signal
     $::UI = 1; # the web page's chat: the web prompt context, no status line, no terminal
     ai::use_session($o{session}) if defined $o{session};
+    confine();
     # ctrl-C stops the turn that runs; the worker goes on (the master ends it)
     $SIG{INT}  = sub { $::ABORT = 1 if $ai::BUSY };
     $SIG{TERM} = sub { $::ABORT = 1 if $ai::BUSY };

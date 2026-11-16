@@ -308,7 +308,8 @@ package sandbox;
 # needed and nothing is mounted: it is not a namespace, the process sees
 # everything as before, what is not allowed fails with "permission denied".
 # Linux 5.13 or newer; done with three system calls, from the forked child of
-# a tool, before the tool runs. The chat process itself is never restricted.
+# a tool, before the tool runs. The master of the web interface is never restricted;
+# a session worker is (worker::confine), before it runs its chat.
 
 use strict; use warnings;
 

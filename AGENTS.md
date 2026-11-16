@@ -417,7 +417,10 @@ sandbox` (utils.pm) is Landlock through `syscall()`: create a ruleset for the
 write rights (and read rights with `AI_SANDBOX_READ`), allow each path (opened
 with `O_PATH`, file rules get only file rights), `prctl(NO_NEW_PRIVS)`,
 restrict. It is per process, inherited, and cannot be taken back, so it must
-only ever run in a forked child, never in the chat process. The policy is
+only ever run in a forked child, or in a session worker (`worker::confine()`, the
+worker's own process: the chat of a session, with its tools' children inheriting
+the limit: the workspace, the temp directory, the sandbox devices and the
+session's own directory; reads everywhere). Never in the master. The policy is
 empty (no sandbox) for `AI_SANDBOX=off`, no workspace, or the workspace `/`.
 
 ## Commands
@@ -510,6 +513,7 @@ Other APIs are reached through an OpenAI compatible gateway, such as LiteLLM or 
 | `t/97_live.t` | a real model, only when `AI_LIVE_SERVER` is set (`AI_LIVE_MODEL`, optional `AI_LIVE_SEARXNG`): one answer, a native tool call, the thinking setting, search. Skipped otherwise |
 | `t/100_ui.t` | the web interface: routes, the token, origin check, body limits, the input queue, the event stream on socket pairs; the listen addresses (IPv4, IPv6, `::`), stop and start on the same port, TLS with a generated certificate (a https request, the Secure cookie), the state of the speech recognizer; then `ai.pl --ui` as a child, a message in and the streamed answer out, Ctrl-C |
 | `t/102_sessions.t` | `ai.pl --ui` with two sessions: a worker each, two turns at the same time, a switch while one is busy, the abort of the active one only, ctrl-C ends the interface and its workers |
+| `t/103_worker_sandbox.t` | a session worker confined by landlock: writes in its workspace and session only, reads everywhere, a tool's child inherits the limit (the probe file is outside the test's temp directory) |
 | `t/101_worker.t` | a session worker over a socket pair: the state and the events of a turn, the message in the session's chat file, the models, a slash command refused, the end when the socket closes |
 | `t/99_models.t` | the models: every page of the list (Anthropic), one list for the others, several providers in one list (`provider/id`, the keys of each), resolving a choice, the session's provider, the context per provider, the `models` tool (a filter, the current model, the context), the `model` tool (switch, an unknown id refused), the sub-agents without them |
 | `t/98_voice.t` | speech: the multipart upload, the recorder child stopped by SIGINT, the text of the recognizer, its errors (endpoint not reachable, HTTP status, no text), `/voice` |
