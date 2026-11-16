@@ -366,7 +366,10 @@
 
   // the sessions to switch to, the new one first. A choice goes to the chat's
   // flow; the page is drawn again by the history event that follows the switch.
-  function setSessions(current, list) {
+  var sessCur = "", sessList = [], sessBusy = [];
+  function setSessions(current, list, busy) {
+    if (current !== undefined) { sessCur = current; sessList = list || []; sessBusy = busy || []; }
+    current = sessCur; list = sessList;
     session.textContent = "";
     var fresh = document.createElement("option");
     fresh.value = "";
@@ -379,7 +382,8 @@
     items.forEach(function (s) {
       var o = document.createElement("option");
       o.value = s.name;
-      o.textContent = s.name + (s.first ? "  " + s.first : "");
+      var mark = sessBusy.indexOf(s.name) >= 0 ? "\u25cf " : "";
+      o.textContent = mark + s.name + (s.first ? "  " + s.first : "");
       o.title = s.cwd || s.name;
       session.appendChild(o);
     });
@@ -431,7 +435,11 @@
   });
   es.addEventListener("sessions", function (e) {
     var d = JSON.parse(e.data);
-    setSessions(d.current, d.list || []);
+    setSessions(d.current, d.list || [], d.busy || []);
+  });
+  // the sessions whose turns run now (a mark in the list): the others are not shown here
+  es.addEventListener("busy", function (e) {
+    setSessions(undefined, undefined, JSON.parse(e.data).list || []);
   });
   // the conversation of the session, drawn again on connect and after a switch
   es.addEventListener("history", function (e) {
