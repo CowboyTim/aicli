@@ -1,0 +1,11 @@
+# The broker (broker.pl): a Perl program with no dependency but JSON::XS, in a
+# container of its own. See docker-compose.yaml; it is the only container with the
+# engine socket.
+ARG BASE_IMAGE=ubuntu:24.04
+FROM ${BASE_IMAGE}
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends perl libjson-xs-perl \
+ && rm -rf /var/lib/apt/lists/*
+COPY broker.pl /usr/local/lib/aicli/broker.pl
+ENTRYPOINT ["perl", "/usr/local/lib/aicli/broker.pl"]
+CMD ["serve"]

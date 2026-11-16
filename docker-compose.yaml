@@ -1,0 +1,40 @@
+# The broker: it starts the dev pods of the projects, through the rootless Podman
+# of the host. It is the only container that has the engine socket; the agent
+# containers get the broker's socket from the volume aicli-broker, and nothing else.
+#
+#   AI_PROJECTS     the host directory of the projects (the root; its subdirectories are the projects)
+#   PODMAN_SOCKET   the rootless Podman socket of the user that runs the broker
+#   BROKER_UID      that user's UID (the owner of the socket; the agents run as the same UID)
+#   BROKER_GID      its GID
+#
+#   docker compose up -d --build
+name: aicli-broker
+services:
+  broker:
+    build:
+      context: .
+      dockerfile: Dockerfile.broker
+    image: local/ai/aicli-broker:latest
+    user: "${BROKER_UID:-1000}:${BROKER_GID:-1000}"
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      AI_BROKER_CONFIG: /etc/aicli/broker.json
+      AI_BROKER_HOST_ROOT: ${AI_PROJECTS:?set AI_PROJECTS to the host directory of the projects}
+      AI_BROKER_SOCKET: /run/aicli-broker/broker.sock
+      AI_BROKER_ENGINE: /run/engine/podman.sock
+    volumes:
+      - ./broker.json:/etc/aicli/broker.json:ro
+      - ${PODMAN_SOCKET:?set PODMAN_SOCKET to the rootless Podman socket}:/run/engine/podman.sock
+      - ${AI_PROJECTS}:/projects:ro
+      - aicli-broker:/run/aicli-broker
+    restart: unless-stopped
+volumes:
+  aicli-broker:
+    name: aicli-broker

@@ -1,0 +1,9 @@
+{
+  "root": "/projects",
+  "engine": "/run/engine/podman.sock",
+  "socket": "/run/aicli-broker/broker.sock",
+  "images": ["local/ai/aicli:latest"],
+  "memory": "2g",
+  "pids": 512,
+  "userns": "keep-id"
+}

@@ -536,6 +536,19 @@ the sentinels) and a sub named after the lowercased tag
 A tool that needs a child process returns `_run(sub {exec ...})`: that waits
 for the main agent and becomes a job in the event loop for a sub-agent.
 
+## The broker
+
+`docker compose up -d --build` runs the broker (`docker-compose.yaml`). It starts a
+dev pod for each project under `AI_PROJECTS`, through the rootless Podman of the
+host (`PODMAN_SOCKET`, owned by `BROKER_UID`). The broker is the only container
+with that socket; the agents reach it through the volume `aicli-broker`. A pod
+mounts its project and nothing else, runs unprivileged with its limits, and only
+images of `broker.json` are allowed. From a shell with the volume:
+`perl broker.pl open alpha`, `list`, `close alpha`.
+
+Host setup: install Podman, enable the user socket (`systemctl --user enable --now
+podman.socket`), and set `AI_PROJECTS`, `PODMAN_SOCKET`, `BROKER_UID`, `BROKER_GID`.
+
 ## Configuration
 
 Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
