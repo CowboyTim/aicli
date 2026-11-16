@@ -174,4 +174,33 @@ like(ai::system_prompt(), qr/The file tools only work inside this directory\.\nb
 }
 
 chdir("/");
+# --- the secrets of the chat are not readable through /proc by its children ----
+
+{
+    # a process holding a secret in its environment, not dumpable, forks a child
+    # that tries to read that environment, and a child of the child (a tool)
+    my $secret = "sk-proc-test-" . $$;
+    pipe(my $rd, my $wr) or die "pipe: $!";
+    my $pid = fork() // die "fork: $!";
+    if (!$pid) {
+        close $rd;
+        $ENV{AI_API_KEY} = $secret;
+        sandbox::not_dumpable() or POSIX::_exit(3);
+        my $c = fork() // POSIX::_exit(4);
+        if (!$c) {
+            my $parent = getppid();
+            my $got = qx{/bin/cat /proc/$parent/environ 2>/dev/null};
+            print {$wr} ($got =~ /\Q$secret\E/ ? "leaked" : "hidden");
+            close $wr; # POSIX::_exit does not flush the buffer
+            POSIX::_exit(0);
+        }
+        waitpid($c, 0);
+        POSIX::_exit(0);
+    }
+    close $wr;
+    my $answer = do { local $/; <$rd> } // '';
+    waitpid($pid, 0);
+    is($answer, "hidden", "a child of a non-dumpable process cannot read its environment through /proc");
+}
+
 done_testing();

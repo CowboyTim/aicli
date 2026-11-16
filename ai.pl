@@ -134,6 +134,8 @@ die "[ERROR] running as root EGID/RGID is not allowed\n"
 # Main execution
 require ai;
 
+# the key is not readable through /proc by the tools' processes (see sandbox::not_dumpable)
+sandbox::not_dumpable();
 ai::chat_setup($BASE_DIR);
 ai::setup_commands();
 if(defined $::UI){

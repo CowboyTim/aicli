@@ -347,6 +347,19 @@ sub abi {
 # free). Paths that do not exist are skipped. Returns true when confined,
 # false when the kernel cannot do it, dies when it can but something failed:
 # a tool is not run half confined.
+# The process is not dumpable: /proc/<pid>/environ, /proc/<pid>/mem and the rest
+# belong to root, so the other processes of the same user, the tools' children
+# included (they inherit the flag), cannot read what this process holds. The chat
+# keeps the API key in memory and in the environment it was started with: %ENV is
+# cleared, but the environment of the process is not. Landlock cannot do this: it
+# cannot hide the /proc entries of one process from the others.
+sub not_dumpable {
+    my $PR_SET_DUMPABLE = 4;
+    my $nr = $SYS_PRCTL{(POSIX::uname())[4]};
+    return 0 unless defined $nr;
+    return syscall($nr, $PR_SET_DUMPABLE, 0, 0, 0, 0) == 0 ? 1 : 0;
+}
+
 sub confine {
     my (%o) = @_;
     my $abi = abi()
