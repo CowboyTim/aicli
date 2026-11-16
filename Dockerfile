@@ -42,7 +42,7 @@ FROM system AS base
 ENV DEBIAN_FRONTEND=noninteractive
 
 # ai.pl and its modules, named one by one (a glob would also take scratch files)
-COPY ai.pl ai.pm md.pm tui.pm utils.pm ui.pm /
+COPY ai.pl ai.pm md.pm tui.pm utils.pm ui.pm worker.pm /
 COPY ai /ai
 # the entrypoint that makes the device nodes of the boards and USB devices (aicli.sh)
 COPY aicli-devices.sh /usr/local/bin/aicli-devices
@@ -107,7 +107,7 @@ RUN curl -fsSL -o /usr/local/bin/nrfutil "${NRFUTIL_URL}" \
  && HOME=/opt/nrfutil nrfutil ble-sniffer --help >/dev/null
 
 # ai.pl and its modules, as in base (the code comes after the installs above)
-COPY ai.pl ai.pm md.pm tui.pm utils.pm ui.pm /
+COPY ai.pl ai.pm md.pm tui.pm utils.pm ui.pm worker.pm /
 COPY ai /ai
 COPY aicli-devices.sh /usr/local/bin/aicli-devices
 RUN chmod 0755 /usr/local/bin/aicli-devices \
