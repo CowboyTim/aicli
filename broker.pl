@@ -180,6 +180,8 @@ sub _decoded {
 # One request to the engine, HTTP/1.1 over its Unix socket. Returns (code, body).
 sub _engine {
     my ($self, $method, $path, $data) = @_;
+    # Podman serves the libpod API under a version; the unversioned paths answer 404
+    $path = "/v4.0.0$path" if $path =~ m{\A/libpod/};
     my $sock = IO::Socket::UNIX->new(Peer => $self->{engine}, Type => Socket::SOCK_STREAM())
         or return (503, "the engine is not reachable: $!");
     my $json = defined $data ? $JSON->encode($data) : '';

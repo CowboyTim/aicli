@@ -64,6 +64,7 @@ if (!$epid) {
             $body .= $x;
         }
         my ($method, $path) = $head =~ m{\A(\S+) (\S+)};
+        $path =~ s{\A/v[0-9.]+}{}; # the version prefix of the libpod paths
         if (open(my $r, '>>', $rec)) { print {$r} $J->encode({method => $method, path => $path, body => $body})."\n"; close $r }
         my ($code, $resp);
         if ($method eq 'GET' and $path eq '/libpod/pods/json') {
@@ -212,7 +213,7 @@ waitpid($bpid, 0);
     my $text = do { local $/; <$in> };
     close($in);
     like($text, qr/request op=open project=\.\.\/etc -> refused: no such project/, "a refused request is logged, with the reason");
-    like($text, qr/engine GET \/libpod\/pods\/json -> 200/, "an engine call is logged, with its status");
+    like($text, qr/engine GET \/v4\.0\.0\/libpod\/pods\/json -> 200/, "an engine call is logged, with its status");
     like($text, qr/request op=open project=alpha -> ok/, "and an accepted one");
     unlike($text, qr/"mounts"|privileged/, "the body of a request is not logged");
 }
