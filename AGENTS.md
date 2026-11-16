@@ -154,10 +154,20 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   when the socket closes. Used by the master (phase 2 of the session workers);
   landlock and projects come with it.
 - **ui.pm** – `ui`: the web interface (`ai.pl --ui`), headless: an HTTP/1.1 server
-  on the event loop (`loop::watch`), routes, the SSE stream (`publish()`, the
-  `$ai::EVENT_SINK` hook of the chat), the token (`_authed()`), the input queue
-  that `chat_loop` reads (`input()`; a recording is recognized there, in the main
-  flow, never in a request). `check_voice()` asks the recognizer (AI_ASR_URL)
+  that is the master of the sessions: it runs no chat itself. `_worker_for($name)`
+  forks a worker per session (`worker::serve`, the child first calls
+  `loop::forget()` so it holds none of the master's sockets, timers or
+  transfers); `_worker_read` reads its events (JSON lines, `_worker_event`:
+  what the page shows of the active session, every failure, and `busy`, `state`,
+  `models` kept by the master); `_to_active($msg)` sends a message to the active
+  session's worker; `_activate` switches the page (state, conversation and list
+  are sent); `_idle_check` stops idle workers (`AI_WORKER_IDLE`); `_stop_all` ends
+  them with the interface. The worker side keeps the queue, `input()` and the
+  model switch (see worker.pm). `$OUTBOX` is for the tests: the messages go into
+  an array instead of the workers. Routes, the SSE stream (`publish()`, the
+  `$ai::EVENT_SINK` hook of the chat), the token (`_authed()`). The worker side
+  has the input queue that `chat_loop` reads (`input()`; a recording is recognized
+  there, in the main flow, never in a request). `check_voice()` asks the recognizer (AI_ASR_URL)
   for a GET at start and after a failed recognition: the state's `voice` (`ok`,
   `none`, `unreachable`) disables the mic on the page, and stderr says why.
   The listener is `IO::Socket::IP` with `ReuseAddr`, so a stop and a start on
@@ -179,8 +189,9 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   text, thinking or tool line, or at the turn's end), the
   mic (16 kHz WAV via `/voice`), the session select (`sessions` event,
   `ai::session_choices()`) and the conversation of the session (`history`
-  event, `_history_text()`, on connect and after a switch; a switch is
-  `_switch_session()` in the chat's queue, like `_switch_model()`).
+  event, `_history_data()`, on connect and after a switch; the master does the
+  switch in `_activate()`, the model switch goes to the worker's queue like
+  `_switch_model()`, which runs there).
 - **tui.pm** – `tui`: the screen. Two modes: `bar` (default when the terminal
   is big enough, at least 7 rows and 20 columns): a footer of two lines at
   the bottom, activity (`set`/`unset` items with spinner and elapsed time)
@@ -498,6 +509,7 @@ Other APIs are reached through an OpenAI compatible gateway, such as LiteLLM or 
 | `t/89_context_thinking.t` | the reasoning setting, what the request says, the first request through compactions, `/context` |
 | `t/97_live.t` | a real model, only when `AI_LIVE_SERVER` is set (`AI_LIVE_MODEL`, optional `AI_LIVE_SEARXNG`): one answer, a native tool call, the thinking setting, search. Skipped otherwise |
 | `t/100_ui.t` | the web interface: routes, the token, origin check, body limits, the input queue, the event stream on socket pairs; the listen addresses (IPv4, IPv6, `::`), stop and start on the same port, TLS with a generated certificate (a https request, the Secure cookie), the state of the speech recognizer; then `ai.pl --ui` as a child, a message in and the streamed answer out, Ctrl-C |
+| `t/102_sessions.t` | `ai.pl --ui` with two sessions: a worker each, two turns at the same time, a switch while one is busy, the abort of the active one only, ctrl-C ends the interface and its workers |
 | `t/101_worker.t` | a session worker over a socket pair: the state and the events of a turn, the message in the session's chat file, the models, a slash command refused, the end when the socket closes |
 | `t/99_models.t` | the models: every page of the list (Anthropic), one list for the others, several providers in one list (`provider/id`, the keys of each), resolving a choice, the session's provider, the context per provider, the `models` tool (a filter, the current model, the context), the `model` tool (switch, an unknown id refused), the sub-agents without them |
 | `t/98_voice.t` | speech: the multipart upload, the recorder child stopped by SIGINT, the text of the recognizer, its errors (endpoint not reachable, HTTP status, no text), `/voice` |

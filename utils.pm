@@ -702,6 +702,22 @@ sub step {
 }
 
 # drive the loop until $until says so
+# In a forked child: what the parent watches, times and runs is none of this
+# process's business. Its handles are closed here (a socket of another session
+# must not stay open in this one), its timers and transfers are dropped, and the
+# curl multi handle is let go: its transfers belong to the parent.
+sub forget {
+    for my $w (values %watch) { close($w->{fh}) if $w->{fh} }
+    %watch = ();
+    @timers = ();
+    %http = ();
+    %child = ();
+    $multi = undef;
+    $on_tick = undef;
+    $on_idle = undef;
+    return;
+}
+
 # Call $cb when $fh can be read, from the loop. unwatch() takes it away again.
 sub watch {
     my ($fh, $cb) = @_;

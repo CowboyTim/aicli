@@ -5,7 +5,8 @@ package worker;
 # comes from the socket instead of the HTTP routes, its events go back over it.
 #
 # The socket carries one JSON object per line:
-#   master -> worker: {"text": "..."}, {"model": "provider/id"}, {"models": 1}, {"abort": 1}
+#   master -> worker: {"text": "..."}, {"audio": "base64 WAV"}, {"model": "provider/id"},
+#                     {"models": 1}, {"state": 1}, {"abort": 1}
 #   worker -> master: {"event": "text", "data": {"text": "..."}}, ...
 # The events are the ones of the web page (ui::publish). The worker ends when
 # the master closes the socket: after its turn, or at once when a turn runs.
@@ -27,12 +28,14 @@ sub serve {
     local $SIG{PIPE} = 'IGNORE'; # a master that went away is an EOF, not a signal
     $::UI = 1; # the web page's chat: the web prompt context, no status line, no terminal
     ai::use_session($o{session}) if defined $o{session};
+    # ctrl-C stops the turn that runs; the worker goes on (the master ends it)
+    $SIG{INT}  = sub { $::ABORT = 1 if $ai::BUSY };
+    $SIG{TERM} = sub { $::ABORT = 1 if $ai::BUSY };
     $ui::RELAY = \&_relay;
     $ai::EVENT_SINK = \&ui::publish;
     $log::on_error = sub { ui::publish(failed => {text => ai::web_text($_[0])}) };
     loop::watch($sock, \&_readable);
     _relay(state => ui::_state());
-    ui::_ask_models();
     ai::chat_loop();
     ai::cleanup_chat();
     loop::unwatch($sock);
@@ -76,6 +79,11 @@ sub _message {
         push @ui::queue, {model => $m->{model}};
     } elsif ($m->{models}) {
         push @ui::queue, {models => 1};
+    } elsif (exists $m->{audio}) {
+        require MIME::Base64;
+        push @ui::queue, {audio => MIME::Base64::decode_base64($m->{audio})};
+    } elsif ($m->{state}) {
+        ui::publish(state => ui::_state());
     } elsif ($m->{abort}) {
         $::ABORT = 1 if $ai::BUSY;
     }

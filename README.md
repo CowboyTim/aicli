@@ -232,7 +232,10 @@ the session select in the menu lists the sessions of every directory, newest
 first). It continues the last session used in this directory, as `-c` does,
 unless `--new` or `AI_SESSION` says otherwise. The page shows the conversation
 of the session when it connects and after a switch (what was said, not the tool
-calls; the last 200 messages).
+calls; the last 200 messages). Every session runs in a process of its own
+(a worker of the interface): sessions run at the same time, a busy one shows
+as busy in the list, and an idle one is stopped after `AI_WORKER_IDLE` seconds
+(900 by default).
 A bearer token (`Authorization: Bearer`) works too; `AI_UI_TOKEN` sets the
 token.
 

@@ -29,6 +29,10 @@ my $TOKEN = '0123456789abcdef0123456789abcdef';
 
 $ui::token     = $TOKEN;
 $ui::html_file = "$ROOT/ai/ui/index.html";
+# the master sends its messages to an outbox (no workers in these tests), and the
+# active session is named here
+$ui::OUTBOX = [];
+$ui::active = 'test-session';
 
 # a connection whose other end the test reads
 sub conn {
@@ -118,7 +122,8 @@ is(status_of($r), 400, "a slash command is refused for now");
 $r = request('POST', '/message', cookie => $ok_cookie, origin => "http://127.0.0.1:8080", body => '{"text":"hello there"}');
 is(status_of($r), 202, "a message is accepted");
 is($::JSON->decode(body_of($r))->{queued}, 1, "and queued");
-is(ui::queued(), 1, "the queue holds it");
+is(ui::_master_state()->{queued}, 1, "the active session's worker holds it");
+is_deeply($ui::OUTBOX->[-1], ['test-session', {text => 'hello there'}], "and the message goes to that worker");
 
 $r = request('GET', '/message', cookie => $ok_cookie);
 is(status_of($r), 405, "GET on a POST route");
@@ -135,6 +140,7 @@ is(status_of($r), 413, "a body too big is refused");
 # the input: a queued message comes out, the chat's end stops the wait
 {
     local $::LOOP = 1;
+    @ui::queue = ("hello there"); # what the worker's queue holds (the worker feeds it)
     my $input = ui::input();
     my $m = $input->();
     is($m, "hello there", "the input gives the queued message");
@@ -150,10 +156,11 @@ is(status_of($r), 413, "a body too big is refused");
     my $wav = "RIFF".("\x00" x 40);
     $r = request('POST', '/voice', body => $wav, cookie => $ok_cookie, raw => "Content-Type: audio/wav\r\n");
     is(status_of($r), 202, "a recording is queued");
-    my ($item) = @ui::queue;
+    require MIME::Base64;
+    my (undef, $item) = @{$ui::OUTBOX->[-1]};
     is(ref($item), 'HASH', "as a recording, not as text");
-    is(length($item->{audio}), length($wav), "with its bytes");
-    @ui::queue = ();
+    is(length(MIME::Base64::decode_base64($item->{audio})), length($wav), "with its bytes");
+    $ui::OUTBOX = [];
 
     $r = request('POST', '/voice', body => 'x', cookie => $ok_cookie, raw => "Content-Type: text/plain\r\n");
     is(status_of($r), 415, "a body that is not audio is refused");
@@ -168,7 +175,7 @@ is(status_of($r), 413, "a body too big is refused");
     my $big = "RIFF".("\x00" x 2_000_000);
     $r = request('POST', '/voice', body => $big, cookie => $ok_cookie, raw => "Content-Type: audio/wav\r\n");
     is(status_of($r), 202, "a recording of 2 MB is accepted");
-    @ui::queue = ();
+    $ui::OUTBOX = [];
 }
 
 {
@@ -348,20 +355,21 @@ SKIP: {
 # --- the models: the list and the choice go through the chat's flow ----------
 
 {
+    $ui::active = 'test-session'; # ui::start (above) names the session of the chat, none here
     my $r = request('POST', '/model', body => '{"id":"openrouter/llama-b"}');
     is(status_of($r), 401, "model: needs the token");
-    @ui::queue = ();
+    $ui::OUTBOX = [];
     $r = request('POST', '/model', cookie => $ok_cookie, body => '{"id":"openrouter/llama-b"}');
     is(status_of($r), 202, "model: a choice is accepted");
-    is_deeply($ui::queue[0], {model => 'openrouter/llama-b'}, "model: queued for the chat's flow");
+    is_deeply($ui::OUTBOX->[0], ['test-session', {model => 'openrouter/llama-b'}], "model: sent to the session's worker");
     $r = request('POST', '/model', cookie => $ok_cookie, body => '{"id":""}');
     is(status_of($r), 400, "model: an empty id is refused");
     $r = request('POST', '/model', cookie => $ok_cookie, body => 'not json');
     is(status_of($r), 400, "model: not JSON is refused");
     $r = request('POST', '/models', cookie => $ok_cookie);
     is(status_of($r), 202, "models: a refresh is accepted");
-    is_deeply($ui::queue[1], {models => 1}, "models: queued for the chat's flow");
-    @ui::queue = ();
+    is_deeply($ui::OUTBOX->[1], ['test-session', {models => 1}], "models: asked of the session's worker");
+    $ui::OUTBOX = [];
 }
 
 {
@@ -375,23 +383,24 @@ SKIP: {
     is($ai::SESSION_MODEL, 'no-such', "a choice that is not listed is taken as a bare id at the provider (as /model does)");
 }
 
-# --- the sessions: the picker and the switch go through the chat's flow -------
+# --- the sessions: the master switches the page to a session and its worker -----
 
 {
     my $r = request('POST', '/session', body => '{"name":"other"}');
     is(status_of($r), 401, "session: needs the token");
-    @ui::queue = ();
+    ai::init_session('other');
     $r = request('POST', '/session', cookie => $ok_cookie, body => '{"name":"other"}');
-    is(status_of($r), 202, "session: a switch is accepted");
-    is_deeply($ui::queue[0], {session => 'other', new => 0}, "session: queued for the chat's flow");
+    is(status_of($r), 200, "session: a switch is done");
+    is($ui::active, 'other', "the page's session is the other one");
     $r = request('POST', '/session', cookie => $ok_cookie, body => '{"new":true}');
-    is(status_of($r), 202, "session: a new one is accepted");
-    is_deeply($ui::queue[1], {session => undef, new => 1}, "session: a new one is queued");
+    is(status_of($r), 200, "session: a new one is made");
+    like($ui::active, qr/^session-/, "named by the master");
     $r = request('POST', '/session', cookie => $ok_cookie, body => '{"name":"../etc"}');
     is(status_of($r), 400, "session: a bad name is refused");
+    $r = request('POST', '/session', cookie => $ok_cookie, body => '{"name":"no-such"}');
+    is(status_of($r), 400, "session: a session that does not exist is refused");
     $r = request('POST', '/session', cookie => $ok_cookie, body => '{}');
     is(status_of($r), 400, "session: neither a name nor new is refused");
-    @ui::queue = ();
 }
 
 {
@@ -404,36 +413,40 @@ SKIP: {
         {role => 'assistant', content => 'first answer'},
         {role => 'user', content => "[Summary of the conversation so far]\nold"},
         {role => 'tool', tool_call_id => 'x', content => 'tool out'});
-    my $t = ui::_history_text();
-    like($t, qr/^event: history\n/, "history: an event of its own");
+    my $d = ui::_history_data('hist-a');
+    my $t = $::JSON->encode($d);
+    like(ui::_frame(history => $d), qr/^event: history\n/, "history: an event of its own");
     like($t, qr/first question/, "history: what the user said");
     like($t, qr/first answer/, "history: what the model answered");
     unlike($t, qr/RESULT_d170|tool out|Summary of the conversation/, "history: no tool results, no summaries");
     like($t, qr/"more":false/, "history: not cut when short");
 
     ai::init_session('hist-b');
-    ui::_switch_session({session => 'hist-b', new => 0});
-    is($ai::AI_SESSION, 'hist-b', "switch: the chat is in the other session");
-    ui::_switch_session({session => undef, new => 1});
-    like($ai::AI_SESSION, qr/^session-/, "switch: a new session, named by the chat");
-    ok($ai::AUTO_SESSION{$ai::AI_SESSION}, "switch: a new session of ours (removed at the end when empty)");
-    my $before = $ai::AI_SESSION;
-    TestAI::capture { ui::_switch_session({session => 'no-such', new => 0}) };
-    is($ai::AI_SESSION, $before, "switch: a session that does not exist is refused, the chat stays");
+    ok(ui::_activate('hist-b'), "switch: the other session is active");
+    is($ui::active, 'hist-b', "the page's session is it");
+    is($ai::AI_SESSION, 'hist-b', "and the master is in it");
+    ok(ui::_activate(undef, new => 1), "switch: a new session");
+    like($ui::active, qr/^session-/, "named by the master");
+    ok($ai::AUTO_SESSION{$ui::active}, "a new session of ours (removed at the end when empty)");
+    my $before = $ui::active;
+    my $res;
+    TestAI::capture { $res = ui::_activate('no-such') };
+    ok(!$res, "switch: a session that does not exist is refused");
+    is($ui::active, $before, "the page stays where it was");
+    like($ui::last_error, qr/there is no session 'no-such'/, "and the reason is kept");
 
     my $list = ai::session_choices();
     ok((grep {$_->{name} eq 'hist-a'} @$list), "sessions: one with a conversation is listed");
-    like(ui::_sessions_text(), qr/^event: sessions\n/, "sessions: an event of its own");
-    ui::_switch_session({session => 'hist-a', new => 0});
+    like(ui::_frame(sessions => ui::_sessions_data()), qr/^event: sessions\n/, "sessions: an event of its own");
 
     # a session without a model of its own keeps the model in use
     ai::set_model('openai', 'gpt-keep');
     ai::init_session('hist-c');
-    ui::_switch_session({session => 'hist-c', new => 0});
-    is($ai::SESSION_MODEL, 'gpt-keep', "switch: a session without a model keeps the one in use");
-    is(ai::current_label(), 'openai/gpt-keep', "switch: the label names it, so the page shows it");
-    ui::_switch_session({session => undef, new => 1});
-    is($ai::SESSION_MODEL, 'gpt-keep', "switch: a new session keeps the model in use");
+    ok(ui::_activate('hist-c'), "switch: a session without a model");
+    is($ai::SESSION_MODEL, 'gpt-keep', "keeps the model in use");
+    is($ui::model_of{'hist-c'}, 'openai/gpt-keep', "and the page is told which one it is");
+    ok(ui::_activate(undef, new => 1), "switch: a new session");
+    is($ai::SESSION_MODEL, 'gpt-keep', "a new session keeps the model in use too");
 }
 
 # --- the speech recognizer: the page is told whether the mic can work -------
@@ -658,11 +671,15 @@ ok(1, "the chat child is stopped");
     };
     ok($wait_turn->('start'), "the slow turn starts");
     select(undef, undef, undef, 0.5);
-    kill 'INT', $k;
-    ok($wait_turn->('end'), "ctrl-C ends the running turn");
-    my $alive = kill(0, $k);
-    ok($alive, "and the program stays (the turn was stopped, not the chat)");
+    # the session's worker runs the turn: ctrl-C in it stops the turn, not the program
+    my ($wk) = _child_pids($k);
+    ok($wk, "the session has a worker process");
+    kill 'INT', $wk;
+    ok($wait_turn->('end'), "ctrl-C in the worker ends the running turn");
+    ok(kill(0, $k), "and the interface stays");
+    ok(kill(0, $wk), "and so does the worker");
 
+    # ctrl-C in the interface ends it, and its workers with it
     kill 'INT', $k;
     my $w = 0;
     for (1 .. 100){
@@ -670,12 +687,34 @@ ok(1, "the chat child is stopped");
         last if $w;
         select(undef, undef, undef, 0.1);
     }
-    is($w, $k, "a second ctrl-C while idle ends the program");
-    is($? >> 8, 130, "with exit 130, as on the terminal");
+    is($w, $k, "ctrl-C in the interface ends the program");
+    is($? >> 8, 0, "with exit 0");
+    my $gone = 0;
+    for (1 .. 50){
+        $gone = !kill(0, $wk);
+        last if $gone;
+        select(undef, undef, undef, 0.1);
+    }
+    ok($gone, "and its workers end with it");
 }
 
 FakeLLM::stop();
 # --- ai.pl --ui: the last session of the directory is continued, --new is not
+
+sub _child_pids {
+    my ($ppid) = @_;
+    opendir(my $dh, '/proc') or return ();
+    my @kids;
+    for my $e (grep {/^\d+$/} readdir $dh) {
+        open(my $fh, '<', "/proc/$e/stat") or next;
+        my $st = <$fh>;
+        close($fh);
+        my ($pp) = $st =~ m/\)\s+\S+\s+(\d+)/ or next;
+        push @kids, $e if $pp == $ppid;
+    }
+    closedir($dh);
+    return @kids;
+}
 
 sub _first_state {
     my ($port) = @_;

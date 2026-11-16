@@ -143,7 +143,12 @@ if(defined $::UI){
     die "--ui and -p do not go together\n" if defined $::PROMPT;
     require ui;
     ui::start(port => $::UI, bind => $::UI_BIND, (defined $::UI_TLS ? (tls_cert => $::UI_TLS->[0], tls_key => $::UI_TLS->[1]) : ()), token => (length($::ORIG_ENV{AI_UI_TOKEN} // "") ? $::ORIG_ENV{AI_UI_TOKEN} : undef));
-    ai::chat_loop();
+    # the master runs no chat itself: each session has its worker (worker.pm).
+    # ctrl-C or TERM ends the interface, and with it the workers
+    local $SIG{INT}  = sub { $::LOOP = 0 };
+    local $SIG{TERM} = sub { $::LOOP = 0 };
+    $::LOOP = 1;
+    loop::run(sub { !$::LOOP });
     ai::cleanup_chat();
     ui::stop();
     exit 0;
@@ -227,7 +232,14 @@ by C<AI_ASR_URL> and sent to the chat as soon as it is ready), C<POST /session>
 The session last used in this directory is continued, as with C<-c>, unless
 C<--new> or C<AI_SESSION> says otherwise. The page shows the conversation of
 the session when it connects and after a switch: what was said, not the tool
-calls. Slash commands and files come later.
+calls.
+
+Each session has a worker process of its own (the same chat, forked by this
+one): sessions run their turns at the same time, and the page can switch away
+from a session that is busy. A worker that sits idle for C<AI_WORKER_IDLE>
+seconds (900 by default) is stopped; it starts again with its next message.
+Ctrl-C ends the interface and its workers; the stop button of the page stops a
+turn. Slash commands and files come later.
 
 =item B<--new>
 
