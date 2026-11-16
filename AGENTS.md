@@ -101,8 +101,10 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
 - November 2026, the web interface (`ai.pl --ui`): SSE, routes, token, IPv4 and
   IPv6, Ctrl-C, tool and error blocks, speech input, the thinking block, theme
   and look choice, TLS with `Net::SSLeay`. Tested with socket pairs, a forked
-  client, `ai.pl --ui` as a child, and `openssl s_client`. Not yet tested in a
-  real browser or on a phone: the page, the QR code, the microphone, the
+  client, `ai.pl --ui` as a child, and `openssl s_client`. Checked on a phone:
+  the QR code opens the page and the token cookie holds (`SameSite=Lax`, after
+  a link from another app `Strict` was not sent and the page answered 401).
+  Not yet tested in a browser: both looks and themes, the microphone, the
   thinking block, the TLS trust prompt. Not built yet: file downloads and
   inline pictures, uploads to `./uploads/`, slash commands over `POST /command`
   (refused with 400 for now).
@@ -145,7 +147,8 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   non-blocking socket. `_handshake()` runs on the loop (a 10 s limit),
   `_read_socket()`, `_flush()` and `_close()` branch on `$cn->{ssl}`, and
   `_close()` sends close_notify before the socket closes (without it a client
-  drops the answer). The cookie gets `Secure` over https. Page:
+  drops the answer). The cookie is `HttpOnly; SameSite=Lax` and gets `Secure`
+  over https. Page:
   `ai/ui/index.html`: answers and thinking are drawn as markdown (its own
   renderer, DOM nodes only, never innerHTML); the system prompt says so in web
   mode only (`prompt_context()`, when `$::UI` is set; a session keeps the prompt it
@@ -179,6 +182,11 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   result (`== ... done, exit N`). Both files are git-ignored.
   **docker-bake.hcl** builds that image (`docker buildx bake`; `image-ci`
   adds the GitHub Actions cache). CI still uses `docker build`.
+  The Dockerfile has three stages: `system` (the apt installs both images
+  share), `base` (ai.pl and the basic unix tools) and `dev` (the default
+  target: languages, ImageMagick, radios, the nRF tools, the devel lists). The
+  package installs come before the `COPY` of the code in each stage, so a code
+  change keeps the build cache; keep it that way when adding a package.
 - **t/** – tests, **PLAN.md** – open work and ideas.
 
 ## How a turn works
