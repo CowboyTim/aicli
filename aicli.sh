@@ -14,6 +14,9 @@
 #   ./aicli.sh -c              anything else goes to ai.pl
 #   ./aicli.sh --ui [PORT]     the web interface (ai.pl --ui); the container shares the host network,
 #                              so it is at http://127.0.0.1:PORT (8080) on the host, token on stderr
+#   ./aicli.sh --root DIR      DIR is mounted as a whole, the projects are the directories in it, and
+#                              the container starts in the current directory (which must be in DIR):
+#                              one container for all projects, one web interface (ai.pl --ui from DIR)
 #
 # The flags come first, in any order. Only the flags above are taken; ai.pl's
 # own options (-c, -p, ...) pass through.
@@ -47,6 +50,7 @@ usb=0
 rtlsdr=0
 nrf=0
 bluetooth=0
+root=
 while :; do
     case "${1:-}" in
         --base)             image=local/ai/aicli-base:latest ;;
@@ -57,6 +61,8 @@ while :; do
         --rtlsdr)           rtlsdr=1; usb=1 ;;
         --nrf-sniffer)      nrf=1; usb=1 ;;
         --bluetooth)        bluetooth=1 ;;
+        --root)             root=${2:?"aicli.sh: --root needs a directory"}; shift ;;
+        --root=*)           root=${1#--root=} ;;
         *) break ;;
     esac
     shift
@@ -64,8 +70,24 @@ done
 DOCKER_IMAGE=${DOCKER_IMAGE:-$image}
 
 HERE=$(readlink -f "${PWD}")
-BDIR=${HERE##*/}
-cname=aicli-${LOGNAME}-${BDIR}
+# the directory mounted, its name, and where the container starts
+MOUNT=$HERE
+MNAME=${HERE##*/}
+WDIR=/workdir/$MNAME
+cname_kind=
+if [ -n "$root" ]; then
+    ROOT_ABS=$(readlink -f "$root")
+    case "$HERE" in
+        "$ROOT_ABS"|"$ROOT_ABS"/*) ;;
+        *) echo "aicli.sh: the current directory is not inside the root $ROOT_ABS" >&2; exit 2 ;;
+    esac
+    MOUNT=$ROOT_ABS
+    MNAME=${ROOT_ABS##*/}
+    WDIR=/workdir/$MNAME${HERE#"$ROOT_ABS"}
+    cname_kind=root-
+fi
+BDIR=$MNAME
+cname=aicli-${LOGNAME}-${cname_kind}${BDIR}
 
 extra_opts=
 
@@ -210,7 +232,7 @@ exec docker run --rm -it \
     -e GID=$(id -g) \
     -e LOGNAME \
     -e BDIR="${BDIR}" \
-    -e CDIR="/workdir/${BDIR}" \
+    -e CDIR="${WDIR}" \
     -e GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no" \
     -e AI_DIR=/workspace/.aicli \
     -e AI_SESSION \
@@ -230,6 +252,7 @@ exec docker run --rm -it \
     --network=host \
     --name "$cname" \
     -v aicli-${LOGNAME}:/workspace \
-    -v "${PWD}":/workdir/${BDIR} \
+    -v "${MOUNT}":/workdir/${MNAME} \
+    -w "${WDIR}" \
         "$DOCKER_IMAGE" \
             "$@"

@@ -35,6 +35,9 @@ user's view) and AGENTS.md (the code, and "Status" for the history), not here.
 
 ## Open: web interface
 
+- **Projects and `--root`** are built and tested with a fake docker and the
+  socket tests. Not yet: a real `aicli.sh --root` run with the image, and a
+  browser check of the project select.
 - **Not started:** file downloads and inline pictures for what the model
   generates (`GET /files`, `tools::_path()`, `Content-Disposition: attachment`
   for downloads, `file` events from `tools::_changing`).

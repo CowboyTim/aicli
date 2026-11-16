@@ -36,6 +36,7 @@ sub web_text { my $t = to_text($_[0] // ''); $t =~ s/\e\[[0-9;]*m//g; return $t 
 our $MAIN_PID = $$;
 our %AUTO_SESSION;    # sessions this process made up a name for
 our $WORKSPACE;       # the directory the file tools are confined to, undef: no limit
+our $ROOT;            # the root of the projects: the directories under it (the workspace at start)
 our @WORKSPACE_ALLOW; # more directories they may use
 
 our %PROVIDERS = (
@@ -167,6 +168,7 @@ sub chat_setup {
     $AI_URL = ai_url();
 
     set_workspace($::ORIG_ENV{AI_WORKSPACE});
+    $ROOT = $WORKSPACE // Cwd::cwd(); # the projects are the directories under it
     tidy_sessions($AI_SESSION);
     init_session($AI_SESSION);
     use_session($AI_SESSION);
@@ -275,7 +277,9 @@ sub use_session {
     my $sp = read_session_provider() // $MAIN_PROVIDER;
     use_provider($sp) if defined $sp and $sp ne $AI_PROVIDER and grep {$_ eq $sp} @{provider_names()};
     # where it is used, for --continue
-    eval {spew("$AI_SESSION_DIR/cwd", Cwd::cwd()."\n")} if -d $AI_SESSION_DIR;
+    # the directory a session is used in (--continue); the web interface records the
+    # project of a session itself: its master is not in any project
+    eval {spew("$AI_SESSION_DIR/cwd", Cwd::cwd()."\n")} if -d $AI_SESSION_DIR and !$::UI;
     # the footer: the numbers of this session, not the speed of a request of another
     $TUI->info($_ => undef) for qw(speed cache);
     status_info();
@@ -2259,6 +2263,49 @@ sub list_sessions {
     }
 }
 
+# --- projects: the directories under the root (the workspace at start) ----------
+
+# the projects, by name: the directories directly under the root (not hidden, not links)
+sub project_dirs {
+    return [] unless defined $ROOT and -d $ROOT;
+    opendir(my $dh, $ROOT) or return [];
+    my @p = sort grep {!m/^\./ and -d "$ROOT/$_" and !-l "$ROOT/$_"} readdir($dh);
+    closedir($dh);
+    return \@p;
+}
+
+# the directory of a project, given by its name ('' is the root)
+sub project_path {
+    my ($rel) = @_;
+    return length($rel // '') ? "$ROOT/$rel" : $ROOT;
+}
+
+# the project of a session: the directory it was made or used in, relative to the
+# root ('' for the root, or for a directory outside it)
+sub session_project {
+    my ($name) = @_;
+    my $dir = slurp("$SESSIONS_DIR/$name/cwd") // return '';
+    chomp $dir;
+    return '' unless defined $ROOT and $dir =~ m{\A\Q$ROOT\E/(.+)\z};
+    return $1;
+}
+
+# runs $code in a directory: the process is in it, and it is the workspace, for the
+# time of the call (a new session's prompt names the project it is made in)
+sub in_project {
+    my ($dir, $code) = @_;
+    my $old_cwd = Cwd::cwd();
+    my $old_ws  = $WORKSPACE;
+    chdir($dir) or die "cannot enter $dir: $!\n";
+    set_workspace($dir);
+    my @r = eval {$code->()};
+    my $err = $@;
+    chdir($old_cwd);
+    $WORKSPACE = $old_ws;
+    die $err if $err;
+    return @r;
+}
+
 # the sessions the web page can switch to: the ones with something in them and
 # the current one, newest first (at most 50), with what each starts with and
 # the directory it was used in
@@ -2269,7 +2316,8 @@ sub session_choices {
         next if $i->{empty} and $s ne $AI_SESSION;
         my $cwd = slurp("$SESSIONS_DIR/$s/cwd") // '';
         chomp $cwd;
-        push @out, {name => $s, age => $i->{age}, first => clip_text($i->{first}, 60), cwd => $cwd};
+        push @out, {name => $s, age => $i->{age}, first => clip_text($i->{first}, 60), cwd => $cwd,
+            project => session_project($s)};
     }
     @out = sort {$a->{age} <=> $b->{age}} @out;
     splice(@out, 50) if @out > 50;

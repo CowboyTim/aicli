@@ -271,7 +271,13 @@ sub _models_out {
 
 # the sessions to choose from: the list, the active one, the busy ones
 sub _sessions_data {
-    return {current => $active // '', list => ai::session_choices(), busy => _busy_list()};
+    return {
+        current  => $active // '',
+        list     => ai::session_choices(),
+        busy     => _busy_list(),
+        project  => defined $active ? ai::session_project($active) : '',
+        projects => ['', @{ai::project_dirs()}], # the root first
+    };
 }
 
 # the conversation of a session as the page shows it: what the user typed and what
@@ -305,6 +311,7 @@ sub _worker_for {
     require Socket;
     socketpair(my $mine, my $theirs, Socket::AF_UNIX(), Socket::SOCK_STREAM(), Socket::PF_UNSPEC())
         or do { log::error("no socket for session $name: $!"); return undef };
+    my $project = _project_dir($name);
     my $pid = fork();
     if (!defined $pid) {
         log::error("cannot start the session $name: $!");
@@ -316,7 +323,7 @@ sub _worker_for {
         # the worker: none of the master's sockets, timers or transfers
         loop::forget();
         close($mine);
-        my $ok = eval {worker::serve($theirs, session => $name); 1};
+        my $ok = eval {worker::serve($theirs, session => $name, project => $project); 1};
         print STDERR "session $name: $@" unless $ok;
         POSIX::_exit($ok ? 0 : 1);
     }
@@ -326,6 +333,27 @@ sub _worker_for {
     $worker{$name} = $w;
     loop::watch($mine, sub { _worker_read($name) });
     return $w;
+}
+
+# the directory of a session's project, when it is still there (else the root)
+sub _project_dir {
+    my ($name) = @_;
+    my $dir = ai::project_path(ai::session_project($name));
+    return -d $dir ? $dir : $ai::ROOT;
+}
+
+# the page chose a project: its newest session becomes the active one, or a new
+# session is made in it. Returns 1, or 0 with the reason in $last_error.
+sub _project {
+    my ($rel) = @_;
+    $last_error = '';
+    if (length($rel) and !grep {$_ eq $rel} @{ai::project_dirs()}) {
+        $last_error = "there is no project '$rel'";
+        return 0;
+    }
+    my ($newest) = grep {$_->{project} eq $rel} @{ai::session_choices()};
+    return _activate($newest->{name}) if $newest;
+    return _activate(undef, new => 1, project => $rel);
 }
 
 # a message to the worker of a session
@@ -447,9 +475,14 @@ sub _activate {
     $last_error = '';
     my $ok = eval {
         if ($o{new}) {
+            # a new session is made in a project: the one asked for, else the active one's
+            my $rel = $o{project} // (defined $active ? ai::session_project($active) : '');
+            die "there is no project '$rel'\n" if length($rel) and !grep {$_ eq $rel} @{ai::project_dirs()};
+            my $dir = ai::project_path($rel);
             $name = "session-".ai::new_session_id();
             $ai::AUTO_SESSION{$name} = 1; # ours: removed at the end when nothing was said
-            ai::init_session($name);
+            ai::in_project($dir, sub { ai::init_session($name) });
+            ai::spew("$ai::SESSIONS_DIR/$name/cwd", "$dir\n");
         } elsif (!ai::valid_session_name($name // '') or !-d "$ai::SESSIONS_DIR/$name") {
             die "there is no session '".($name // '')."'\n";
         }
@@ -889,7 +922,15 @@ sub _dispatch {
         return _json($cn, 400, {error => 'not a session name'})
             unless $new or ai::valid_session_name($name);
         return _json($cn, 400, {error => ($last_error || 'the session cannot be used')})
-            unless _activate($name, new => $new);
+            unless _activate($name, new => $new, project => (ref($d->{project}) ? undef : $d->{project}));
+        return _json($cn, 200, {session => $active});
+    }
+    if($p eq '/project' and $m eq 'POST'){
+        my $d = eval {$::JSON->decode($body)};
+        my $rel = ref($d) eq 'HASH' ? $d->{name} : undef;
+        return _json($cn, 400, {error => 'a JSON object with the name of a project is wanted (empty for the root)'})
+            unless defined $rel and !ref($rel);
+        return _json($cn, 400, {error => ($last_error || 'the project cannot be used')}) unless _project($rel);
         return _json($cn, 200, {session => $active});
     }
     if($p eq '/voice' and $m eq 'POST'){
@@ -909,7 +950,7 @@ sub _dispatch {
     if($p eq '/state' and $m eq 'GET'){
         return _json($cn, 200, _master_state());
     }
-    return _respond($cn, 405, 'text/plain', "method not allowed\n") if $p =~ m{^/(events|message|session|voice|abort|state)$};
+    return _respond($cn, 405, 'text/plain', "method not allowed\n") if $p =~ m{^/(events|message|session|project|voice|abort|state)$};
     return _respond($cn, 404, 'text/plain', "not found\n");
 }
 

@@ -235,7 +235,12 @@ of the session when it connects and after a switch (what was said, not the tool
 calls; the last 200 messages). Every session runs in a process of its own
 (a worker of the interface): sessions run at the same time, a busy one shows
 as busy in the list, and an idle one is stopped after `AI_WORKER_IDLE` seconds
-(900 by default).
+(900 by default). A session's project is the directory it was made in: the
+directories directly under the root (where the interface was started) are the
+projects. The page's project select switches to the newest session of a project,
+or makes one; a new session's prompt carries that project's `AGENTS.md`, and its
+worker may only write in the project (and the temp directory and its own
+session).
 A bearer token (`Authorization: Bearer`) works too; `AI_UI_TOKEN` sets the
 token.
 
@@ -243,6 +248,7 @@ token.
 |--------|---|
 | `--ui [port]` | serve the interface (default 8080); continues the last session of this directory |
 | `--new` | with `--ui`: a new session instead of the last one of this directory |
+| `--root DIR` (`aicli.sh`) | mount `DIR` as a whole: its directories are the projects, and the container starts in the current directory (which must be inside `DIR`). One container, one web interface for all projects |
 | `--ui-bind <address>` | the address to listen on: `127.0.0.1` (default), `::1`, `0.0.0.0` (any IPv4), `::` (any IPv6). The printed phone address is the one of this machine that a phone can reach, with a QR code on the terminal (`qrencode`) |
 | `--tls-cert <file> --tls-key <file>` | serve https, with a PEM certificate and key (needs `Net::SSLeay`, Debian `libnet-ssleay-perl`). A self-signed one: `openssl req -x509 -newkey rsa:2048 -nodes -days 365 -subj /CN=localhost -keyout key.pem -out cert.pem` |
 

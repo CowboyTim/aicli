@@ -71,4 +71,38 @@ is($r{read}, 1, "it reads everywhere");
 is($r{child}, 0, "and the tools' children cannot write outside either");
 ok(!-e $outside, "the probe file was not made");
 
+# --- a worker in a project: its workspace is the project, and the limit is that one
+
+{
+    my $base = "$FindBin::Bin/projects-probe-$$";
+    mkdir $base or die "mkdir: $!";
+    mkdir "$base/alpha" or die "mkdir: $!";
+    mkdir "$base/beta" or die "mkdir: $!";
+    pipe(my $prd, my $pwr) or die "pipe: $!";
+    my $ppid = fork() // die "fork: $!";
+    if (!$ppid) {
+        close $prd;
+        chdir("$base/alpha") or POSIX::_exit(3);
+        ai::set_workspace("$base/alpha");
+        worker::confine() or POSIX::_exit(4);
+        my $fh;
+        my $in_alpha = open($fh, '>', "$base/alpha/ok.txt") ? 1 : 0;
+        close($fh) if $in_alpha;
+        my $in_beta = open($fh, '>', "$base/beta/no.txt") ? 1 : 0;
+        close($fh) if $in_beta;
+        print {$pwr} "alpha=$in_alpha beta=$in_beta\n";
+        close $pwr;
+        POSIX::_exit(0);
+    }
+    close $pwr;
+    my $got = do { local $/ = "\n"; <$prd> } // '';
+    waitpid($ppid, 0);
+    is($? >> 8, 0, "the worker in its project was confined");
+    my %r = map {split /=/, $_, 2} split ' ', $got;
+    is($r{alpha}, 1, "it writes in its project");
+    is($r{beta}, 0, "and not in another project");
+    unlink("$base/alpha/ok.txt", "$base/beta/no.txt");
+    rmdir("$base/alpha"); rmdir("$base/beta"); rmdir($base);
+}
+
 done_testing();

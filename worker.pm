@@ -44,6 +44,11 @@ sub serve {
     local $SIG{PIPE} = 'IGNORE'; # a master that went away is an EOF, not a signal
     $::UI = 1; # the web page's chat: the web prompt context, no status line, no terminal
     ai::use_session($o{session}) if defined $o{session};
+    # the project of the session: its directory is the process's and its workspace
+    if (defined $o{project}) {
+        chdir($o{project}) or die "cannot enter the project $o{project}: $!\n";
+        ai::set_workspace($o{project});
+    }
     confine();
     # ctrl-C stops the turn that runs; the worker goes on (the master ends it)
     $SIG{INT}  = sub { $::ABORT = 1 if $ai::BUSY };

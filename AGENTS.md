@@ -132,7 +132,13 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   `AI_UID`/`UID`, `AI_GID`/`GID`, `AI_GROUPS` or the groups it has; the base
   directory is chowned, with its content when the owner changes), then
   `ai::chat_setup(); ai::setup_commands(); ai::chat_loop();`. Holds the POD.
-- **ai.pm** – several packages in one file:
+- **ai.pm** – several packages in one file. Projects (`$ROOT`, the workspace at
+  start): `project_dirs()` (the directories under the root, not hidden, not links),
+  `session_project($name)` (the `cwd` file of a session, relative to the root),
+  `project_path($rel)`, `in_project($dir, $code)` (the process and the workspace
+  are the project for the time of the call: a new session's prompt names it).
+  `use_session()` records the process directory in `cwd` only for the terminal
+  chat (`!$::UI`); the web master records the project of a new session itself.
   - `ai` – setup/providers, chat state, agent loop, streaming, retry, token
     usage, context management, sessions, commands, readline input
   - `agent` – sub-agents: a state machine per agent on the event loop
@@ -159,7 +165,9 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   `loop::forget()` so it holds none of the master's sockets, timers or
   transfers); `_worker_read` reads its events (JSON lines, `_worker_event`:
   what the page shows of the active session, every failure, and `busy`, `state`,
-  `models` kept by the master); `_to_active($msg)` sends a message to the active
+  `models` kept by the master); `_project($rel)` (the page's project: its newest
+  session, or a new one in it), `_project_dir($name)` (the directory a worker starts
+  in); `_to_active($msg)` sends a message to the active
   session's worker; `_activate` switches the page (state, conversation and list
   are sent); `_idle_check` stops idle workers (`AI_WORKER_IDLE`); `_stop_all` ends
   them with the interface. The worker side keeps the queue, `input()` and the
@@ -512,6 +520,8 @@ Other APIs are reached through an OpenAI compatible gateway, such as LiteLLM or 
 | `t/89_context_thinking.t` | the reasoning setting, what the request says, the first request through compactions, `/context` |
 | `t/97_live.t` | a real model, only when `AI_LIVE_SERVER` is set (`AI_LIVE_MODEL`, optional `AI_LIVE_SEARXNG`): one answer, a native tool call, the thinking setting, search. Skipped otherwise |
 | `t/100_ui.t` | the web interface: routes, the token, origin check, body limits, the input queue, the event stream on socket pairs; the listen addresses (IPv4, IPv6, `::`), stop and start on the same port, TLS with a generated certificate (a https request, the Secure cookie), the state of the speech recognizer; then `ai.pl --ui` as a child, a message in and the streamed answer out, Ctrl-C |
+| `t/104_projects.t` | the projects under the root (hidden and files left out), a session made in one with its AGENTS.md and its workspace in its prompt, the switch to a project (the newest session, or a new one), the root |
+| `t/105_wrapper.t` | `aicli.sh --root`: the root mounted, the container started in the current project and named for the root; a directory outside the root refused; without `--root` as before (a fake docker records the arguments) |
 | `t/102_sessions.t` | `ai.pl --ui` with two sessions: a worker each, two turns at the same time, a switch while one is busy, the abort of the active one only, ctrl-C ends the interface and its workers |
 | `t/103_worker_sandbox.t` | a session worker confined by landlock: writes in its workspace and session only, reads everywhere, a tool's child inherits the limit (the probe file is outside the test's temp directory) |
 | `t/101_worker.t` | a session worker over a socket pair: the state and the events of a turn, the message in the session's chat file, the models, a slash command refused, the end when the socket closes |

@@ -62,7 +62,7 @@
   #menu.open { display: flex; }
   #menu label { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 13px; }
   #menu select { flex: 1; min-width: 0; max-width: 70%; font-size: 15px; }
-  #model, #session { max-width: 100% !important; }
+  #model, #session, #project { max-width: 100% !important; }
   #session option { max-width: 40em; }
   @media (min-width: 700px) { #menu { left: auto; width: 340px; border-left: 1px solid var(--line); } }
 
@@ -133,6 +133,7 @@
   </button>
   <div id="menu">
     <label>model <select id="model" aria-label="model" title="model"></select></label>
+    <label>project <select id="project" aria-label="project" title="project"></select></label>
     <label>session <select id="session" aria-label="session" title="session"></select></label>
     <label>look <select id="look" aria-label="look">
       <option value="simple">simple</option>
@@ -175,6 +176,7 @@
   var status = document.getElementById("status");
   var model = document.getElementById("model");
   var session = document.getElementById("session");
+  var project = document.getElementById("project");
   var form = document.getElementById("form");
   var text = document.getElementById("text");
   var send = document.getElementById("send");
@@ -383,13 +385,37 @@
       var o = document.createElement("option");
       o.value = s.name;
       var mark = sessBusy.indexOf(s.name) >= 0 ? "\u25cf " : "";
-      o.textContent = mark + s.name + (s.first ? "  " + s.first : "");
+      o.textContent = mark + "[" + (s.project || "root") + "] " + (s.first || s.name);
       o.title = s.cwd || s.name;
       session.appendChild(o);
     });
     session.value = current || "";
     session.disabled = false;
   }
+
+  // the projects: the root and the directories under it. A choice makes the newest
+  // session of that project the page's, or a new one in it (the master decides).
+  function setProjects(current, list) {
+    project.textContent = "";
+    list.forEach(function (name) {
+      var o = document.createElement("option");
+      o.value = name;
+      o.textContent = name || "(root)";
+      project.appendChild(o);
+    });
+    project.value = current || "";
+    project.disabled = list.length === 0;
+  }
+
+  project.addEventListener("change", function () {
+    fetch("/project", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: project.value })
+    }).then(function (r) {
+      if (!r.ok) { return r.json().then(function (j) { add("error", j.error || r.statusText); }); }
+    }).catch(function (err) { add("error", String(err)); });
+  });
 
   session.addEventListener("change", function () {
     var body = session.value ? { name: session.value } : { new: true };
@@ -436,6 +462,7 @@
   es.addEventListener("sessions", function (e) {
     var d = JSON.parse(e.data);
     setSessions(d.current, d.list || [], d.busy || []);
+    setProjects(d.project, d.projects || []);
   });
   // the sessions whose turns run now (a mark in the list): the others are not shown here
   es.addEventListener("busy", function (e) {
