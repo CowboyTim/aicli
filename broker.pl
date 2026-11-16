@@ -110,16 +110,19 @@ sub _open {
     my ($code, $pods) = $self->_engine('GET', '/libpod/pods/json');
     return $self->_failed("the engine did not list the pods", $code, $pods) unless $code == 200;
     my %have = map {($_->{Name} // '') => 1} @{$self->_decoded($pods) // []};
+    my $made = 0;
     if (!$have{$pod}) {
-        my $spec = $self->_container_spec($name, $pod, $image);
-        ($code, my $body) = $self->_engine('POST', '/libpod/pods/create', {name => $pod});
-        return $self->_failed("the pod could not be made", $code, $body) unless $code == 201 or $code == 409;
-        ($code, $body) = $self->_engine('POST', '/libpod/containers/create', $spec);
-        return $self->_failed("the dev container could not be made", $code, $body) unless $code == 201 or $code == 409;
+        my ($c1, $b1) = $self->_engine('POST', '/libpod/pods/create', {name => $pod});
+        return $self->_failed("the pod could not be made", $c1, $b1) unless $c1 == 201 or $c1 == 409;
+        $made = 1 if $c1 == 201;
     }
+    # the container is asked for every time: a pod can be there without it (a failed open)
+    my ($code2, $body2) = $self->_engine('POST', '/libpod/containers/create', $self->_container_spec($name, $pod, $image));
+    return $self->_failed("the dev container could not be made", $code2, $body2) unless $code2 == 201 or $code2 == 409;
+    $made = 1 if $code2 == 201;
     my ($c2, $b2) = $self->_engine('POST', "/libpod/pods/$pod/start");
     return $self->_failed("the pod could not be started", $c2, $b2) unless $c2 == 200 or $c2 == 304;
-    return {ok => JSON::XS::true(), project => $name, pod => $pod, created => $have{$pod} ? JSON::XS::false() : JSON::XS::true()};
+    return {ok => JSON::XS::true(), project => $name, pod => $pod, created => $made ? JSON::XS::true() : JSON::XS::false()};
 }
 
 # the container of a project: its directory is the only host path it gets, and

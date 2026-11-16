@@ -47,7 +47,7 @@ if (!$epid) {
     unlink $engine_sock;
     my $srv = IO::Socket::UNIX->new(Local => $engine_sock, Type => Socket::SOCK_STREAM(), Listen => 5)
         or POSIX::_exit(1);
-    my %pods;
+    my (%pods, %containers);
     while (my $c = $srv->accept) {
         my $buf = '';
         while ($buf !~ m/\r\n\r\n/) {
@@ -73,7 +73,8 @@ if (!$epid) {
             my $n = eval {$J->decode($body)->{name}};
             ($code, $resp) = $pods{$n} ? (409, '{"cause":"exists"}') : do {$pods{$n} = 1; (201, '{"Id":"p"}')};
         } elsif ($method eq 'POST' and $path eq '/libpod/containers/create') {
-            ($code, $resp) = (201, '{"Id":"c"}');
+            my $n = eval {$J->decode($body)->{name}};
+            ($code, $resp) = $containers{$n} ? (409, '{"cause":"name in use"}') : do {$containers{$n} = 1; (201, '{"Id":"c"}')};
         } elsif ($method eq 'POST' and $path =~ m{\A/libpod/pods/([^/]+)/start\z}) {
             ($code, $resp) = $pods{$1} ? (200, '{}') : (404, '{"cause":"no such pod"}');
         } elsif ($method eq 'POST' and $path =~ m{\A/libpod/pods/([^/]+)/stop\z}) {
@@ -162,8 +163,8 @@ $r = $b->handle($J->encode({op => 'open', project => 'alpha'}));
 ok($r->{ok}, "open alpha again");
 ok(!$r->{created}, "it is not made twice");
 is_deeply([map {"$_->{method} $_->{path}"} records()],
-    ['GET /libpod/pods/json', 'POST /libpod/pods/aicli-alpha/start'],
-    "only the start is asked");
+    ['GET /libpod/pods/json', 'POST /libpod/containers/create', 'POST /libpod/pods/aicli-alpha/start'],
+    "the pod is kept, the container is asked for (it is there already), the pod is started");
 
 $r = $b->handle($J->encode({op => 'open', project => 'beta'}));
 ok($r->{ok}, "open beta as well");
