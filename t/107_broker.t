@@ -178,7 +178,7 @@ is_deeply([map {$_->{name}} @{$r->{pods}}], ['aicli-beta'], "alpha is gone from 
 my $lonely = broker->new(root => $root, host_root => '/host/projects', engine => "$tmp/none.sock", images => ['x']);
 $r = $lonely->handle($J->encode({op => 'open', project => 'alpha'}));
 ok(!$r->{ok}, "without an engine the open fails");
-like($r->{error}, qr/not reachable|did not list/, "and says so");
+like($r->{error}, qr/not reachable/, "and says why: the engine is not reachable");
 
 # --- the socket: a request and its answer over the broker's own socket --------
 

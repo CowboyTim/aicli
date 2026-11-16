@@ -166,7 +166,9 @@ sub _list {
 sub _failed {
     my ($self, $what, $code, $body) = @_;
     my $why = $self->_decoded($body);
-    my $msg = (ref($why) eq 'HASH' ? ($why->{cause} // $why->{message} // '') : '');
+    my $msg = ref($why) eq 'HASH'
+        ? ($why->{cause} // $why->{message} // '')
+        : substr($body // '', 0, 200); # the broker's own reasons (not reachable, no answer) are plain text
     return {ok => JSON::XS::false(), error => "$what (engine answered $code".(length($msg) ? ": $msg" : '').")"};
 }
 
