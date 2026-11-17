@@ -77,7 +77,7 @@ cert_present() {
 }
 if [ "${DO_CERTBOT:-0}" = 1 ] || ! cert_present; then
     echo "running certbot on $IPV6_ADDRESS (port 80 for the HTTP challenge)"
-    docker compose stop nginx >/dev/null 2>&1 || true
+    docker compose stop nginx || echo "warning: nginx did not stop (it holds the address of the domain)" >&2
     docker run --rm --network "$NET" --ip6 "$IPV6_ADDRESS" \
         -v aicli-letsencrypt:/etc/letsencrypt \
         certbot/certbot:latest certonly --standalone --non-interactive --agree-tos \
