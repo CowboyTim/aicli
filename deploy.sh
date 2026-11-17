@@ -8,33 +8,101 @@
 #   ./deploy.sh [docker compose up arguments, default: -d --build]
 #   DO_CERTBOT=1 ./deploy.sh      also renews the certificate when it is due (every ~60 days)
 #
-# setup-env.sh writes .env and agent.env first (a setting given here is written, a setting
-# already in the files stays, the secrets are made once). IPV6_SUBNET and IPV6_GATEWAY
-# default to the prefix in setup-env.sh (IPV6_PREFIX overrides it).
+# First it writes .env and agent.env (below). A setting given in the environment is written,
+# a setting already in the files stays, and the secrets are made once and kept (the tokens of
+# other tools must not change between runs). AICLI_ENV_ONLY=1 stops after the files.
 set -eu
 cd "$(dirname "$(readlink -f "$0")")"
 
-# .env and agent.env from the environment and the files there (setup-env.sh)
-./setup-env.sh .
+# --- .env and agent.env ------------------------------------------------------------------
+umask 077
+env_f=.env
+agent_f=agent.env
+touch "$env_f" "$agent_f"
 
-# .env (read as compose reads it, not run as shell): a setting already in the environment
-# wins, and a setting of .env is exported for this script. Only KEY=VALUE lines count.
-if [ -f .env ]; then
-    while IFS= read -r line || [ -n "$line" ]; do
-        case "$line" in
-            ''|\#*) continue ;;
-            [A-Z_]*=*)
-                key=${line%%=*}
-                val=${line#*=}
-                case "$val" in
-                    \"*\") val=${val#\"}; val=${val%\"} ;;
-                    \'*\') val=${val#\'}; val=${val%\'} ;;
-                esac
-                if [ -z "${!key+x}" ]; then export "$key=$val"; fi
-                ;;
-        esac
-    done < .env
+# the value of KEY in FILE, or nothing
+get() { sed -n "s/^$2=//p" "$1" | tail -n 1; }
+
+# KEY=VALUE in FILE: the line is replaced, or added
+set_key() {
+    local f=$1 k=$2 v=$3
+    if grep -q "^$k=" "$f"; then
+        local tmp
+        tmp=$(mktemp "$f.XXXXXX")
+        sed "s|^$k=.*|$k=$v|" "$f" > "$tmp"
+        cat "$tmp" > "$f"
+        rm -f "$tmp"
+    else
+        printf '%s=%s\n' "$k" "$v" >> "$f"
+    fi
+}
+
+# the value of KEY: the environment, else FILE, else DEFAULT
+pick() {
+    local f=$1 k=$2 d=${3-} v
+    v=${!k-}
+    [ -n "$v" ] || v=$(get "$f" "$k")
+    [ -n "$v" ] || v=$d
+    printf '%s' "$v"
+}
+
+# the value of KEY, which must be there
+need() {
+    local v
+    v=$(pick "$env_f" "$1")
+    if [ -z "$v" ]; then
+        echo "deploy.sh: $1 is needed (in the environment, or in $env_f)" >&2
+        exit 1
+    fi
+    printf '%s' "$v"
+}
+
+# the IPv6 prefix of the containers (the /120 and its gateway)
+ipv6_prefix=${IPV6_PREFIX:-2a02:a03f:8789:e700:c::8}
+
+v=$(need PUBLIC_DOMAIN)
+set_key "$env_f" PUBLIC_DOMAIN "$v"
+v=$(need CERTBOT_EMAIL)
+set_key "$env_f" CERTBOT_EMAIL "$v"
+v=$(need AI_PROJECTS)
+set_key "$env_f" AI_PROJECTS "$v"
+set_key "$env_f" IPV6_SUBNET "$(pick "$env_f" IPV6_SUBNET "$ipv6_prefix:0/120")"
+set_key "$env_f" IPV6_GATEWAY "$(pick "$env_f" IPV6_GATEWAY "$ipv6_prefix:1")"
+set_key "$env_f" PODMAN_SOCKET "/run/user/$(id -u)/podman/podman.sock"
+set_key "$env_f" BROKER_UID "$(id -u)"
+set_key "$env_f" BROKER_GID "$(id -g)"
+
+for k in SEARXNG_SECRET SEARXNG_API_TOKEN; do
+    v=$(get "$env_f" "$k")
+    [ -n "$v" ] || v=$(openssl rand -hex 32)
+    set_key "$env_f" "$k" "$v"
+done
+
+set_key "$agent_f" AI_LOCAL_SERVER "$(pick "$agent_f" AI_LOCAL_SERVER "http://[2a02:a03f:8789:e700::20]:8000/rocm/v1")"
+set_key "$agent_f" AI_ASR_URL "$(pick "$agent_f" AI_ASR_URL "http://[2a02:a03f:8789:e700::20]:52625/v1/audio/transcriptions")"
+set_key "$agent_f" AI_MODEL "$(pick "$agent_f" AI_MODEL "Qwen3.8-Flash-Next-Q4_0_ROCMFP4_FAST-PLE_Q8_0")"
+
+if [ "${AICLI_ENV_ONLY:-0}" = 1 ]; then
+    exit 0
 fi
+
+# --- the settings of .env, for this script --------------------------------------------------
+# read as compose reads it, not run as shell: a setting already in the environment wins.
+# Only KEY=VALUE lines count.
+while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+        ''|\#*) continue ;;
+        [A-Z_]*=*)
+            key=${line%%=*}
+            val=${line#*=}
+            case "$val" in
+                \"*\") val=${val#\"}; val=${val%\"} ;;
+                \'*\') val=${val#\'}; val=${val%\'} ;;
+            esac
+            if [ -z "${!key+x}" ]; then export "$key=$val"; fi
+            ;;
+    esac
+done < "$env_f"
 
 : "${PUBLIC_DOMAIN:?Need PUBLIC_DOMAIN (the public name, its AAAA record is looked up)}"
 : "${IPV6_SUBNET:?Need IPV6_SUBNET (the routed prefix for the containers, e.g. 2001:db8:c::1:0/120)}"
@@ -47,7 +115,9 @@ if [ -z "$IPV6" ]; then
     echo "no AAAA record for $PUBLIC_DOMAIN: add it (the address of this host's IPv6 in $IPV6_SUBNET)" >&2
     exit 1
 fi
-export IPV6_ADDRESS=${IPV6_ADDRESS:-$IPV6}
+# the address is the AAAA record, on every run (compose reads it from .env)
+export IPV6_ADDRESS=$IPV6
+set_key "$env_f" IPV6_ADDRESS "$IPV6_ADDRESS"
 echo "$PUBLIC_DOMAIN is $IPV6_ADDRESS"
 
 if ! docker network inspect "$NET" >/dev/null 2>&1; then
@@ -69,10 +139,9 @@ if ! docker network inspect "$NET" >/dev/null 2>&1; then
 fi
 
 # the certificate: certbot runs as its own container on the address of the domain and
-# answers the HTTP challenge on port 80 itself. nginx has that address, so it is stopped
-# while certbot runs. Only when DO_CERTBOT=1 (the first certificate, and renewals: with
-# --keep-until-expiring a certificate is renewed only when it is due). Without a certificate
-# nginx waits until one exists.
+# answers the HTTP challenge on port 80 itself. nginx has that address, so the stack is
+# brought down while certbot runs. Only when DO_CERTBOT=1 (the first certificate, and
+# renewals). Without a certificate nginx waits until one exists.
 if [ "${DO_CERTBOT:-0}" = 1 ]; then
     echo "shutting down"
     docker compose down
