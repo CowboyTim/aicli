@@ -74,12 +74,21 @@ fi
 # --keep-until-expiring a certificate is renewed only when it is due). Without a certificate
 # nginx waits until one exists.
 if [ "${DO_CERTBOT:-0}" = 1 ]; then
+    echo "shutting down"
+    docker compose down
     echo "running certbot on $IPV6_ADDRESS (port 80 for the HTTP challenge)"
-    docker compose stop nginx || echo "warning: nginx did not stop (it holds the address of the domain)" >&2
-    docker run --rm --network "$NET" --ip6 "$IPV6_ADDRESS" \
-        -v aicli-letsencrypt:/etc/letsencrypt \
-        certbot/certbot:latest certonly --standalone --non-interactive --agree-tos \
-        --keep-until-expiring -m "$CERTBOT_EMAIL" -d "$PUBLIC_DOMAIN" || exit $?
+    docker run \
+        -p 80:80 \
+        -e CERTBOT_MAIL="$CERTBOT_EMAIL" \
+        --rm \
+        --network "$NET" \
+        --ip6 "$IPV6_ADDRESS" \
+        -v aicli-letsencrypt:/certs:rw \
+        local/certbot/certbot:${APP_CERTBOT_TAG:-latest} \
+            certonly \
+                --agree-tos \
+                --force-renewal \
+                --domains "$PUBLIC_DOMAIN" || exit $?
 fi
 
 echo "building and starting with docker compose"
