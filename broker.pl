@@ -211,8 +211,7 @@ sub _capture {
     return ('cannot start the engine client', 127) unless defined $pid;
     if (!$pid) {
         open(STDERR, '>&', \*STDOUT);
-        exec {$cmd->[0]} @$cmd;
-        POSIX::_exit(127);
+        exec {$cmd->[0]} @$cmd or POSIX::_exit(127); # the program did not start
     }
     my $out = '';
     my $killed = 0;
