@@ -1,0 +1,79 @@
+# nginx in front of the agent (the web interface): TLS with the certificates of certbot
+# (the qr project's TLS and headers, adapted), and every request goes to the agent on
+# the host's loopback. Stock nginx: no extra modules.
+worker_processes 2;
+error_log /dev/stdout warn;
+pid /run/nginx.pid;
+
+events {
+    worker_connections 512;
+}
+
+http {
+    server_tokens off;
+    include /etc/nginx/mime.types;
+    log_format main '$remote_addr - [$time_local] "$request" $status $body_bytes_sent "$http_user_agent"';
+    access_log /dev/stdout main;
+
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    types_hash_max_size 4096;
+
+    server {
+        listen 80;
+        listen [::]:80;
+        server_name _;
+        return 301 https://$host$request_uri;
+    }
+
+    server {
+        listen 443 ssl;
+        listen [::]:443 ssl;
+        http2 on;
+        server_name _;
+
+        # the certificates of certbot (live/<name>/), by the name the client asks for
+        ssl_certificate         /etc/nginx/certs/live/$ssl_server_name/fullchain.pem;
+        ssl_certificate_key     /etc/nginx/certs/live/$ssl_server_name/privkey.pem;
+        ssl_session_cache       shared:SSL:1m;
+        ssl_session_timeout     10m;
+        ssl_protocols           TLSv1.2 TLSv1.3;
+        ssl_ciphers             ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-SHA384;
+        ssl_prefer_server_ciphers on;
+        ssl_stapling            on;
+        ssl_stapling_verify     on;
+
+        client_max_body_size    25m;  # /voice: a recording of about two minutes (the page limit is 20 MB)
+        resolver                127.0.0.11 ipv6=off valid=3s;
+
+        # the methods the page uses
+        if ($request_method !~ ^(GET|POST)$) {
+            return 444;
+        }
+
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        add_header X-Frame-Options DENY always;
+        add_header X-Content-Type-Options nosniff always;
+        add_header Referrer-Policy "no-referrer" always;
+        # the page has an inline script and style (ai/ui/index.html): 'unsafe-inline' until
+        # they are files of their own
+        add_header Content-Security-Policy "default-src 'self'; img-src 'self' data: blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'" always;
+        add_header Cross-Origin-Opener-Policy "same-origin" always;
+        add_header Cross-Origin-Resource-Policy "same-origin" always;
+        add_header Permissions-Policy "camera=(), geolocation=()" always;
+
+        location / {
+            proxy_pass http://127.0.0.1:${AGENT_PORT};
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Forwarded-For $remote_addr;
+            proxy_buffering off;   # server-sent events: each event goes out at once
+            proxy_cache off;
+            proxy_read_timeout 1h;
+            proxy_send_timeout 1h;
+        }
+    }
+}

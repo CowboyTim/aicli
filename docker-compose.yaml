@@ -101,25 +101,24 @@ services:
       - letsencrypt:/etc/letsencrypt
     restart: unless-stopped
 
-  # nginx: the public address. TLS with the certificate of certbot; the agent is behind it
-  # on the loopback. Start certbot first and wait for its certificate (docker compose logs certbot).
+  # nginx: the public address. TLS with the certificate of certbot (mounted as /etc/nginx/certs);
+  # the agent is behind it on the loopback. Start certbot first and wait for its certificate.
   nginx:
     image: nginx:stable
     network_mode: host
     depends_on:
       - agent
     environment:
-      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?set PUBLIC_DOMAIN to the public name}
       AGENT_PORT: ${AGENT_PORT:-8080}
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        envsubst '$$PUBLIC_DOMAIN $$AGENT_PORT' < /etc/nginx/templates/default.conf.template > /etc/nginx/conf.d/default.conf
+        envsubst '$$AGENT_PORT' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
         (while :; do sleep 12h; nginx -s reload; done) &
         exec nginx -g 'daemon off;'
     volumes:
-      - ./nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
-      - letsencrypt:/etc/letsencrypt:ro
+      - ./nginx/nginx.conf.template:/etc/nginx/nginx.conf.template:ro
+      - letsencrypt:/etc/nginx/certs:ro
     restart: unless-stopped
 
 volumes:
