@@ -136,6 +136,26 @@ services:
       - letsencrypt:/etc/nginx/certs:ro
     restart: unless-stopped
 
+networks:
+  # the public IPv6 network (deploy.sh creates it): only nginx is on it
+  dmz:
+    name: dmz-aicli
+    external: true
+  # the containers among themselves, and their way out (NAT, both families; see deploy notes)
+  aicli:
+    name: aicli-net
+    enable_ipv6: true
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: "nat"
+      com.docker.network.bridge.gateway_mode_ipv6: "nat"
+      com.docker.network.bridge.enable_ip_masquerade: "true"
+      com.docker.network.bridge.enable_ip6_masquerade: "true"
+      com.docker.network.bridge.inhibit_ipv4: "false"
+    ipam:
+      config:
+        - subnet: 172.31.200.0/24
+        - subnet: fd42:a1c1::/64
+
 volumes:
   aicli-broker:
     name: aicli-broker
