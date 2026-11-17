@@ -3,14 +3,18 @@
 # PUBLIC_DOMAIN (its AAAA record, looked up here) on the routed network dmz-aicli; the
 # agent, the broker and certbot are not on it, so they have no public address.
 #
-#   PUBLIC_DOMAIN=ai.example.org \
-#   IPV6_SUBNET=2001:db8:c::1:0/120 \
-#   IPV6_GATEWAY=2001:db8:c::1:1 \
+#   PUBLIC_DOMAIN=ai.example.org CERTBOT_EMAIL=you@example.org \
+#   AI_PROJECTS=/home/you/projects CLOUDFLARE_API_TOKEN=... \
 #   ./deploy.sh [docker compose up arguments, default: -d --build]
 #
-# The other settings are in .env (compose reads it), and the agent's in agent.env.
+# setup-env.sh writes .env and agent.env first (a setting given here is written, a setting
+# already in the files stays, the secrets are made once). IPV6_SUBNET and IPV6_GATEWAY
+# default to the prefix in setup-env.sh (IPV6_PREFIX overrides it).
 set -eu
 cd "$(dirname "$(readlink -f "$0")")"
+
+# .env and agent.env from the environment and the files there (setup-env.sh)
+./setup-env.sh .
 
 # .env (read as compose reads it, not run as shell): a setting already in the environment
 # wins, and a setting of .env is exported for this script. Only KEY=VALUE lines count.
