@@ -109,6 +109,8 @@ is(status_of($r), 401, "posting a message needs the token");
 
 $r = request('POST', '/message', cookie => $ok_cookie, origin => 'http://evil.example', body => '{"text":"hi"}');
 is(status_of($r), 403, "a post from another origin is refused");
+$r = request('POST', '/message', cookie => $ok_cookie, origin => 'https://evil.example', body => '{"text":"hi"}');
+is(status_of($r), 403, "an https origin of another host is refused too");
 
 $r = request('POST', '/message', cookie => $ok_cookie, body => 'not json');
 is(status_of($r), 400, "a body that is not JSON is refused");

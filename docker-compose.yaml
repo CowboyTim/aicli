@@ -75,8 +75,57 @@ services:
     cap_add:
       - SYS_PTRACE
     restart: unless-stopped
+  # certbot: the certificate for PUBLIC_DOMAIN, through a DNS record (DNS_PLUGIN and the
+  # credentials of dns-credentials.ini). It gets the certificate once, then renews it.
+  certbot:
+    build:
+      context: .
+      dockerfile: Dockerfile.certbot
+      args:
+        DNS_PLUGIN: ${DNS_PLUGIN:-cloudflare}
+    image: local/ai/aicli-certbot:latest
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ ! -d /etc/letsencrypt/live/$$PUBLIC_DOMAIN ]; then
+          certbot certonly --non-interactive --agree-tos -m "$$CERTBOT_EMAIL" -d "$$PUBLIC_DOMAIN" \
+            --dns-$$DNS_PLUGIN --dns-$$DNS_PLUGIN-credentials /run/secrets/dns.ini
+        fi
+        while :; do certbot renew --quiet; sleep 12h; done
+    environment:
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?set PUBLIC_DOMAIN to the public name}
+      CERTBOT_EMAIL: ${CERTBOT_EMAIL:?set CERTBOT_EMAIL (for the certificate's notices)}
+      DNS_PLUGIN: ${DNS_PLUGIN:-cloudflare}
+    volumes:
+      - ./dns-credentials.ini:/run/secrets/dns.ini:ro
+      - letsencrypt:/etc/letsencrypt
+    restart: unless-stopped
+
+  # nginx: the public address. TLS with the certificate of certbot; the agent is behind it
+  # on the loopback. Start certbot first and wait for its certificate (docker compose logs certbot).
+  nginx:
+    image: nginx:stable
+    network_mode: host
+    depends_on:
+      - agent
+    environment:
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?set PUBLIC_DOMAIN to the public name}
+      AGENT_PORT: ${AGENT_PORT:-8080}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        envsubst '$$PUBLIC_DOMAIN $$AGENT_PORT' < /etc/nginx/templates/default.conf.template > /etc/nginx/conf.d/default.conf
+        (while :; do sleep 12h; nginx -s reload; done) &
+        exec nginx -g 'daemon off;'
+    volumes:
+      - ./nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - letsencrypt:/etc/letsencrypt:ro
+    restart: unless-stopped
+
 volumes:
   aicli-broker:
     name: aicli-broker
   aicli-agent:
     name: aicli-agent
+  letsencrypt:
+    name: aicli-letsencrypt

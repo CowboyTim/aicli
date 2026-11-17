@@ -3,3 +3,4 @@
 build-watch.log
 .build-trigger
 agent.env
+dns-credentials.ini

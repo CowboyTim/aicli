@@ -558,6 +558,26 @@ write, edit) still run in the agent's container, on the same mounted directory.
 Host setup: install Podman, enable the user socket (`systemctl --user enable --now
 podman.socket`), and set `AI_PROJECTS`, `PODMAN_SOCKET`, `BROKER_UID`, `BROKER_GID`.
 
+## The public address (nginx, TLS)
+
+`docker-compose.yaml` runs four services: `broker`, `agent` (the web interface), `certbot`
+(the certificate, through a DNS record), and `nginx` (TLS on port 443, proxied to the
+agent on the host's loopback). Steps, once:
+
+1. A DNS record for `PUBLIC_DOMAIN` that points at this host.
+2. `cp .env.example .env` and set `PUBLIC_DOMAIN`, `CERTBOT_EMAIL`, `DNS_PLUGIN`, and the
+   paths and ids as before. The DNS provider's credentials:
+   `cp dns-credentials.ini.example dns-credentials.ini` (its format is the plugin's own;
+   the example is for Cloudflare).
+3. `docker compose up -d certbot`, then `docker compose logs -f certbot` until the
+   certificate is issued. It renews itself every 12 hours after that.
+4. `docker compose up -d --build`. The page is at `https://PUBLIC_DOMAIN/?token=...`; the
+   token is in `docker compose logs agent` (or `AI_UI_TOKEN` in `agent.env`).
+
+The agent itself listens on the loopback only. nginx sends the event stream without
+buffering, and accepts recordings up to 25 MB. Login with several users and JWT or
+OAuth2 is not in yet: at the moment the token is the only access control.
+
 ## Configuration
 
 Environment variables, or `AI_...=value` lines in `~/.aicli/config`:

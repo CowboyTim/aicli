@@ -929,8 +929,10 @@ sub _dispatch {
 
     # a page of another site may not post here (the cookie would go with it)
     if($m eq 'POST' and defined $h->{origin}){
+        # the host must be the one asked for; the scheme may be https (a proxy in front, see nginx)
+        my ($origin_host) = $h->{origin} =~ m{\Ahttps?://(.+)\z};
         return _respond($cn, 403, 'text/plain', "wrong origin\n")
-            unless $h->{origin} eq "http://".($h->{host} // '');
+            unless defined $origin_host and $origin_host eq ($h->{host} // '');
     }
 
     if($p eq '/events' and $m eq 'GET'){

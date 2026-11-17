@@ -261,6 +261,12 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   config's `remote`, `CONTAINER_HOST` in compose) with its output cut at 1 MB and a
   120 s limit. The broker's socket is in the agent's container with `--broker`, but the
   model's tools no longer run there, so they cannot reach it.
+- **docker-compose.yaml** – the services: `broker` (broker.pl), `agent` (the web
+  interface, `ai.pl --ui`, host network, loopback port `AGENT_PORT`), `certbot`
+  (`Dockerfile.certbot`: certbot with the DNS plugin `DNS_PLUGIN`; gets the certificate of
+  `PUBLIC_DOMAIN` once, renews every 12 h), `nginx` (`nginx/default.conf.template`: TLS on
+  443, proxy to the agent, SSE unbuffered). The origin check of the agent accepts the
+  https origin of the same host (behind nginx).
 - **t/** – tests, **PLAN.md** – open work and ideas.
 
 ## How a turn works
