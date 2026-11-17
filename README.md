@@ -545,8 +545,15 @@ with that socket; the agents reach it through the volume `aicli-broker`. A pod
 mounts its project and nothing else, runs unprivileged with its limits, and only
 images of `broker.json` are allowed. From a shell with the volume:
 `perl broker.pl open alpha`, `list`, `close alpha`. The web interface gets the same from
-its pods panel when it runs with `aicli.sh --broker` (the broker's volume is mounted;
-without the flag the web interface does not reach the broker).
+its pods panel when it runs with `aicli.sh --broker --root DIR` (the broker's volume is
+mounted; without the flag the web interface does not reach the broker).
+
+With `--broker`, `bash`, `perl` and `grep` run in the dev pod of the project the
+workspace is in, not in the agent's container. So a project's pod must be open before
+its tools work (the tool reports that otherwise). Each tool call starts a
+`podman exec` in that pod, which takes a fraction of a second. The file tools (read,
+write, edit) still run in the agent's container, on the same mounted directory.
+`AI_POD_TOOLS=0` runs the tools in the agent's container again.
 
 Host setup: install Podman, enable the user socket (`systemctl --user enable --now
 podman.socket`), and set `AI_PROJECTS`, `PODMAN_SOCKET`, `BROKER_UID`, `BROKER_GID`.

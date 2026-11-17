@@ -83,4 +83,17 @@ mkdir "$root/beta" or die "mkdir: $!";
     is($args->[$w_index[0] + 1], '/workdir/beta', "and the container starts there");
 }
 
+{
+    my ($status, $args, $err) = run_wrapper($root, '--broker');
+    is($status, 2, "--broker without --root is refused");
+    like($err, qr/--broker needs --root/, "and says why");
+}
+
+{
+    my ($status, $args) = run_wrapper("$root/alpha", '--root', $root, '--broker');
+    is($status, 0, "--broker with --root runs");
+    ok((grep {$_ eq 'AI_POD_ROOT=/workdir/master'} @$args), "the tools' pods are the projects of the root, as the container sees it");
+    ok((grep {$_ eq 'aicli-broker:/run/aicli-broker'} @$args), "the broker's socket volume is mounted");
+}
+
 done_testing();

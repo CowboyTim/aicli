@@ -248,6 +248,19 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   the engine works. The answers are `broker` events, the list is a `pods` event (every
   project of the root with its pod's state). `POST /pod` takes `open`, `close` or `list`.
   The page has a pods panel with an open or close button per project.
+- **Tools in the pod** (`ai.pm`, package `tools`, `pod_for_tools`, `_pod_path`,
+  `_pod_run`): with `AI_POD_ROOT` set (the root as the container sees it, `aicli.sh
+  --broker --root`), `bash`, `perl` and `grep` do not run here: `_pod_run` asks the broker
+  (`op: exec`, a list of program and arguments, no shell) and prints the output the
+  broker sends back, with the exit code. The workspace must be a project under the root
+  (fail closed: a directory that is no project, or a project whose pod is not open, is a
+  tool error). The file tools (read, write, edit) still run here. `AI_POD_TOOLS=0` turns
+  the pod off.
+- **The broker's `exec`** (`broker.pl`, `_exec`, `_capture`): only bash, perl and grep,
+  in the dev container of an open project (`/work`), through `podman-remote` (the
+  config's `remote`, `CONTAINER_HOST` in compose) with its output cut at 1 MB and a
+  120 s limit. The broker's socket is in the agent's container with `--broker`, but the
+  model's tools no longer run there, so they cannot reach it.
 - **t/** – tests, **PLAN.md** – open work and ideas.
 
 ## How a turn works
@@ -537,6 +550,7 @@ Other APIs are reached through an OpenAI compatible gateway, such as LiteLLM or 
 | `t/89_context_thinking.t` | the reasoning setting, what the request says, the first request through compactions, `/context` |
 | `t/97_live.t` | a real model, only when `AI_LIVE_SERVER` is set (`AI_LIVE_MODEL`, optional `AI_LIVE_SEARXNG`): one answer, a native tool call, the thinking setting, search. Skipped otherwise |
 | `t/100_ui.t` | the web interface: routes, the token, origin check, body limits, the input queue, the event stream on socket pairs; the listen addresses (IPv4, IPv6, `::`), stop and start on the same port, TLS with a generated certificate (a https request, the Secure cookie), the state of the speech recognizer; then `ai.pl --ui` as a child, a message in and the streamed answer out, Ctrl-C |
+| `t/109_pod_tools.t` | the tools of a project in its pod: bash, perl and grep through a real broker (fake engine, stand-in client): the program and its argv, the exit code, the pod's paths, a workspace that is no project or has no open pod refused, a path outside the project refused, AI_POD_TOOLS=0 runs them here |
 | `t/108_pods.t` | the pods of the web interface: the projects with their pod states, open and close through a real broker process (fake engine), the broker events and the list after them, no broker refused |
 | `t/107_broker.t` | the broker with a fake engine on a Unix socket: refused requests (not JSON, unknown ops, bad project names, links, files, images not allowed), the calls of open (list, pod, container, start), the spec (one mount, not privileged, no socket), reopen, list, close, no engine, the socket round trip, chunked answers |
 | `t/104_projects.t` | the projects under the root (hidden and files left out), a session made in one with its AGENTS.md and its workspace in its prompt, the switch to a project (the newest session, or a new one), the root |

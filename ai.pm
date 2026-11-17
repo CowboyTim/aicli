@@ -4990,8 +4990,67 @@ sub agent_f2a8 {
 }
 
 # bash: the script goes to a temp file, a forked child exec()s bash on it
+# --- the tools in the project's pod: with AI_POD_ROOT (the directory whose
+# subdirectories are the projects, as this container sees it), bash, perl and grep
+# run in the dev container of the workspace's project, through the broker. Fail
+# closed: a workspace that is no project is refused, and so is an unreachable broker.
+
+sub pod_for_tools {
+    my $root = $::ORIG_ENV{AI_POD_ROOT};
+    return undef unless length($root // '');
+    return undef if lc($::ORIG_ENV{AI_POD_TOOLS} // 'auto') =~ m/^(?:0|off|no)$/;
+    my ($project) = ($ai::WORKSPACE // '') =~ m{\A\Q$root\E/([^/]+)}
+        or die "the tools run in the pod of a project, and this directory is not one (under $root)\n";
+    return $project;
+}
+
+# a path of the workspace as the pod sees it: relative to the project's directory
+sub _pod_path {
+    my ($path) = @_;
+    my $p = _path($path);
+    return $p unless $p =~ m{\A/};
+    die "outside of the project: $p\n" unless defined $ai::WORKSPACE and $p =~ m{\A\Q$ai::WORKSPACE\E/(.+)\z};
+    return $1;
+}
+
+# the program in the pod of a project, through the broker's socket; its output and
+# exit code are the tool's, as a local child's would be
+sub _pod_run {
+    my ($project, @argv) = @_;
+    my $socket = $::ORIG_ENV{AI_BROKER_SOCKET} // '/run/aicli-broker/broker.sock';
+    my %opts = $argv[0] eq 'grep' ? (exit_ok => [1]) : (); # grep: 1 is no match, not an error
+    return _run(sub {
+        utils::load_cpan("MIME::Base64");
+        utils::load_cpan("IO::Socket::UNIX");
+        require Socket;
+        my $answer = eval {
+            my $c = IO::Socket::UNIX->new(Peer => $socket, Type => Socket::SOCK_STREAM())
+                or die "the broker is not reachable: $!\n";
+            print {$c} $::JSON->encode({op => 'exec', project => $project, argv => [@argv]})."\n";
+            my $l = <$c>;
+            close($c);
+            die "the broker gave no answer\n" unless defined $l;
+            $::JSON->decode($l);
+        };
+        my $code = 1;
+        if (ref($answer) eq 'HASH' and $answer->{ok}) {
+            print MIME::Base64::decode_base64($answer->{output} // '');
+            $code = $answer->{exit} // 1;
+        } else {
+            my $why = ref($answer) eq 'HASH' ? $answer->{error} : ($@ // 'no answer');
+            $why =~ s/\s+\z//;
+            print "$why\n";
+        }
+        STDOUT->flush();
+        POSIX::_exit($code);
+    }, %opts);
+}
+
 sub bash_7c48 {
     my ($t_args) = @_;
+    if (defined(my $project = pod_for_tools())) {
+        return _pod_run($project, 'bash', '-c', $t_args->[0] // '');
+    }
     utils::load_cpan("File::Temp");
     my ($fh, $fn) = File::Temp::tempfile("aicli_bash_XXXXXXXX", DIR => ai::tmpdir());
     print {$fh} $t_args->[0] // '';
@@ -5022,6 +5081,10 @@ sub perl_d8d2 {
     my ($t_args) = @_;
     my $code = $t_args->[0];
     die "need an actual perl program, size=0\n" unless length($code // "");
+    if (defined(my $project = pod_for_tools())) {
+        # in the pod the program is the sandbox: no Safe compartment here
+        return _pod_run($project, 'perl', '-e', $code);
+    }
     my $safe = $::ORIG_ENV{AI_PERL_SAFE};
     utils::load_cpan("Safe") if $safe;
     return _run(sub {
@@ -5899,9 +5962,12 @@ sub find_f1e0 {
 # grep: a forked child exec()s grep, no shell involved
 sub grep_6629 {
     my ($t_args) = @_;
-    my $path    = _path($t_args->[0]);
     my $pattern = $t_args->[1];
-    die "not enough properties\n" unless length($path) and length($pattern // "");
+    die "not enough properties\n" unless length($t_args->[0] // '') and length($pattern // "");
+    if (defined(my $project = pod_for_tools())) {
+        return _pod_run($project, 'grep', '-rn', '-e', $pattern, '--', _pod_path($t_args->[0]));
+    }
+    my $path = _path($t_args->[0]);
     return _run(sub {
         exec {'grep'} 'grep', '-rn', '-e', $pattern, '--', $path
             or die "cannot exec grep: $!\n";

@@ -77,6 +77,8 @@ if (!$epid) {
             ($code, $resp) = $containers{$n} ? (409, '{"cause":"name in use"}') : do {$containers{$n} = 1; (201, '{"Id":"c"}')};
         } elsif ($method eq 'POST' and $path =~ m{\A/libpod/pods/([^/]+)/start\z}) {
             ($code, $resp) = $pods{$1} ? (200, '{}') : (404, '{"cause":"no such pod"}');
+        } elsif ($method eq 'GET' and $path =~ m{\A/libpod/containers/([^/]+)/json\z}) {
+            ($code, $resp) = $pods{$1 =~ s/-dev\z//r} ? (200, '{"State":{"Running":true}}') : (404, '{"cause":"no such container"}');
         } elsif ($method eq 'POST' and $path =~ m{\A/libpod/pods/([^/]+)/stop\z}) {
             ($code, $resp) = (200, '{}');
         } elsif ($method eq 'DELETE' and $path =~ m{\A/libpod/pods/([^/?]+)}) {
@@ -251,6 +253,35 @@ waitpid($bpid, 0);
     like($log, qr/listening on \S+ as uid \d+/, "and that it listens, as which user");
     like($log, qr/request op=list project=- -> /, "and the requests it answers");
     ok(!$answer->{ok}, "list without an engine is refused, as it should be");
+}
+
+# --- running a program in a project's pod: the engine's client runs it (a stand-in here) ---
+
+{
+    my $execb = broker->new(
+        root => $root, host_root => '/host/projects', engine => $engine_sock,
+        images => ['x'], remote => [$^X, '-e', 'print "ran: @ARGV\n"; exit($ARGV[-1] eq "fail" ? 3 : 0)', '--'],
+    );
+    $execb->handle($J->encode({op => 'open', project => 'alpha'}));
+    my $r = $execb->handle($J->encode({op => 'exec', project => 'alpha', argv => ['bash', '-c', 'echo hi']}));
+    ok($r->{ok}, "exec in an open project");
+    is($r->{exit}, 0, "its exit code");
+    my $text = MIME::Base64::decode_base64($r->{output});
+    like($text, qr/ran: exec --workdir \/work aicli-alpha-dev bash -c echo hi/, "the engine's client runs it in the dev container, in /work, with the program's argv");
+    $r = $execb->handle($J->encode({op => 'exec', project => 'alpha', argv => ['bash', '-c', 'fail']}));
+    is($r->{exit}, 3, "the exit code of the program comes back");
+    $r = $execb->handle($J->encode({op => 'exec', project => 'alpha', argv => ['sh', '-c', 'rm -rf /']}));
+    ok(!$r->{ok}, "a program that is not allowed is refused");
+    like($r->{error}, qr/not allowed/, "and says so");
+    $r = $execb->handle($J->encode({op => 'exec', project => 'alpha', argv => 'bash'}));
+    ok(!$r->{ok}, "argv must be a list");
+    mkdir "$root/gamma" unless -d "$root/gamma";
+    $r = $execb->handle($J->encode({op => 'exec', project => 'gamma', argv => ['bash']}));
+    ok(!$r->{ok}, "a project whose pod is not open is refused");
+    like($r->{error}, qr/not open/, "and says why");
+    $r = $execb->handle($J->encode({op => 'exec', project => '../x', argv => ['bash']}));
+    ok(!$r->{ok}, "a bad project name is refused");
+    $execb->handle($J->encode({op => 'close', project => 'alpha'}));
 }
 
 # --- the chunked answers of the engine ---------------------------------------

@@ -22,6 +22,7 @@ use IO::Socket::UNIX ();
 use Socket ();
 use JSON::XS ();
 use POSIX ();
+use MIME::Base64 ();
 
 package broker;
 
@@ -50,6 +51,7 @@ sub new {
         pids      => $c{pids} // 512,
         userns    => $c{userns} // 'keep-id',
         socket    => $c{socket} // '/run/aicli-broker/broker.sock',
+        remote    => [ref($c{remote}) eq 'ARRAY' ? @{$c{remote}} : ('podman-remote')],
     }, $class;
     die "broker: no image is allowed (images in the config)\n" unless @{$self->{images}};
     return $self;
@@ -63,6 +65,10 @@ sub _bytes {
     my %m = (k => 1024, m => 1024**2, g => 1024**3);
     return $n * $m{lc $u};
 }
+
+# the programs a request may run in a project's pod (no shell: argv is a list)
+our %RUNNABLE = map {$_ => 1} qw(bash perl grep);
+our $EXEC_MAX = 1024 * 1024; # bytes of output kept
 
 # the answer to one request (a JSON text), as a hash; every request is logged
 sub handle {
@@ -84,6 +90,7 @@ sub _dispatch {
     return $self->_open($req) if $op eq 'open';
     return $self->_close($req) if $op eq 'close';
     return $self->_list() if $op eq 'list';
+    return $self->_exec($req) if $op eq 'exec';
     return {ok => JSON::XS::false(), error => "unknown request '$op' (open, close or list)"};
 }
 
@@ -167,6 +174,65 @@ sub _list {
     my @pods = map {{name => $_->{Name}, status => $_->{Status}}}
         grep {($_->{Name} // '') =~ m/\Aaicli-/} @{$self->_decoded($body) // []};
     return {ok => JSON::XS::true(), pods => \@pods};
+}
+
+# run a program in the dev container of an open project: argv is a list of the
+# program and its arguments (no shell), its working directory is /work (the
+# project). The engine's own client (podman-remote, the config's remote) runs it.
+# Answers the output (base64, as the bytes were) and the exit code.
+sub _exec {
+    my ($self, $req) = @_;
+    my $name = $self->project_name($req->{project})
+        or return {ok => JSON::XS::false(), error => "no such project"};
+    my $argv = $req->{argv};
+    return {ok => JSON::XS::false(), error => "a list of the program and its arguments is wanted"}
+        unless ref($argv) eq 'ARRAY' and @$argv and @$argv <= 8 and !grep {ref($_) or !defined($_)} @$argv;
+    return {ok => JSON::XS::false(), error => "that program is not allowed (bash, perl or grep)"}
+        unless $RUNNABLE{$argv->[0]};
+    my $size = 0;
+    $size += length($_) for @$argv;
+    return {ok => JSON::XS::false(), error => "the command is too long"} if $size > 256 * 1024;
+    my $ctr = _pod_name($name).'-dev';
+    my ($code, $body) = $self->_engine('GET', "/libpod/containers/$ctr/json");
+    return {ok => JSON::XS::false(), error => "the project's pod is not open (open it first)"} unless $code == 200;
+    my $state = $self->_decoded($body);
+    return {ok => JSON::XS::false(), error => "the project's dev container is not running"}
+        unless ref($state) eq 'HASH' and ref($state->{State}) eq 'HASH' and $state->{State}{Running};
+    _log("exec project=$name program=$argv->[0]");
+    my ($out, $exit) = _capture([@{$self->{remote}}, 'exec', '--workdir', '/work', $ctr, @$argv], $EXEC_MAX, 120);
+    _log("exec project=$name program=$argv->[0] -> exit $exit");
+    return {ok => JSON::XS::true(), exit => $exit, output => MIME::Base64::encode_base64($out // '', '')};
+}
+
+# a program's output (stdout and stderr together), at most $max bytes, and its exit code
+sub _capture {
+    my ($cmd, $max, $timeout) = @_;
+    my $pid = open(my $fh, '-|');
+    return ('cannot start the engine client', 127) unless defined $pid;
+    if (!$pid) {
+        open(STDERR, '>&', \*STDOUT);
+        exec {$cmd->[0]} @$cmd;
+        POSIX::_exit(127);
+    }
+    my $out = '';
+    my $killed = 0;
+    eval {
+        local $SIG{ALRM} = sub { die "timeout\n" };
+        alarm $timeout;
+        while (read($fh, my $buf, 65536)) {
+            $out .= $buf;
+            if (length($out) > $max) { $out = substr($out, 0, $max)."\n[output cut]\n"; last }
+        }
+        alarm 0;
+        1;
+    } or do { $killed = 124 };
+    alarm 0;
+    if ($killed or length($out) > $max) {
+        kill 'KILL', $pid;
+    }
+    close($fh);
+    my $status = $?;
+    return ($out, $killed ? 124 : ($status >> 8));
 }
 
 sub _failed {

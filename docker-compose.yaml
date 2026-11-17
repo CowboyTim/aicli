@@ -29,6 +29,7 @@ services:
       AI_BROKER_HOST_ROOT: ${AI_PROJECTS:?set AI_PROJECTS to the host directory of the projects}
       AI_BROKER_SOCKET: /run/aicli-broker/broker.sock
       AI_BROKER_ENGINE: /run/engine/podman.sock
+      CONTAINER_HOST: unix:///run/engine/podman.sock
     volumes:
       - ./broker.json:/etc/aicli/broker.json:ro
       - ${PODMAN_SOCKET:?set PODMAN_SOCKET to the rootless Podman socket}:/run/engine/podman.sock
