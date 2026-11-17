@@ -134,6 +134,13 @@ networks:
   aicli:
     name: aicli-net
     enable_ipv6: true   # outgoing IPv6 (NAT66 by the daemon), to IPv6-only servers on the LAN
+    # set here, not inherited: the daemon's default-network-opts turn masquerading off
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: "nat"
+      com.docker.network.bridge.gateway_mode_ipv6: "nat"
+      com.docker.network.bridge.enable_ip_masquerade: "true"
+      com.docker.network.bridge.enable_ip6_masquerade: "true"
+      com.docker.network.bridge.inhibit_ipv4: "false"
     ipam:
       config:
         - subnet: 172.31.200.0/24   # IPv4 as before (listing only IPv6 removed it)
