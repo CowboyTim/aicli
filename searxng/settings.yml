@@ -8,3 +8,9 @@ search:
   formats:
     - html
     - json
+
+# the engines are asked through the proxy of this stack (proxy/squid.conf)
+outgoing:
+  proxies:
+    all://:
+      - http://proxy:3128
