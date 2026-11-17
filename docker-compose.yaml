@@ -125,9 +125,9 @@ services:
         until [ -d /etc/nginx/certs/live/$$PUBLIC_DOMAIN ]; do
           echo "no certificate for $$PUBLIC_DOMAIN yet (run deploy.sh with DO_CERTBOT=1)"; sleep 30
         done
-        envsubst '$$AGENT_PORT $$SEARXNG_API_TOKEN' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
+        envsubst '$$PUBLIC_DOMAIN $$AGENT_PORT $$SEARXNG_API_TOKEN' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
         (while :; do sleep 60
-          envsubst '$$AGENT_PORT $$SEARXNG_API_TOKEN' < /etc/nginx/nginx.conf.template > /tmp/nginx.new
+          envsubst '$$PUBLIC_DOMAIN $$AGENT_PORT $$SEARXNG_API_TOKEN' < /etc/nginx/nginx.conf.template > /tmp/nginx.new
           if ! cmp -s /tmp/nginx.new /etc/nginx/nginx.conf; then cp /tmp/nginx.new /etc/nginx/nginx.conf; nginx -s reload; fi
         done) &
         exec nginx -g 'daemon off;'

@@ -38,8 +38,8 @@ http {
         server_name _;
 
         # the certificates of certbot (live/<name>/), by the name the client asks for
-        ssl_certificate         /etc/nginx/certs/live/$ssl_server_name/fullchain.pem;
-        ssl_certificate_key     /etc/nginx/certs/live/$ssl_server_name/privkey.pem;
+        ssl_certificate         /etc/nginx/certs/live/${PUBLIC_DOMAIN}/fullchain.pem;
+        ssl_certificate_key     /etc/nginx/certs/live/${PUBLIC_DOMAIN}/privkey.pem;
         ssl_session_cache       shared:SSL:1m;
         ssl_session_timeout     10m;
         ssl_protocols           TLSv1.2 TLSv1.3;
