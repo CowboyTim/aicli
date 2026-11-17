@@ -136,6 +136,7 @@ networks:
     enable_ipv6: true   # outgoing IPv6 (NAT66 by the daemon), to IPv6-only servers on the LAN
     ipam:
       config:
+        - subnet: 172.31.200.0/24   # IPv4 as before (listing only IPv6 removed it)
         - subnet: fd42:a1c1::/64
 
 volumes:
