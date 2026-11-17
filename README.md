@@ -560,34 +560,33 @@ podman.socket`), and set `AI_PROJECTS`, `PODMAN_SOCKET`, `BROKER_UID`, `BROKER_G
 
 ## The public address (nginx, TLS)
 
-`docker-compose.yaml` runs four services: `broker`, `agent` (the web interface), `certbot`
-(the certificate, through a DNS record), and `nginx` (TLS on port 443, proxied to the
-agent on the host's loopback). Steps, once:
+`docker-compose.yaml` runs `broker`, `agent`, `searxng`, `proxy`, and `nginx`. nginx has the
+public IPv6 address of `PUBLIC_DOMAIN` on the network `dmz-aicli`, and serves TLS on port
+443 with the certificate of certbot. Steps, once:
 
-1. A routed IPv6 prefix for the containers (for example a `/120` out of your /64), and
-   the gateway address of that prefix. Your router or the host must route the prefix to
-   this host.
-2. A `AAAA` record for `PUBLIC_DOMAIN` with the IPv6 address this host uses in that prefix.
-   Set it by hand at the DNS provider (Cloudflare, for example).
-3. `cp .env.example .env` and set `PUBLIC_DOMAIN`, `CERTBOT_EMAIL`, and the paths and ids as
-   before. The certificate uses the HTTP challenge: port 80 on the public address must reach nginx.
-4. `docker compose up -d certbot`, then `docker compose logs -f certbot` until the
-   certificate is issued. It renews itself every 12 hours after that.
-5. `PUBLIC_DOMAIN=… IPV6_SUBNET=… IPV6_GATEWAY=… ./deploy.sh`. It looks up the `AAAA` record,
-   creates the IPv6 network `dmz-aicli` (once), and runs `docker compose up -d --build`.
-   The page is at `https://PUBLIC_DOMAIN/?token=...`; the token is in
+1. A routed IPv6 prefix for the containers, and its gateway (see `deploy.sh`). The router or
+   the host must route that prefix to this host.
+2. An `AAAA` record for `PUBLIC_DOMAIN` with the IPv6 address this host uses in that prefix,
+   set by hand at the DNS provider.
+3. Port 80 and 443 on that address must reach the host (ufw rules for the prefix).
+4. `PUBLIC_DOMAIN=… CERTBOT_EMAIL=… AI_PROJECTS=… ./deploy.sh`. It writes `.env` and
+   `agent.env` (`setup-env.sh`), looks up the `AAAA` record, creates `dmz-aicli`, gets the
+   certificate (certbot runs on the domain's address and answers the HTTP challenge on port
+   80, with nginx stopped meanwhile), and starts the stack.
+5. The page is at `https://PUBLIC_DOMAIN/?token=...`; the token is in
    `docker compose logs agent` (or `AI_UI_TOKEN` in `agent.env`).
 
-Only nginx is on the public network `dmz-aicli`, with the address of the `AAAA` record.
-The agent, the broker and certbot have no public address; nginx reaches the agent on the
-network `aicli-net`. The agent listens in its container only (nothing is published), and
-nginx sends the event stream without buffering, accepting recordings up to 25 MB.
+The certificate lasts about 90 days. `DO_CERTBOT=1 ./deploy.sh` renews it when it is due
+(run it from cron every few weeks, or by hand).
 
-A model server on the host (for example `AI_LOCAL_SERVER`) is not reachable on the host's
-loopback from a container. It has to listen on the host's address on the bridge of
-`aicli-net` (`docker network inspect aicli-net`), and `AI_LOCAL_SERVER` in `agent.env`
-names that address. Login with several users and JWT or
-OAuth2 is not in yet: at the moment the token is the only access control.
+Only nginx is on the public network `dmz-aicli`. The agent, the broker, searxng, and the proxy
+are on `aicli-net` and have no public address. The agent listens in its container only (nothing is
+published); nginx sends the event stream without buffering, and accepts recordings up to 25 MB.
+Searxng for other tools is at `https://PUBLIC_DOMAIN/searxng/` with `SEARXNG_API_TOKEN` as
+`Authorization: Bearer`.
+
+A model server on the host (for example `AI_LOCAL_SERVER`) is reached by its address on
+the host, and the host's firewall must allow the agent's network to reach its port (ufw).
 
 ## Configuration
 

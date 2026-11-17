@@ -30,22 +30,6 @@ http {
     }
     limit_req_zone $binary_remote_addr zone=searxng:10m rate=2r/s;
 
-    server {
-        listen 80;
-        listen [::]:80;
-        server_name _;
-
-        # the HTTP challenge of certbot (the files come from the volume acme-www)
-        location /.well-known/acme-challenge/ {
-            root /var/www/certbot;
-        }
-
-        location / {
-            return 301 https://$host$request_uri;
-        }
-    }
-
-#TLS-BEGIN
 
     server {
         listen 443 ssl;
@@ -111,5 +95,4 @@ http {
             proxy_send_timeout 1h;
         }
     }
-#TLS-END
 }

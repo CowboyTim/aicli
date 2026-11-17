@@ -6,6 +6,7 @@
 #   PUBLIC_DOMAIN=ai.example.org CERTBOT_EMAIL=you@example.org \
 #   AI_PROJECTS=/home/you/projects \
 #   ./deploy.sh [docker compose up arguments, default: -d --build]
+#   DO_CERTBOT=1 ./deploy.sh      also renews the certificate when it is due (every ~60 days)
 #
 # setup-env.sh writes .env and agent.env first (a setting given here is written, a setting
 # already in the files stays, the secrets are made once). IPV6_SUBNET and IPV6_GATEWAY
@@ -65,6 +66,22 @@ if ! docker network inspect "$NET" >/dev/null 2>&1; then
         --opt com.docker.network.bridge.inhibit_ipv4=true \
         --opt com.docker.network.driver.mtu=1500 \
         "$NET" >/dev/null
+fi
+
+# the certificate: certbot runs as its own container on the address of the domain and
+# answers the HTTP challenge on port 80 itself. nginx has that address, so it is stopped
+# while certbot runs. Done when there is no certificate yet, or when DO_CERTBOT=1 (renewal:
+# --keep-until-expiring renews only when it is due).
+cert_present() {
+    docker run --rm -v aicli-letsencrypt:/etc/letsencrypt alpine test -d "/etc/letsencrypt/live/$PUBLIC_DOMAIN"
+}
+if [ "${DO_CERTBOT:-0}" = 1 ] || ! cert_present; then
+    echo "running certbot on $IPV6_ADDRESS (port 80 for the HTTP challenge)"
+    docker compose stop nginx >/dev/null 2>&1 || true
+    docker run --rm -p 80:80 --network "$NET" --ip6 "$IPV6_ADDRESS" \
+        -v aicli-letsencrypt:/etc/letsencrypt \
+        certbot/certbot:latest certonly --standalone --non-interactive --agree-tos \
+        --keep-until-expiring -m "$CERTBOT_EMAIL" -d "$PUBLIC_DOMAIN" || exit $?
 fi
 
 echo "building and starting with docker compose"

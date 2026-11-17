@@ -103,34 +103,10 @@ services:
       - ./proxy/squid.conf:/etc/squid/squid.conf:ro
     restart: unless-stopped
 
-  # certbot: the certificate for PUBLIC_DOMAIN, by the HTTP challenge: nginx serves the
-  # challenge file from the shared volume acme-www on port 80. It gets the certificate
-  # once (retrying until nginx answers), then renews it every 12 hours.
-  certbot:
-    image: certbot/certbot:latest
-    networks:
-      - aicli
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        if [ ! -d /etc/letsencrypt/live/$$PUBLIC_DOMAIN ]; then
-          until certbot certonly --non-interactive --agree-tos -m "$$CERTBOT_EMAIL" \
-              -d "$$PUBLIC_DOMAIN" --webroot -w /var/www/certbot; do
-            echo "no certificate yet, trying again in a minute"; sleep 60
-          done
-        fi
-        while :; do certbot renew --quiet; sleep 12h; done
-    environment:
-      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?set PUBLIC_DOMAIN to the public name}
-      CERTBOT_EMAIL: ${CERTBOT_EMAIL:?set CERTBOT_EMAIL (for the certificate's notices)}
-    volumes:
-      - letsencrypt:/etc/letsencrypt
-      - acme-www:/var/www/certbot
-    restart: unless-stopped
-
-  # nginx: the public address. Port 80 serves the challenge files and redirects the rest;
-  # port 443 is TLS with the certificate of certbot, once there is one (the config is
-  # rendered from the template at start and every minute; a change reloads nginx).
+  # nginx: the public address, TLS on port 443 with the certificate of certbot. The
+  # certificate is made by deploy.sh (certbot runs there, on the address of the domain, as
+  # its own container: it answers the HTTP challenge on port 80). nginx waits for the
+  # certificate, and reloads when the config changes (renewal).
   nginx:
     image: nginx:stable
     networks:
@@ -146,26 +122,18 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        render() {
-          envsubst '$$AGENT_PORT $$SEARXNG_API_TOKEN' < /etc/nginx/nginx.conf.template > /tmp/nginx.full
-          if [ -d /etc/nginx/certs/live/$$PUBLIC_DOMAIN ]; then
-            cp /tmp/nginx.full /tmp/nginx.new
-          else
-            awk '/#TLS-BEGIN/{skip=1} !skip{print} /#TLS-END/{skip=0}' /tmp/nginx.full > /tmp/nginx.new
-          fi
-          if ! cmp -s /tmp/nginx.new /etc/nginx/nginx.conf; then
-            cp /tmp/nginx.new /etc/nginx/nginx.conf
-            return 0
-          fi
-          return 1
-        }
-        render || true
-        (while :; do sleep 60; if render; then nginx -s reload; fi; done) &
+        until [ -d /etc/nginx/certs/live/$$PUBLIC_DOMAIN ]; do
+          echo "no certificate for $$PUBLIC_DOMAIN yet (run deploy.sh with DO_CERTBOT=1)"; sleep 30
+        done
+        envsubst '$$AGENT_PORT $$SEARXNG_API_TOKEN' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
+        (while :; do sleep 60
+          envsubst '$$AGENT_PORT $$SEARXNG_API_TOKEN' < /etc/nginx/nginx.conf.template > /tmp/nginx.new
+          if ! cmp -s /tmp/nginx.new /etc/nginx/nginx.conf; then cp /tmp/nginx.new /etc/nginx/nginx.conf; nginx -s reload; fi
+        done) &
         exec nginx -g 'daemon off;'
     volumes:
       - ./nginx/nginx.conf.template:/etc/nginx/nginx.conf.template:ro
       - letsencrypt:/etc/nginx/certs:ro
-      - acme-www:/var/www/certbot:ro
     restart: unless-stopped
 
 volumes:
@@ -175,5 +143,3 @@ volumes:
     name: aicli-agent
   letsencrypt:
     name: aicli-letsencrypt
-  acme-www:
-    name: aicli-acme-www
