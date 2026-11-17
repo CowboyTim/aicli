@@ -133,6 +133,10 @@ networks:
   # the containers among themselves, and their way out (NAT for IPv4, no public address)
   aicli:
     name: aicli-net
+    enable_ipv6: true   # outgoing IPv6 (NAT66 by the daemon), to IPv6-only servers on the LAN
+    ipam:
+      config:
+        - subnet: fd42:a1c1::/64
 
 volumes:
   aicli-broker:
