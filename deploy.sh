@@ -4,7 +4,7 @@
 # agent, the broker and certbot are not on it, so they have no public address.
 #
 #   PUBLIC_DOMAIN=ai.example.org CERTBOT_EMAIL=you@example.org \
-#   AI_PROJECTS=/home/you/projects CLOUDFLARE_API_TOKEN=... \
+#   AI_PROJECTS=/home/you/projects \
 #   ./deploy.sh [docker compose up arguments, default: -d --build]
 #
 # setup-env.sh writes .env and agent.env first (a setting given here is written, a setting

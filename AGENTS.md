@@ -264,7 +264,7 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
 - **docker-compose.yaml** – the services: `broker` (broker.pl), `agent` (the web
   interface, `ai.pl --ui`, on `aicli-net`, listens in its container on `AGENT_PORT`,
   nothing published), `certbot`
-  (`Dockerfile.certbot`: certbot with the DNS plugin `DNS_PLUGIN`; gets the certificate of
+  (the HTTP challenge: nginx serves its files from the volume `acme-www` on port 80; gets the certificate of
   `PUBLIC_DOMAIN` once, renews every 12 h), `nginx` (`nginx/default.conf.template`: TLS on
   443 on the public IPv6 network `dmz-aicli` (the address of the `AAAA` record of
   `PUBLIC_DOMAIN`), proxy to `agent` on `aicli-net`, SSE unbuffered). `deploy.sh` looks up

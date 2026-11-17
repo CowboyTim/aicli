@@ -103,44 +103,34 @@ services:
       - ./proxy/squid.conf:/etc/squid/squid.conf:ro
     restart: unless-stopped
 
-  # certbot: the certificate for PUBLIC_DOMAIN, through a DNS record (DNS_PLUGIN, and the
-  # token CLOUDFLARE_API_TOKEN from .env). It gets the certificate once, then renews it.
+  # certbot: the certificate for PUBLIC_DOMAIN, by the HTTP challenge: nginx serves the
+  # challenge file from the shared volume acme-www on port 80. It gets the certificate
+  # once (retrying until nginx answers), then renews it every 12 hours.
   certbot:
-    build:
-      context: .
-      dockerfile: Dockerfile.certbot
-      args:
-        DNS_PLUGIN: ${DNS_PLUGIN:-cloudflare}
-    image: local/ai/aicli-certbot:latest
-    # the network with the outgoing settings of this stack (the default network of compose
-    # takes the daemon's defaults, which have no IPv4 masquerading)
+    image: certbot/certbot:latest
     networks:
       - aicli
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        # the plugin reads its credentials from a file: written here, from the environment,
-        # into a temporary filesystem (cloudflare: CLOUDFLARE_API_TOKEN)
-        umask 077
-        printf 'dns_cloudflare_api_token = %s\n' "$$CLOUDFLARE_API_TOKEN" > /tmp/dns.ini
         if [ ! -d /etc/letsencrypt/live/$$PUBLIC_DOMAIN ]; then
-          certbot certonly --non-interactive --agree-tos -m "$$CERTBOT_EMAIL" -d "$$PUBLIC_DOMAIN" \
-            --dns-$$DNS_PLUGIN --dns-$$DNS_PLUGIN-credentials /tmp/dns.ini
+          until certbot certonly --non-interactive --agree-tos -m "$$CERTBOT_EMAIL" \
+              -d "$$PUBLIC_DOMAIN" --webroot -w /var/www/certbot; do
+            echo "no certificate yet, trying again in a minute"; sleep 60
+          done
         fi
         while :; do certbot renew --quiet; sleep 12h; done
     environment:
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?set PUBLIC_DOMAIN to the public name}
       CERTBOT_EMAIL: ${CERTBOT_EMAIL:?set CERTBOT_EMAIL (for the certificate's notices)}
-      DNS_PLUGIN: ${DNS_PLUGIN:-cloudflare}
-      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:?set CLOUDFLARE_API_TOKEN (a Cloudflare API token that may edit DNS)}
-    tmpfs:
-      - /tmp
     volumes:
       - letsencrypt:/etc/letsencrypt
+      - acme-www:/var/www/certbot
     restart: unless-stopped
 
-  # nginx: the public address. TLS with the certificate of certbot (mounted as /etc/nginx/certs);
-  # the agent is behind it on the loopback. Start certbot first and wait for its certificate.
+  # nginx: the public address. Port 80 serves the challenge files and redirects the rest;
+  # port 443 is TLS with the certificate of certbot, once there is one (the config is
+  # rendered from the template at start and every minute; a change reloads nginx).
   nginx:
     image: nginx:stable
     networks:
@@ -150,39 +140,33 @@ services:
     depends_on:
       - agent
     environment:
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?set PUBLIC_DOMAIN to the public name}
       AGENT_PORT: ${AGENT_PORT:-8080}
       SEARXNG_API_TOKEN: ${SEARXNG_API_TOKEN:?set SEARXNG_API_TOKEN (openssl rand -hex 32)}
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        envsubst '$$AGENT_PORT $$SEARXNG_API_TOKEN' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
-        (while :; do sleep 12h; nginx -s reload; done) &
+        render() {
+          envsubst '$$AGENT_PORT $$SEARXNG_API_TOKEN' < /etc/nginx/nginx.conf.template > /tmp/nginx.full
+          if [ -d /etc/nginx/certs/live/$$PUBLIC_DOMAIN ]; then
+            cp /tmp/nginx.full /tmp/nginx.new
+          else
+            awk '/#TLS-BEGIN/{skip=1} !skip{print} /#TLS-END/{skip=0}' /tmp/nginx.full > /tmp/nginx.new
+          fi
+          if ! cmp -s /tmp/nginx.new /etc/nginx/nginx.conf; then
+            cp /tmp/nginx.new /etc/nginx/nginx.conf
+            return 0
+          fi
+          return 1
+        }
+        render || true
+        (while :; do sleep 60; if render; then nginx -s reload; fi; done) &
         exec nginx -g 'daemon off;'
     volumes:
       - ./nginx/nginx.conf.template:/etc/nginx/nginx.conf.template:ro
       - letsencrypt:/etc/nginx/certs:ro
+      - acme-www:/var/www/certbot:ro
     restart: unless-stopped
-
-networks:
-  # the public IPv6 network (deploy.sh creates it): only nginx is on it
-  dmz:
-    name: dmz-aicli
-    external: true
-  # the containers among themselves, and their way out (NAT for IPv4, no public address)
-  aicli:
-    name: aicli-net
-    enable_ipv6: true   # outgoing IPv6 (NAT66 by the daemon), to IPv6-only servers on the LAN
-    # set here, not inherited: the daemon's default-network-opts turn masquerading off
-    driver_opts:
-      com.docker.network.bridge.gateway_mode_ipv4: "nat"
-      com.docker.network.bridge.gateway_mode_ipv6: "nat"
-      com.docker.network.bridge.enable_ip_masquerade: "true"
-      com.docker.network.bridge.enable_ip6_masquerade: "true"
-      com.docker.network.bridge.inhibit_ipv4: "false"
-    ipam:
-      config:
-        - subnet: 172.31.200.0/24   # IPv4 as before (listing only IPv6 removed it)
-        - subnet: fd42:a1c1::/64
 
 volumes:
   aicli-broker:
@@ -191,3 +175,5 @@ volumes:
     name: aicli-agent
   letsencrypt:
     name: aicli-letsencrypt
+  acme-www:
+    name: aicli-acme-www

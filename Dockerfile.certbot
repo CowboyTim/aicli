@@ -1,6 +1,0 @@
-# certbot with the DNS plugin of your DNS provider (DNS_PLUGIN, for example cloudflare,
-# route53, digitalocean): the certificate is proven by a DNS record, no port 80 needed.
-ARG BASE_IMAGE=certbot/certbot:latest
-FROM ${BASE_IMAGE}
-ARG DNS_PLUGIN=cloudflare
-RUN pip install --no-cache-dir "certbot-dns-${DNS_PLUGIN}"

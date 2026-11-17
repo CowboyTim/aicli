@@ -27,14 +27,13 @@ sub value { my ($f, $k) = @_; my ($v) = slurp($f) =~ m/^\Q$k\E=(.*)$/m; return $
 
 my %in = (
     PUBLIC_DOMAIN => 'ai.example.org', CERTBOT_EMAIL => 'me@example.org',
-    AI_PROJECTS => '/home/me/projects', CLOUDFLARE_API_TOKEN => 'cf-token-123',
+    AI_PROJECTS => '/home/me/projects',
 );
 
 is(run_setup(%in), 0, "the first run with what it needs");
 my $env_f = "$dir/.env";
 my $agent_f = "$dir/agent.env";
 is(value($env_f, 'PUBLIC_DOMAIN'), 'ai.example.org', "the domain is written");
-is(value($env_f, 'CLOUDFLARE_API_TOKEN'), 'cf-token-123', "the token is written");
 like(value($env_f, 'SEARXNG_SECRET'), qr/\A[0-9a-f]{64}\z/, "a secret is made");
 like(value($env_f, 'SEARXNG_API_TOKEN'), qr/\A[0-9a-f]{64}\z/, "and the token of searxng");
 is(value($env_f, 'IPV6_SUBNET'), '2a02:a03f:8789:e700:c::8:0/120', "the subnet of the default prefix");
@@ -59,7 +58,7 @@ is(run_setup(%in), 0, "a run with an old address in the file");
 is(value($env_f, 'IPV6_ADDRESS'), undef, "the old address is dropped (deploy.sh looks it up)");
 
 # a required value that is nowhere
-my %missing = %in; delete $missing{CLOUDFLARE_API_TOKEN};
+my %missing = %in; delete $missing{PUBLIC_DOMAIN};
 my $other = File::Temp::tempdir("aicli_setup2_XXXXXX", TMPDIR => 1, CLEANUP => 1);
 {
     my $pid = fork() // die "fork: $!";
@@ -69,8 +68,8 @@ my $other = File::Temp::tempdir("aicli_setup2_XXXXXX", TMPDIR => 1, CLEANUP => 1
         exec('bash', $script, $other) or POSIX::_exit(9);
     }
     waitpid($pid, 0);
-    isnt($? >> 8, 0, "without the token the setup stops");
-    like(slurp("$other/err"), qr/CLOUDFLARE_API_TOKEN is needed/, "and says which setting is missing");
+    isnt($? >> 8, 0, "without the domain the setup stops");
+    like(slurp("$other/err"), qr/PUBLIC_DOMAIN is needed/, "and says which setting is missing");
 }
 
 done_testing();

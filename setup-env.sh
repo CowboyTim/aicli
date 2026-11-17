@@ -61,8 +61,6 @@ v=$(need CERTBOT_EMAIL)
 set_key "$env_f" CERTBOT_EMAIL "$v"
 v=$(need AI_PROJECTS)
 set_key "$env_f" AI_PROJECTS "$v"
-v=$(need CLOUDFLARE_API_TOKEN)
-set_key "$env_f" CLOUDFLARE_API_TOKEN "$v"
 set_key "$env_f" IPV6_SUBNET "$(pick "$env_f" IPV6_SUBNET "$ipv6_prefix:0/120")"
 set_key "$env_f" IPV6_GATEWAY "$(pick "$env_f" IPV6_GATEWAY "$ipv6_prefix:1")"
 set_key "$env_f" PODMAN_SOCKET "/run/user/$(id -u)/podman/podman.sock"

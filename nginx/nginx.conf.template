@@ -34,8 +34,18 @@ http {
         listen 80;
         listen [::]:80;
         server_name _;
-        return 301 https://$host$request_uri;
+
+        # the HTTP challenge of certbot (the files come from the volume acme-www)
+        location /.well-known/acme-challenge/ {
+            root /var/www/certbot;
+        }
+
+        location / {
+            return 301 https://$host$request_uri;
+        }
     }
+
+#TLS-BEGIN
 
     server {
         listen 443 ssl;
@@ -101,4 +111,5 @@ http {
             proxy_send_timeout 1h;
         }
     }
+#TLS-END
 }
