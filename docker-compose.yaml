@@ -48,6 +48,8 @@ services:
     image: local/ai/aicli:latest
     depends_on:
       - broker
+      - searxng
+      - proxy
     networks:
       - aicli
     command:
@@ -57,6 +59,10 @@ services:
       - path: ./agent.env
         required: false
     environment:
+      # the agent's web tools go through the proxy, its search is the searxng of this file
+      AI_WEB_PROXY: http://proxy:3128
+      AI_SEARXNG_URL: http://searxng:8080
+      AI_SEARXNG_PROXY: ""
       UID: ${BROKER_UID:-1000}
       GID: ${BROKER_GID:-1000}
       HOME: /workspace
@@ -76,6 +82,26 @@ services:
     cap_add:
       - SYS_PTRACE
     restart: unless-stopped
+  # searxng: the search engine of the agent's search tool (JSON output, see searxng/settings.yml)
+  searxng:
+    image: searxng/searxng:latest
+    networks:
+      - aicli
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?set SEARXNG_SECRET (openssl rand -hex 32)}
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    restart: unless-stopped
+
+  # proxy: squid, the agent's way to the web (fetch and search); see proxy/squid.conf
+  proxy:
+    image: ubuntu/squid:latest
+    networks:
+      - aicli
+    volumes:
+      - ./proxy/squid.conf:/etc/squid/squid.conf:ro
+    restart: unless-stopped
+
   # certbot: the certificate for PUBLIC_DOMAIN, through a DNS record (DNS_PLUGIN and the
   # credentials of dns-credentials.ini). It gets the certificate once, then renews it.
   certbot:

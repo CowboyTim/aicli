@@ -1,0 +1,10 @@
+# SearXNG for the agent: its search tool asks for JSON. The secret key comes from the
+# environment (SEARXNG_SECRET), not from this file.
+use_default_settings: true
+server:
+  limiter: false
+  image_proxy: false
+search:
+  formats:
+    - html
+    - json
