@@ -2,3 +2,6 @@
 README.md
 build-watch.log
 .build-trigger
+.env
+agent.env
+dns-credentials.ini
