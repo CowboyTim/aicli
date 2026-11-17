@@ -45,8 +45,6 @@ http {
         ssl_protocols           TLSv1.2 TLSv1.3;
         ssl_ciphers             ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-SHA384;
         ssl_prefer_server_ciphers on;
-        ssl_stapling            on;
-        ssl_stapling_verify     on;
 
         client_max_body_size    25m;  # /voice: a recording of about two minutes (the page limit is 20 MB)
         resolver                127.0.0.11 ipv6=off valid=3s;  # the docker DNS, for the name of the agent
