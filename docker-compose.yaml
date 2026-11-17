@@ -7,7 +7,8 @@
 #   BROKER_UID      that user's UID (the owner of the socket; the agents run as the same UID)
 #   BROKER_GID      its GID
 #
-#   docker compose up -d --build
+#   docker compose up -d --build        the broker and the agent (the web interface)
+#   the agent's page: http://127.0.0.1:8080/?token=... (the token is in its log: docker compose logs agent)
 name: aicli-broker
 services:
   broker:
@@ -36,6 +37,46 @@ services:
       - ${AI_PROJECTS}:/projects:ro
       - aicli-broker:/run/aicli-broker
     restart: unless-stopped
+  # The agent: the web interface (ai.pl --ui) with its projects. It is what
+  # `aicli.sh --broker --root $AI_PROJECTS --ui` starts by hand. Its provider settings
+  # (AI_API_KEY, AI_PROVIDER, AI_MODEL, AI_LOCAL_SERVER, AI_UI_TOKEN, ...) go in
+  # agent.env, next to this file; it is optional.
+  agent:
+    build:
+      context: .
+      target: dev
+    image: local/ai/aicli:latest
+    depends_on:
+      - broker
+    network_mode: host
+    command:
+      - --ui=${AGENT_PORT:-8080}
+      - --ui-bind=${AGENT_BIND:-127.0.0.1}
+    env_file:
+      - path: ./agent.env
+        required: false
+    environment:
+      UID: ${BROKER_UID:-1000}
+      GID: ${BROKER_GID:-1000}
+      HOME: /workspace
+      AI_DIR: /workspace/.aicli
+      AI_PROMPT_TEMPLATE: coder
+      AI_POD_ROOT: /workdir/projects
+      AI_BROKER_SOCKET: /run/aicli-broker/broker.sock
+      TMPDIR: /tmp
+    working_dir: /workdir/projects
+    volumes:
+      - ${AI_PROJECTS:?set AI_PROJECTS to the host directory of the projects}:/workdir/projects
+      - aicli-agent:/workspace
+      - aicli-broker:/run/aicli-broker
+    tmpfs:
+      - /tmp:size=2G
+      - /var/tmp:size=1G
+    cap_add:
+      - SYS_PTRACE
+    restart: unless-stopped
 volumes:
   aicli-broker:
     name: aicli-broker
+  aicli-agent:
+    name: aicli-agent

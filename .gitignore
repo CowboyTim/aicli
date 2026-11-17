@@ -2,3 +2,4 @@
 *.wav
 build-watch.log
 .build-trigger
+agent.env
