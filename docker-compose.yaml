@@ -112,6 +112,10 @@ services:
       args:
         DNS_PLUGIN: ${DNS_PLUGIN:-cloudflare}
     image: local/ai/aicli-certbot:latest
+    # the network with the outgoing settings of this stack (the default network of compose
+    # takes the daemon's defaults, which have no IPv4 masquerading)
+    networks:
+      - aicli
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
