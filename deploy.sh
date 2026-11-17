@@ -70,12 +70,10 @@ fi
 
 # the certificate: certbot runs as its own container on the address of the domain and
 # answers the HTTP challenge on port 80 itself. nginx has that address, so it is stopped
-# while certbot runs. Done when there is no certificate yet, or when DO_CERTBOT=1 (renewal:
-# --keep-until-expiring renews only when it is due).
-cert_present() {
-    docker run --rm -v aicli-letsencrypt:/etc/letsencrypt alpine test -d "/etc/letsencrypt/live/$PUBLIC_DOMAIN"
-}
-if [ "${DO_CERTBOT:-0}" = 1 ] || ! cert_present; then
+# while certbot runs. Only when DO_CERTBOT=1 (the first certificate, and renewals: with
+# --keep-until-expiring a certificate is renewed only when it is due). Without a certificate
+# nginx waits until one exists.
+if [ "${DO_CERTBOT:-0}" = 1 ]; then
     echo "running certbot on $IPV6_ADDRESS (port 80 for the HTTP challenge)"
     docker compose stop nginx || echo "warning: nginx did not stop (it holds the address of the domain)" >&2
     docker run --rm --network "$NET" --ip6 "$IPV6_ADDRESS" \
