@@ -89,6 +89,7 @@ services:
       - aicli
     environment:
       SEARXNG_SECRET: ${SEARXNG_SECRET:?set SEARXNG_SECRET (openssl rand -hex 32)}
+      SEARXNG_BASE_URL: https://${PUBLIC_DOMAIN:?set PUBLIC_DOMAIN}/searxng/
     volumes:
       - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
     restart: unless-stopped
@@ -140,10 +141,11 @@ services:
       - agent
     environment:
       AGENT_PORT: ${AGENT_PORT:-8080}
+      SEARXNG_API_TOKEN: ${SEARXNG_API_TOKEN:?set SEARXNG_API_TOKEN (openssl rand -hex 32)}
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        envsubst '$$AGENT_PORT' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
+        envsubst '$$AGENT_PORT $$SEARXNG_API_TOKEN' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
         (while :; do sleep 12h; nginx -s reload; done) &
         exec nginx -g 'daemon off;'
     volumes:

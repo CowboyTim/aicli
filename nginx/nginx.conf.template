@@ -21,6 +21,13 @@ http {
     keepalive_timeout 65;
     types_hash_max_size 4096;
 
+    # searxng for other tools: a bearer token, and a rate limit per address
+    map $http_authorization $searxng_ok {
+        default 0;
+        "Bearer ${SEARXNG_API_TOKEN}" 1;
+    }
+    limit_req_zone $binary_remote_addr zone=searxng:10m rate=2r/s;
+
     server {
         listen 80;
         listen [::]:80;
@@ -63,6 +70,19 @@ http {
         add_header Cross-Origin-Opener-Policy "same-origin" always;
         add_header Cross-Origin-Resource-Policy "same-origin" always;
         add_header Permissions-Policy "camera=(), geolocation=()" always;
+
+        location /searxng/ {
+            if ($searxng_ok = 0) {
+                return 401;
+            }
+            limit_req zone=searxng burst=20 nodelay;
+            set $searxng http://searxng:8080;
+            rewrite ^/searxng/(.*)$ /$1 break;
+            proxy_pass $searxng;
+            proxy_set_header Host $host;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Forwarded-For $remote_addr;
+        }
 
         location / {
             # the agent by its name on the network aicli (resolved when a request comes, so nginx
