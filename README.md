@@ -544,7 +544,9 @@ host (`PODMAN_SOCKET`, owned by `BROKER_UID`). The broker is the only container
 with that socket; the agents reach it through the volume `aicli-broker`. A pod
 mounts its project and nothing else, runs unprivileged with its limits, and only
 images of `broker.json` are allowed. From a shell with the volume:
-`perl broker.pl open alpha`, `list`, `close alpha`.
+`perl broker.pl open alpha`, `list`, `close alpha`. The web interface gets the same from
+its pods panel when it runs with `aicli.sh --broker` (the broker's volume is mounted;
+without the flag the web interface does not reach the broker).
 
 Host setup: install Podman, enable the user socket (`systemctl --user enable --now
 podman.socket`), and set `AI_PROJECTS`, `PODMAN_SOCKET`, `BROKER_UID`, `BROKER_GID`.

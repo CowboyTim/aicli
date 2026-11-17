@@ -17,6 +17,7 @@ use POSIX ();
 use File::Basename ();
 use Errno ();
 use Socket ();
+use IO::Socket::UNIX ();
 use MIME::Base64 ();
 
 our ($listen, $token, $port, $bind, $html_file);
@@ -25,7 +26,7 @@ our $voice;     # the speech recognizer: undef (not checked yet), 'ok', 'none' (
 our %conn;      # fileno => connection
 our @clients;   # connections that read the event stream
 our @queue;     # messages waiting for chat_loop
-our ($active, %worker, %model_of, $models, $OUTBOX, $IDLE, $last_error); # the master, see below
+our ($active, %worker, %model_of, $models, $OUTBOX, $IDLE, $last_error, $BROKER_SOCKET, $BROKER_ASK); # the master, see below
 $IDLE = 900;
 $last_error = '';
 our $MAX_BODY    = 1_000_000; # bytes of a request body
@@ -66,6 +67,8 @@ sub start {
     loop::timer(15, \&_ping);
     $ai::EVENT_SINK = \&publish;
     $active = $ai::AI_SESSION;
+    # the broker's socket: named by AI_BROKER_SOCKET, or the one aicli.sh --broker mounts
+    $BROKER_SOCKET = $::ORIG_ENV{AI_BROKER_SOCKET} // (-S '/run/aicli-broker/broker.sock' ? '/run/aicli-broker/broker.sock' : undef);
     $SIG{PIPE} = 'IGNORE'; # a worker that went away is an end of file, not a signal
     _worker_for($active) if defined $active;
     loop::timer(60, \&_idle_check);
@@ -234,6 +237,72 @@ sub _recognize {
 }
 
 sub queued { return scalar @queue }
+
+# --- the pods: the broker (broker.pl) starts and stops the dev pods of the projects ---
+# The master asks the broker over its socket, in a child of the loop (the request
+# waits for the engine: the loop must not). The answer comes to a callback.
+
+sub _broker_ask {
+    my ($req, $cb) = @_;
+    return $BROKER_ASK->($req, $cb) if $BROKER_ASK; # tests
+    my $socket = $BROKER_SOCKET;
+    return $cb->({ok => JSON::XS::false(), error => "no broker: the web interface was started without one (aicli.sh --broker)"})
+        unless length($socket // '');
+    loop::spawn(sub {
+        my $line = eval {
+            my $c = IO::Socket::UNIX->new(Peer => $socket, Type => Socket::SOCK_STREAM())
+                or die "the broker is not reachable: $!\n";
+            print {$c} $::JSON->encode($req)."\n";
+            my $l = <$c>;
+            close($c);
+            die "the broker gave no answer\n" unless defined $l;
+            $l;
+        };
+        if (defined $line) {
+            print $line;
+        } else {
+            my $why = $@ // 'unknown error';
+            $why =~ s/\s+\z//;
+            print $::JSON->encode({ok => JSON::XS::false(), error => $why});
+        }
+    }, timeout => 120, on_done => sub {
+        my ($out) = @_;
+        my $r = eval {$::JSON->decode($out // '')};
+        $r = {ok => JSON::XS::false(), error => "the broker answered nothing usable"} unless ref($r) eq 'HASH';
+        $cb->($r);
+    });
+    return;
+}
+
+# the projects, each with the state of its pod, from the broker's list
+sub _pods_data {
+    my ($r) = @_;
+    my %pod = map {(substr($_->{name}, 6) => $_->{status} // '')} @{$r->{pods} // []}; # aicli-<project>
+    return {
+        ok       => $r->{ok} ? JSON::XS::true() : JSON::XS::false(),
+        error    => $r->{error} // '',
+        available => length($BROKER_SOCKET // '') || $BROKER_ASK ? JSON::XS::true() : JSON::XS::false(),
+        projects => [map {{name => $_, open => exists $pod{$_} ? JSON::XS::true() : JSON::XS::false(),
+                           status => $pod{$_} // 'not started'}} @{ai::project_dirs()}],
+    };
+}
+
+sub _refresh_pods {
+    _broker_ask({op => 'list'}, sub { publish(pods => _pods_data($_[0])) });
+    return;
+}
+
+# the page asked for an open, close or list of a project's pod
+sub _pod_request {
+    my ($op, $project) = @_;
+    _broker_ask({op => $op, project => $project}, sub {
+        my ($r) = @_;
+        publish(broker => {op => $op, project => $project, ok => $r->{ok} ? JSON::XS::true() : JSON::XS::false(),
+                           error => $r->{error} // '', pod => $r->{pod} // ''});
+        _refresh_pods();
+    });
+    return;
+}
 
 # --- the master: one worker process per session (worker.pm) --------------------
 # This process is the master: the HTTP interface, the token and the event stream.
@@ -877,6 +946,7 @@ sub _dispatch {
         _queue($cn, _frame(state => _master_state()));
         _queue($cn, _frame(history => _history_data($active)));
         _queue($cn, _frame(sessions => _sessions_data()));
+        _refresh_pods();
         # the models: the list of the last time, or asked for now
         if (defined $models) {
             _queue($cn, _frame(models => _models_out()));
@@ -925,6 +995,16 @@ sub _dispatch {
             unless _activate($name, new => $new, project => (ref($d->{project}) ? undef : $d->{project}));
         return _json($cn, 200, {session => $active});
     }
+    if($p eq '/pod' and $m eq 'POST'){
+        my $d = eval {$::JSON->decode($body)};
+        my ($op, $project) = ref($d) eq 'HASH' ? ($d->{op}, $d->{project}) : ();
+        return _json($cn, 400, {error => 'a JSON object with op (open, close or list) and project is wanted'})
+            unless defined $op and $op =~ m/\A(?:open|close|list)\z/;
+        return _json($cn, 400, {error => 'a project name is wanted'})
+            if $op ne 'list' and (!defined $project or ref($project) or !length($project));
+        if ($op eq 'list') { _refresh_pods() } else { _pod_request($op, $project) }
+        return _json($cn, 202, {ok => \1});
+    }
     if($p eq '/project' and $m eq 'POST'){
         my $d = eval {$::JSON->decode($body)};
         my $rel = ref($d) eq 'HASH' ? $d->{name} : undef;
@@ -950,7 +1030,7 @@ sub _dispatch {
     if($p eq '/state' and $m eq 'GET'){
         return _json($cn, 200, _master_state());
     }
-    return _respond($cn, 405, 'text/plain', "method not allowed\n") if $p =~ m{^/(events|message|session|project|voice|abort|state)$};
+    return _respond($cn, 405, 'text/plain', "method not allowed\n") if $p =~ m{^/(events|message|session|project|pod|voice|abort|state)$};
     return _respond($cn, 404, 'text/plain', "not found\n");
 }
 

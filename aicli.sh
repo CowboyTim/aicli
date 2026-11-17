@@ -14,6 +14,8 @@
 #   ./aicli.sh -c              anything else goes to ai.pl
 #   ./aicli.sh --ui [PORT]     the web interface (ai.pl --ui); the container shares the host network,
 #                              so it is at http://127.0.0.1:PORT (8080) on the host, token on stderr
+#   ./aicli.sh --broker        the broker's socket (volume aicli-broker, see docker-compose.yaml) for the
+#                              web interface's pages: the projects' pods can be started and stopped from it
 #   ./aicli.sh --root DIR      DIR is mounted as a whole, the projects are the directories in it, and
 #                              the container starts in the current directory (which must be in DIR):
 #                              one container for all projects, one web interface (ai.pl --ui from DIR)
@@ -50,6 +52,7 @@ usb=0
 rtlsdr=0
 nrf=0
 bluetooth=0
+broker=0
 root=
 while :; do
     case "${1:-}" in
@@ -61,6 +64,7 @@ while :; do
         --rtlsdr)           rtlsdr=1; usb=1 ;;
         --nrf-sniffer)      nrf=1; usb=1 ;;
         --bluetooth)        bluetooth=1 ;;
+        --broker)           broker=1 ;;
         --root)             root=${2:?"aicli.sh: --root needs a directory"}; shift ;;
         --root=*)           root=${1#--root=} ;;
         *) break ;;
@@ -115,6 +119,11 @@ if [ -S "$HOST_RUNTIME/pipewire-0" ]; then
     extra_opts="-v $HOST_RUNTIME/pipewire-0:$HOST_RUNTIME/pipewire-0 -e XDG_RUNTIME_DIR=$HOST_RUNTIME $extra_opts"
 else
     echo "aicli.sh: no PipeWire socket at $HOST_RUNTIME/pipewire-0, /voice cannot record (start PipeWire, or set XDG_RUNTIME_DIR)" >&2
+fi
+
+# the broker's socket: only with --broker (the volume is created by compose)
+if [ "$broker" = 1 ]; then
+    extra_opts="-v aicli-broker:/run/aicli-broker $extra_opts"
 fi
 
 # every AI_* setting of this shell goes into the container
