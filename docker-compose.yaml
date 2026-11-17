@@ -7,8 +7,8 @@
 #   BROKER_UID      that user's UID (the owner of the socket; the agents run as the same UID)
 #   BROKER_GID      its GID
 #
-#   docker compose up -d --build        the broker and the agent (the web interface)
-#   the agent's page: http://127.0.0.1:8080/?token=... (the token is in its log: docker compose logs agent)
+#   ./deploy.sh                          the IPv6 network, then docker compose up -d --build
+#   the page: https://PUBLIC_DOMAIN/?token=... (the token is in its log: docker compose logs agent)
 name: aicli-broker
 services:
   broker:
@@ -48,10 +48,11 @@ services:
     image: local/ai/aicli:latest
     depends_on:
       - broker
-    network_mode: host
+    networks:
+      - aicli
     command:
       - --ui=${AGENT_PORT:-8080}
-      - --ui-bind=${AGENT_BIND:-127.0.0.1}
+      - --ui-bind=0.0.0.0
     env_file:
       - path: ./agent.env
         required: false
@@ -105,7 +106,10 @@ services:
   # the agent is behind it on the loopback. Start certbot first and wait for its certificate.
   nginx:
     image: nginx:stable
-    network_mode: host
+    networks:
+      dmz:
+        ipv6_address: ${IPV6_ADDRESS:?set IPV6_ADDRESS (deploy.sh looks it up from PUBLIC_DOMAIN)}
+      aicli: {}
     depends_on:
       - agent
     environment:
@@ -120,6 +124,15 @@ services:
       - ./nginx/nginx.conf.template:/etc/nginx/nginx.conf.template:ro
       - letsencrypt:/etc/nginx/certs:ro
     restart: unless-stopped
+
+networks:
+  # the public IPv6 network (deploy.sh creates it): only nginx is on it
+  dmz:
+    name: dmz-aicli
+    external: true
+  # the containers among themselves, and their way out (NAT for IPv4, no public address)
+  aicli:
+    name: aicli-net
 
 volumes:
   aicli-broker:

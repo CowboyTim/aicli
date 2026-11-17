@@ -564,18 +564,31 @@ podman.socket`), and set `AI_PROJECTS`, `PODMAN_SOCKET`, `BROKER_UID`, `BROKER_G
 (the certificate, through a DNS record), and `nginx` (TLS on port 443, proxied to the
 agent on the host's loopback). Steps, once:
 
-1. A DNS record for `PUBLIC_DOMAIN` that points at this host.
-2. `cp .env.example .env` and set `PUBLIC_DOMAIN`, `CERTBOT_EMAIL`, `DNS_PLUGIN`, and the
+1. A routed IPv6 prefix for the containers (for example a `/120` out of your /64), and
+   the gateway address of that prefix. Your router or the host must route the prefix to
+   this host.
+2. A `AAAA` record for `PUBLIC_DOMAIN` with the IPv6 address this host uses in that prefix.
+   Set it by hand at the DNS provider (Cloudflare, for example).
+3. `cp .env.example .env` and set `PUBLIC_DOMAIN`, `CERTBOT_EMAIL`, `DNS_PLUGIN`, and the
    paths and ids as before. The DNS provider's credentials:
    `cp dns-credentials.ini.example dns-credentials.ini` (its format is the plugin's own;
    the example is for Cloudflare).
-3. `docker compose up -d certbot`, then `docker compose logs -f certbot` until the
+4. `docker compose up -d certbot`, then `docker compose logs -f certbot` until the
    certificate is issued. It renews itself every 12 hours after that.
-4. `docker compose up -d --build`. The page is at `https://PUBLIC_DOMAIN/?token=...`; the
-   token is in `docker compose logs agent` (or `AI_UI_TOKEN` in `agent.env`).
+5. `PUBLIC_DOMAIN=… IPV6_SUBNET=… IPV6_GATEWAY=… ./deploy.sh`. It looks up the `AAAA` record,
+   creates the IPv6 network `dmz-aicli` (once), and runs `docker compose up -d --build`.
+   The page is at `https://PUBLIC_DOMAIN/?token=...`; the token is in
+   `docker compose logs agent` (or `AI_UI_TOKEN` in `agent.env`).
 
-The agent itself listens on the loopback only. nginx sends the event stream without
-buffering, and accepts recordings up to 25 MB. Login with several users and JWT or
+Only nginx is on the public network `dmz-aicli`, with the address of the `AAAA` record.
+The agent, the broker and certbot have no public address; nginx reaches the agent on the
+network `aicli-net`. The agent listens in its container only (nothing is published), and
+nginx sends the event stream without buffering, accepting recordings up to 25 MB.
+
+A model server on the host (for example `AI_LOCAL_SERVER`) is not reachable on the host's
+loopback from a container. It has to listen on the host's address on the bridge of
+`aicli-net` (`docker network inspect aicli-net`), and `AI_LOCAL_SERVER` in `agent.env`
+names that address. Login with several users and JWT or
 OAuth2 is not in yet: at the moment the token is the only access control.
 
 ## Configuration

@@ -46,7 +46,7 @@ http {
         ssl_stapling_verify     on;
 
         client_max_body_size    25m;  # /voice: a recording of about two minutes (the page limit is 20 MB)
-        resolver                127.0.0.11 ipv6=off valid=3s;
+        resolver                127.0.0.11 ipv6=off valid=3s;  # the docker DNS, for the name of the agent
 
         # the methods the page uses
         if ($request_method !~ ^(GET|POST)$) {
@@ -65,7 +65,10 @@ http {
         add_header Permissions-Policy "camera=(), geolocation=()" always;
 
         location / {
-            proxy_pass http://127.0.0.1:${AGENT_PORT};
+            # the agent by its name on the network aicli (resolved when a request comes, so nginx
+            # starts whether or not the agent is up)
+            set $agent http://agent:${AGENT_PORT};
+            proxy_pass $agent;
             proxy_http_version 1.1;
             proxy_set_header Host $host;
             proxy_set_header X-Forwarded-Proto $scheme;
