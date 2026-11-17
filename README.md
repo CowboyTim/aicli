@@ -570,9 +570,7 @@ agent on the host's loopback). Steps, once:
 2. A `AAAA` record for `PUBLIC_DOMAIN` with the IPv6 address this host uses in that prefix.
    Set it by hand at the DNS provider (Cloudflare, for example).
 3. `cp .env.example .env` and set `PUBLIC_DOMAIN`, `CERTBOT_EMAIL`, `DNS_PLUGIN`, and the
-   paths and ids as before. The DNS provider's credentials:
-   `cp dns-credentials.ini.example dns-credentials.ini` (its format is the plugin's own;
-   the example is for Cloudflare).
+   paths and ids as before, plus `CLOUDFLARE_API_TOKEN` (a token that may edit the zone's DNS).
 4. `docker compose up -d certbot`, then `docker compose logs -f certbot` until the
    certificate is issued. It renews itself every 12 hours after that.
 5. `PUBLIC_DOMAIN=… IPV6_SUBNET=… IPV6_GATEWAY=… ./deploy.sh`. It looks up the `AAAA` record,

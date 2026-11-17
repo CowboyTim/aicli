@@ -103,8 +103,8 @@ services:
       - ./proxy/squid.conf:/etc/squid/squid.conf:ro
     restart: unless-stopped
 
-  # certbot: the certificate for PUBLIC_DOMAIN, through a DNS record (DNS_PLUGIN and the
-  # credentials of dns-credentials.ini). It gets the certificate once, then renews it.
+  # certbot: the certificate for PUBLIC_DOMAIN, through a DNS record (DNS_PLUGIN, and the
+  # token CLOUDFLARE_API_TOKEN from .env). It gets the certificate once, then renews it.
   certbot:
     build:
       context: .
