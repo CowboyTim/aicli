@@ -119,17 +119,23 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
+        # the plugin reads its credentials from a file: written here, from the environment,
+        # into a temporary filesystem (cloudflare: CLOUDFLARE_API_TOKEN)
+        umask 077
+        printf 'dns_cloudflare_api_token = %s\n' "$$CLOUDFLARE_API_TOKEN" > /tmp/dns.ini
         if [ ! -d /etc/letsencrypt/live/$$PUBLIC_DOMAIN ]; then
           certbot certonly --non-interactive --agree-tos -m "$$CERTBOT_EMAIL" -d "$$PUBLIC_DOMAIN" \
-            --dns-$$DNS_PLUGIN --dns-$$DNS_PLUGIN-credentials /run/secrets/dns.ini
+            --dns-$$DNS_PLUGIN --dns-$$DNS_PLUGIN-credentials /tmp/dns.ini
         fi
         while :; do certbot renew --quiet; sleep 12h; done
     environment:
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?set PUBLIC_DOMAIN to the public name}
       CERTBOT_EMAIL: ${CERTBOT_EMAIL:?set CERTBOT_EMAIL (for the certificate's notices)}
       DNS_PLUGIN: ${DNS_PLUGIN:-cloudflare}
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:?set CLOUDFLARE_API_TOKEN (a Cloudflare API token that may edit DNS)}
+    tmpfs:
+      - /tmp
     volumes:
-      - ./dns-credentials.ini:/run/secrets/dns.ini:ro
       - letsencrypt:/etc/letsencrypt
     restart: unless-stopped
 
