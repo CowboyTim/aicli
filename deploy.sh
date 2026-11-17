@@ -12,6 +12,25 @@
 set -eu
 cd "$(dirname "$(readlink -f "$0")")"
 
+# .env (read as compose reads it, not run as shell): a setting already in the environment
+# wins, and a setting of .env is exported for this script. Only KEY=VALUE lines count.
+if [ -f .env ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            ''|\#*) continue ;;
+            [A-Z_]*=*)
+                key=${line%%=*}
+                val=${line#*=}
+                case "$val" in
+                    \"*\") val=${val#\"}; val=${val%\"} ;;
+                    \'*\') val=${val#\'}; val=${val%\'} ;;
+                esac
+                if [ -z "${!key+x}" ]; then export "$key=$val"; fi
+                ;;
+        esac
+    done < .env
+fi
+
 : "${PUBLIC_DOMAIN:?Need PUBLIC_DOMAIN (the public name, its AAAA record is looked up)}"
 : "${IPV6_SUBNET:?Need IPV6_SUBNET (the routed prefix for the containers, e.g. 2001:db8:c::1:0/120)}"
 : "${IPV6_GATEWAY:?Need IPV6_GATEWAY (the gateway of that prefix, e.g. 2001:db8:c::1:1)}"
