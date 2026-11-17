@@ -22,6 +22,8 @@ http {
     types_hash_max_size 4096;
 
     # searxng for other tools: a bearer token, and a rate limit per address
+    # (the key of the map is the whole header: a 64 character token needs the bigger buckets)
+    map_hash_bucket_size 128;
     map $http_authorization $searxng_ok {
         default 0;
         "Bearer ${SEARXNG_API_TOKEN}" 1;
