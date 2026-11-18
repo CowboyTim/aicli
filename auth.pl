@@ -17,7 +17,7 @@
 # Environment:
 #   AI_AUTH_LISTEN    host:port to listen on (default 0.0.0.0:9000)
 #   AI_AUTH_KEY       the RSA key file (default /var/lib/aicli-auth/jwt-rsa.pem)
-#   AI_AUTH_LIFETIME     seconds a token lasts; renewed in its second half (default 3600)
+#   AI_AUTH_LIFETIME     seconds a token lasts; renewed in its second half (default 86400: a day idle)
 #   AI_AUTH_SESSION_MAX  seconds from a login to the end of its session (default 2592000: a month)
 #   AI_AUTH_REVOKED      the revocation list (default /var/lib/aicli-auth/revoked.json)
 #   AI_AUTH_PAM_SERVICE  the PAM service (default aicli-auth, /etc/pam.d/aicli-auth)
@@ -326,7 +326,7 @@ sub jwt_verify {
 
 our $REVOKED_DEFAULT = '/var/lib/aicli-auth/revoked.json';
 
-sub token_lifetime { return $ENV{AI_AUTH_LIFETIME} // 3600 }
+sub token_lifetime { return $ENV{AI_AUTH_LIFETIME} // 86400 }
 sub session_max    { return $ENV{AI_AUTH_SESSION_MAX} // 2592000 }
 sub revoked_file   { return $ENV{AI_AUTH_REVOKED} // $REVOKED_DEFAULT }
 
