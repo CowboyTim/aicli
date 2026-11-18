@@ -21,6 +21,7 @@
   #menu { display: none; position: absolute; top: 100%; right: 0; left: 0; z-index: 3; background: var(--bg);
           border-bottom: 1px solid var(--line); padding: 12px 16px; flex-direction: column; gap: 10px; box-shadow: 0 6px 16px rgba(0,0,0,.15); }
   #menu.open { display: flex; }
+  #renamesession { align-self: flex-start; font: inherit; font-size: 14px; padding: 4px 10px; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
   #delsession { align-self: flex-start; font: inherit; font-size: 14px; padding: 4px 10px; color: var(--err); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
   #logout { align-self: flex-start; font: inherit; font-size: 14px; padding: 4px 10px; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
   #menu label { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 13px; }
@@ -129,6 +130,7 @@
       <option value="neon">neon</option>
     </select></label>
     <button id="logout" type="button">log out</button>
+    <button id="renamesession" type="button">rename this session</button>
     <button id="delsession" type="button">delete this session</button>
   </div>
 </header>
@@ -834,6 +836,16 @@
 
   abort.addEventListener("click", function () {
     fetch("/abort", { method: "POST" });
+  });
+  // the current session gets another name (letters, digits, . _ -); the page follows the server's events
+  document.getElementById("renamesession").addEventListener("click", function () {
+    if (!sessCur) { return; }
+    var to = prompt("new name for this session (letters, digits, . _ -)", sessCur);
+    if (to === null || to === "" || to === sessCur) { return; }
+    fetch("/session/rename", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: sessCur, to: to }) }).then(function (r) {
+        if (!r.ok) { return r.json().catch(function () { return {}; }).then(function (d) { add("error", d.error || "not renamed"); }); }
+      }).catch(function () { add("error", "the chat does not answer"); });
   });
   // the current session goes, with its conversation: asked first; the page follows the server's events
   document.getElementById("delsession").addEventListener("click", function () {

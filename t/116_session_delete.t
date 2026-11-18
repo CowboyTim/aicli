@@ -32,4 +32,18 @@ ok(!-d "$ai::SESSIONS_DIR/$second", "its directory is gone");
 ok(defined $ui::active && $ui::active ne $second, "a new session is active");
 ok(-d "$ai::SESSIONS_DIR/$ui::active", "and its directory exists");
 
+# rename: an inactive session keeps the active one; the active one is opened under the new name
+ui::_activate(undef, new => 1);
+my $a = $ui::active;
+ui::_activate(undef, new => 1);
+my $b = $ui::active;
+is(ui::_rename_session($a, 'zz-renamed-inactive'), undef, "renaming a session that is not active");
+ok(-d "$ai::SESSIONS_DIR/zz-renamed-inactive" && !-d "$ai::SESSIONS_DIR/$a", "its directory has the new name");
+is($ui::active, $b, "the active session is the same");
+is(ui::_rename_session($b, 'zz-renamed-active'), undef, "renaming the active session");
+is($ui::active, 'zz-renamed-active', "and it is the active one under the new name");
+ok(-d "$ai::SESSIONS_DIR/zz-renamed-active" && !-d "$ai::SESSIONS_DIR/$b", "with its directory moved");
+ok(defined ui::_rename_session('zz-renamed-inactive', 'zz-renamed-active'), "a name that exists is refused");
+ok(defined ui::_rename_session('no-such-session-xyz', 'zz-other'), "an unknown session is refused");
+
 done_testing();

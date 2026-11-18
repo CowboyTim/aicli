@@ -623,6 +623,25 @@ sub _delete_session {
     return undef;
 }
 
+# a session gets another name: its idle worker is stopped first (the directory moves under it),
+# and the active one is opened under the new name. Returns the new name, or an error text.
+sub _rename_session {
+    my ($old, $new) = @_;
+    return "there is no such session" unless -d "$ai::SESSIONS_DIR/$old";
+    return "the session '$new' exists" if -e "$ai::SESSIONS_DIR/$new";
+    _stop_worker($old) if $worker{$old};
+    if (!rename("$ai::SESSIONS_DIR/$old", "$ai::SESSIONS_DIR/$new")) {
+        return "could not rename the session: $!";
+    }
+    delete $model_of{$old};
+    if (defined $active and $active eq $old) {
+        $active = undef;
+        return ($last_error || 'the session could not be opened under its new name') unless _activate($new);
+    }
+    publish(sessions => _sessions_data());
+    return undef;
+}
+
 sub _stop_all {
     delete $worker{$_} for grep {$worker{$_}{fake}} keys %worker;
     _stop_worker($_) for keys %worker;
@@ -1045,6 +1064,21 @@ sub _dispatch {
         return _json($cn, 500, {error => $err}) if defined $err;
         return _json($cn, 200, {deleted => $name, session => $active // ''});
     }
+    if($p eq '/session/rename' and $m eq 'POST'){
+        my $d = eval {$::JSON->decode($body // '')};
+        my ($old, $new) = ref($d) eq 'HASH' ? ($d->{name}, $d->{to}) : ();
+        return _json($cn, 400, {error => 'a session name and a new name are wanted'})
+            unless defined $old and !ref($old) and length($old) and defined $new and !ref($new) and length($new);
+        return _json($cn, 400, {error => 'not a session name'})
+            unless ai::valid_session_name($old) and ai::valid_session_name($new);
+        return _json($cn, 404, {error => 'there is no such session'}) unless -d "$ai::SESSIONS_DIR/$old";
+        return _json($cn, 409, {error => 'the session is busy: wait for its answer, then rename it'})
+            if $worker{$old} and $worker{$old}{busy};
+        my $err = _rename_session($old, $new);
+        return _json($cn, 409, {error => $err}) if defined $err and $err =~ m/exists/;
+        return _json($cn, 500, {error => $err}) if defined $err;
+        return _json($cn, 200, {session => $active // ''});
+    }
     if($p eq '/session' and $m eq 'POST'){
         my $d = eval {$::JSON->decode($body)};
         return _json($cn, 400, {error => 'a JSON object with the name of a session, or "new": true, is wanted'})
@@ -1104,7 +1138,7 @@ sub _dispatch {
     if($p eq '/state' and $m eq 'GET'){
         return _json($cn, 200, _master_state());
     }
-    return _respond($cn, 405, 'text/plain', "method not allowed\n") if $p =~ m{^/(events|message|session|session/delete|project|pod|voice|abort|state|rewind)$};
+    return _respond($cn, 405, 'text/plain', "method not allowed\n") if $p =~ m{^/(events|message|session|session/delete|session/rename|project|pod|voice|abort|state|rewind)$};
     return _respond($cn, 404, 'text/plain', "not found\n");
 }
 
