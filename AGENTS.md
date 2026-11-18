@@ -270,6 +270,12 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   the `AAAA` record, creates `dmz-aicli` (routed, IPv6 only, like the qr deployment), and
   runs compose. The origin check of the agent accepts the https origin of the same host
   (behind nginx).
+- **auth.pl** – the auth service (`Dockerfile.auth`, container `auth`, not published, on
+  `aicli-net`): `POST /auth/login` checks the local account with PAM (`/etc/pam.d/aicli-auth`,
+  `auth/aicli-auth.pam`) and sets the cookie `aicli_jwt`, an RS256 JWT (`Crypt::OpenSSL::RSA`,
+  key in the volume `aicli-auth`, made at the first start) with `sub`, `roles` (the groups
+  `aicli-*` of the account), `iat`, `exp`. `GET /auth/verify[?role=R]` is nginx's `auth_request`:
+  200 with `X-User` and `X-Roles`, 401 without a valid token, 403 without the role.
 - **t/** – tests, **PLAN.md** – open work and ideas.
 
 ## How a turn works

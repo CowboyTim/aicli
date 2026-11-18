@@ -84,6 +84,25 @@ services:
     cap_add:
       - SYS_PTRACE
     restart: unless-stopped
+  # auth: the logins (PAM, the accounts of this container: docker compose exec auth useradd ...)
+  # and the JWT that nginx checks (auth_request). No port is published: nginx reaches it on aicli-net.
+  auth:
+    build:
+      context: .
+      dockerfile: Dockerfile.auth
+    image: local/ai/aicli-auth:latest
+    networks:
+      - aicli
+    environment:
+      AI_AUTH_LISTEN: 0.0.0.0:9000
+      AI_AUTH_LIFETIME: ${AI_AUTH_LIFETIME:-43200}
+    volumes:
+      - aicli-auth:/var/lib/aicli-auth
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
   # searxng: the search engine of the agent's search tool (JSON output, see searxng/settings.yml)
   searxng:
     image: searxng/searxng:latest
@@ -163,5 +182,7 @@ volumes:
     name: aicli-broker
   aicli-agent:
     name: aicli-agent
+  aicli-auth:
+    name: aicli-auth
   letsencrypt:
     name: aicli-letsencrypt
