@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en" data-look="simple">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aicli login</title>
+<link rel="stylesheet" href="/theme.css">
+<style>
+  /* the layout of the login only: the colours come from theme.css, the same as the chat's */
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font: 17px/1.5 var(--sans); }
+  html[data-look="simple"] body { font-family: var(--mono); font-size: 16px; }
+  form { max-width: 320px; margin: 10vh auto; display: grid; gap: 12px; }
+  label { display: grid; gap: 4px; color: var(--muted); font-size: 14px; }
+  input, button { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 8px; }
+  button { background: var(--user-bg); color: var(--accent); cursor: pointer; }
+  #err { color: var(--err); min-height: 1.2em; font-size: 14px; }
+</style>
+</head>
+<body>
+<form id="f" method="post" action="/auth/login">
+  <label>User <input name="user" autocomplete="username" required autofocus></label>
+  <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+  <button>Log in</button>
+  <div id="err" role="alert"></div>
+</form>
+<script>
+// the theme and the look of the chat (the same settings in this browser)
+(function () {
+  try {
+    var t = localStorage.getItem("aicli-theme"), l = localStorage.getItem("aicli-look");
+    if (t) { document.documentElement.setAttribute("data-theme", t); }
+    if (l) { document.documentElement.setAttribute("data-look", l); }
+  } catch (e) { /* no storage: the system's */ }
+})();
+document.getElementById("f").addEventListener("submit", function (ev) {
+  ev.preventDefault();
+  var d = new URLSearchParams(new FormData(ev.target));
+  fetch("/auth/login", { method: "POST", body: d, credentials: "same-origin" }).then(function (r) {
+    if (r.ok) { location.href = "/"; }
+    else { document.getElementById("err").textContent = "wrong user or password"; }
+  }).catch(function () { document.getElementById("err").textContent = "the login does not answer"; });
+});
+</script>
+</body>
+</html>

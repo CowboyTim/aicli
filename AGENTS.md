@@ -276,6 +276,11 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   key in the volume `aicli-auth`, made at the first start) with `sub`, `roles` (the groups
   `aicli-*` of the account), `iat`, `exp`. `GET /auth/verify[?role=R]` is nginx's `auth_request`:
   200 with `X-User` and `X-Roles`, 401 without a valid token, 403 without the role.
+  nginx serves the login page (`ai/ui/login.html`, public, with `ai/ui/theme.css`, mounted read-only
+  at `/etc/nginx/ui`) and sends every other page through `auth_request` (`/_gate`): the agent gets
+  `X-Aicli-Gate` (AI_GATE_SECRET, made by deploy.sh, shared with nginx) and `X-Aicli-User`. The
+  agent accepts the gate secret, or its own page token without nginx. The theme block of the chat
+  is `ai/ui/theme.css`, inlined by the agent (`/*theme.css*/` in index.html).
   The accounts: `auth.pl user add|passwd|del|list`, `role add|remove`. PAM reads `/etc`, so the
   four account files are copied to the volume after a change and back at a start (a bind mount
   over them fails: useradd renames over them).

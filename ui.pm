@@ -20,7 +20,7 @@ use Socket ();
 use IO::Socket::UNIX ();
 use MIME::Base64 ();
 
-our ($listen, $token, $port, $bind, $html_file);
+our ($listen, $token, $port, $bind, $html_file, $theme_file, $gate);
 our $tls_ctx;  # the TLS context, when the interface is https (--tls-cert and --tls-key)
 our $voice;     # the speech recognizer: undef (not checked yet), 'ok', 'none' (AI_ASR_URL unset), 'unreachable'
 our %conn;      # fileno => connection
@@ -54,6 +54,7 @@ sub start {
     my (%o) = @_;
     $bind  = $o{bind} // '127.0.0.1';
     $token = $o{token} // _new_token();
+    $gate = $::ORIG_ENV{AI_GATE_SECRET};
     $tls_ctx = $o{tls_cert} ? _tls_context($o{tls_cert}, $o{tls_key}) : undef;
     # an IPv6 address is in brackets in a URL; "::" is any IPv6 address
     $listen = IO::Socket::IP->new(
@@ -63,6 +64,7 @@ sub start {
     $listen->blocking(0);
     $port = $listen->sockport;
     $html_file = File::Basename::dirname(__FILE__)."/ai/ui/index.html";
+    $theme_file = File::Basename::dirname(__FILE__)."/ai/ui/theme.css";
     loop::watch($listen, \&_accept);
     loop::timer(15, \&_ping);
     $ai::EVENT_SINK = \&publish;
@@ -900,6 +902,9 @@ sub _cookie {
 
 sub _authed {
     my ($h) = @_;
+    # behind nginx: nginx has checked the login (auth_request) and sends the secret it shares
+    # with the agent (AI_GATE_SECRET); nothing else on the network has it
+    return 1 if defined $gate and length($gate) and ($h->{'x-aicli-gate'} // '') eq $gate;
     my $t = _cookie($h->{cookie}, 'aicli_token');
     if(!defined $t and ($h->{authorization} // '') =~ m/^Bearer\s+(\S+)/){
         $t = $1;
@@ -926,6 +931,14 @@ sub _dispatch {
         local $/;
         my $html = <$fh>;
         close($fh);
+        # the colours: theme.css, the file the login page links too, inline in the page
+        my $theme = '';
+        if(open(my $tfh, '<:raw', $theme_file)){
+            local $/;
+            $theme = <$tfh>;
+            close($tfh);
+        }
+        $html =~ s{/\*theme\.css\*/}{$theme};
         return _respond($cn, 200, 'text/html; charset=utf-8', $html);
     }
 

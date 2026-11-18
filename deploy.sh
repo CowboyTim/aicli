@@ -72,7 +72,7 @@ set_key "$env_f" PODMAN_SOCKET "/run/user/$(id -u)/podman/podman.sock"
 set_key "$env_f" BROKER_UID "$(id -u)"
 set_key "$env_f" BROKER_GID "$(id -g)"
 
-for k in SEARXNG_SECRET SEARXNG_API_TOKEN; do
+for k in SEARXNG_SECRET SEARXNG_API_TOKEN AICLI_GATE_SECRET; do
     v=$(get "$env_f" "$k")
     [ -n "$v" ] || v=$(openssl rand -hex 32)
     set_key "$env_f" "$k" "$v"
@@ -80,7 +80,7 @@ done
 
 set_key "$agent_f" AI_LOCAL_SERVER "$(pick "$agent_f" AI_LOCAL_SERVER "http://[2a02:a03f:8789:e700::20]:8000/rocm/v1")"
 set_key "$agent_f" AI_ASR_URL "$(pick "$agent_f" AI_ASR_URL "http://[2a02:a03f:8789:e700::20]:52625/v1/audio/transcriptions")"
-set_key "$agent_f" AI_MODEL "$(pick "$agent_f" AI_MODEL "Qwen3.8-Flash-Next-Q4_0_ROCMFP4_FAST-PLE_Q8_0")"
+set_key "$agent_f" AI_MODEL "$(pick "$agent_f" AI_MODEL "Qwen3.5-4B-ROCMFP4")"
 
 if [ "${AICLI_ENV_ONLY:-0}" = 1 ]; then
     exit 0

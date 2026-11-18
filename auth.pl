@@ -2,13 +2,12 @@
 # The auth service: the logins of the web interface, and the check of their JWT for nginx
 # (auth_request). It runs in a container of its own, with the local accounts of that
 # container (PAM, service aicli-auth). Its endpoints:
-#   GET  /auth/login             the login page (a form)
 #   POST /auth/login             user=...&password=... -> 200 and the cookie aicli_jwt, or 401
 #   POST /auth/logout            the cookie cleared
 #   GET  /auth/verify[?role=R]   nginx's check: 200 with X-User and X-Roles (the claims of the
 #                                JWT in the cookie aicli_jwt or a Bearer token), 401 when there
 #                                is no valid JWT, 403 when the user has not the role R
-# The JWT is RS256, signed with the RSA key of AI_AUTH_KEY (made at the first start, kept in
+# The login page is a static file (ai/ui/login.html, served by nginx). The JWT is RS256, signed with the RSA key of AI_AUTH_KEY (made at the first start, kept in
 # the volume). Its claims: sub (the user), roles (the groups of the user that start with
 # aicli-), iat, exp, iss. Passwords are never logged, nor the tokens.
 #
@@ -376,31 +375,6 @@ sub _cookie {
     return join('; ', "$COOKIE=$value", 'Path=/', 'HttpOnly', 'Secure', 'SameSite=Lax', "Max-Age=$max_age");
 }
 
-my $LOGIN_PAGE = <<'HTML';
-<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>aicli login</title>
-<style>
-body { font-family: system-ui, sans-serif; margin: 0; padding: 16px; background: #fff; color: #111; }
-form { max-width: 320px; margin: 10vh auto; display: grid; gap: 10px; }
-input, button { font: inherit; padding: 8px; }
-#err { color: #b00020; min-height: 1.2em; }
-</style></head>
-<body><form id="f" method="post" action="/auth/login">
-<label>User <input name="user" autocomplete="username" required autofocus></label>
-<label>Password <input name="password" type="password" autocomplete="current-password" required></label>
-<button>Log in</button><div id="err"></div>
-</form>
-<script>
-document.getElementById("f").addEventListener("submit", function (ev) {
-  ev.preventDefault();
-  var d = new URLSearchParams(new FormData(ev.target));
-  fetch("/auth/login", { method: "POST", body: d, credentials: "same-origin" }).then(function (r) {
-    if (r.ok) { location.href = "/"; } else { document.getElementById("err").textContent = "wrong user or password"; }
-  });
-});
-</script></body></html>
-HTML
 
 # the answer to a request: [status, [headers], body]. $rsa is the key of the tokens; $now the time.
 sub handle {
@@ -410,9 +384,6 @@ sub handle {
     my $m = $req->{method} // '';
     my $lifetime = $ENV{AI_AUTH_LIFETIME} // 43200;
 
-    if ($path eq '/auth/login' and $m eq 'GET') {
-        return _response(200, '', headers => [['Content-Type', 'text/html; charset=utf-8']], body => $LOGIN_PAGE);
-    }
     if ($path eq '/auth/login' and $m eq 'POST') {
         my $f = parse_form($req->{body});
         my ($user, $password) = ($f->{user} // '', $f->{password} // '');
@@ -430,7 +401,7 @@ sub handle {
     if ($path eq '/auth/logout' and $m eq 'POST') {
         return _response(200, 'logged out', headers => [['Set-Cookie', _cookie('', 0)]]);
     }
-    if ($path eq '/auth/verify' and ($m eq 'GET' or $m eq 'HEAD')) {
+    if ($path eq '/auth/verify') { # nginx's subrequest may use any method
         my ($claims, $why) = jwt_verify($rsa, token_of($req), $now);
         if (!$claims) {
             print STDERR "auth: verify refused: $why\n";

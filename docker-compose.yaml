@@ -61,6 +61,8 @@ services:
     environment:
       # the agent's web tools go through the proxy, its search is the searxng of this file
       AI_WEB_PROXY: http://proxy:3128
+      # the secret nginx sends after its login check (see nginx/nginx.conf.template)
+      AI_GATE_SECRET: ${AICLI_GATE_SECRET:?set AICLI_GATE_SECRET (deploy.sh makes it)}
       # the public name (nginx): the page prints its address, and the QR code is for it
       AI_PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-}
       AI_SEARXNG_URL: http://searxng:8080
@@ -141,21 +143,24 @@ services:
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?set PUBLIC_DOMAIN to the public name}
       AGENT_PORT: ${AGENT_PORT:-8080}
       SEARXNG_API_TOKEN: ${SEARXNG_API_TOKEN:?set SEARXNG_API_TOKEN (openssl rand -hex 32)}
+      AICLI_GATE_SECRET: ${AICLI_GATE_SECRET:?set AICLI_GATE_SECRET (deploy.sh makes it)}
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         until [ -d /etc/nginx/certs/live/$$PUBLIC_DOMAIN ]; do
           echo "no certificate for $$PUBLIC_DOMAIN yet (run deploy.sh with DO_CERTBOT=1)"; sleep 30
         done
-        envsubst '$$PUBLIC_DOMAIN $$AGENT_PORT $$SEARXNG_API_TOKEN' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
+        envsubst '$$PUBLIC_DOMAIN $$AGENT_PORT $$SEARXNG_API_TOKEN $$AICLI_GATE_SECRET' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
         (while :; do sleep 60
-          envsubst '$$PUBLIC_DOMAIN $$AGENT_PORT $$SEARXNG_API_TOKEN' < /etc/nginx/nginx.conf.template > /tmp/nginx.new
+          envsubst '$$PUBLIC_DOMAIN $$AGENT_PORT $$SEARXNG_API_TOKEN $$AICLI_GATE_SECRET' < /etc/nginx/nginx.conf.template > /tmp/nginx.new
           if ! cmp -s /tmp/nginx.new /etc/nginx/nginx.conf; then cp /tmp/nginx.new /etc/nginx/nginx.conf; nginx -s reload; fi
         done) &
         exec nginx -g 'daemon off;'
     volumes:
       - ./nginx/nginx.conf.template:/etc/nginx/nginx.conf.template:ro
       - letsencrypt:/etc/nginx/certs:ro
+      # the static files: the login page and its stylesheet (the other pages are the agent's)
+      - ./ai/ui:/etc/nginx/ui:ro
     restart: unless-stopped
 
 networks:
