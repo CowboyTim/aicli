@@ -604,6 +604,25 @@ sub _activate {
 }
 
 # a worker that is asked to stop, and the workers still there after a while, killed
+# a session is removed with its conversation, its archive and its meta. A busy one is refused
+# (the caller says so); an idle worker is stopped first (its socket closes, it ends). When the
+# session is the active one, a new session is made, as /session {new: true} does.
+sub _delete_session {
+    my ($name) = @_;
+    _stop_worker($name) if $worker{$name};
+    delete $model_of{$name};
+    require File::Path;
+    my $err;
+    File::Path::remove_tree("$ai::SESSIONS_DIR/$name", {error => \$err});
+    return "could not remove the session: ".join('; ', map { (values %$_)[0] } @$err) if @$err;
+    if (defined $active and $active eq $name) {
+        $active = undef;
+        return ($last_error || 'no session could be made') unless _activate(undef, new => 1);
+    }
+    publish(sessions => _sessions_data());
+    return undef;
+}
+
 sub _stop_all {
     delete $worker{$_} for grep {$worker{$_}{fake}} keys %worker;
     _stop_worker($_) for keys %worker;
@@ -1013,6 +1032,19 @@ sub _dispatch {
         return _json($cn, 429, {error => "too many messages waiting"}) if $q < 0;
         return _json($cn, 202, {queued => $q});
     }
+    if($p eq '/session/delete' and $m eq 'POST'){
+        my $d = eval {$::JSON->decode($body // '')};
+        my $name = ref($d) eq 'HASH' ? $d->{name} : undef;
+        return _json($cn, 400, {error => 'a session name is wanted'})
+            unless defined $name and !ref($name) and length($name);
+        return _json($cn, 400, {error => 'not a session name'}) unless ai::valid_session_name($name);
+        return _json($cn, 404, {error => 'there is no such session'}) unless -d "$ai::SESSIONS_DIR/$name";
+        return _json($cn, 409, {error => 'the session is busy: wait for its answer, then delete it'})
+            if $worker{$name} and $worker{$name}{busy};
+        my $err = _delete_session($name);
+        return _json($cn, 500, {error => $err}) if defined $err;
+        return _json($cn, 200, {deleted => $name, session => $active // ''});
+    }
     if($p eq '/session' and $m eq 'POST'){
         my $d = eval {$::JSON->decode($body)};
         return _json($cn, 400, {error => 'a JSON object with the name of a session, or "new": true, is wanted'})
@@ -1072,7 +1104,7 @@ sub _dispatch {
     if($p eq '/state' and $m eq 'GET'){
         return _json($cn, 200, _master_state());
     }
-    return _respond($cn, 405, 'text/plain', "method not allowed\n") if $p =~ m{^/(events|message|session|project|pod|voice|abort|state|rewind)$};
+    return _respond($cn, 405, 'text/plain', "method not allowed\n") if $p =~ m{^/(events|message|session|session/delete|project|pod|voice|abort|state|rewind)$};
     return _respond($cn, 404, 'text/plain', "not found\n");
 }
 

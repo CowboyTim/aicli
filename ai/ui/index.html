@@ -21,6 +21,7 @@
   #menu { display: none; position: absolute; top: 100%; right: 0; left: 0; z-index: 3; background: var(--bg);
           border-bottom: 1px solid var(--line); padding: 12px 16px; flex-direction: column; gap: 10px; box-shadow: 0 6px 16px rgba(0,0,0,.15); }
   #menu.open { display: flex; }
+  #delsession { align-self: flex-start; font: inherit; font-size: 14px; padding: 4px 10px; color: var(--err); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
   #logout { align-self: flex-start; font: inherit; font-size: 14px; padding: 4px 10px; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
   #menu label { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 13px; }
   #menu select { flex: 1; min-width: 0; max-width: 70%; font-size: 15px; }
@@ -128,6 +129,7 @@
       <option value="neon">neon</option>
     </select></label>
     <button id="logout" type="button">log out</button>
+    <button id="delsession" type="button">delete this session</button>
   </div>
 </header>
 <main>
@@ -832,6 +834,15 @@
 
   abort.addEventListener("click", function () {
     fetch("/abort", { method: "POST" });
+  });
+  // the current session goes, with its conversation: asked first; the page follows the server's events
+  document.getElementById("delsession").addEventListener("click", function () {
+    if (!sessCur) { return; }
+    if (!confirm("delete this session and its conversation? It cannot be undone.")) { return; }
+    fetch("/session/delete", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: sessCur }) }).then(function (r) {
+        if (!r.ok) { return r.json().catch(function () { return {}; }).then(function (d) { add("error", d.error || "not deleted"); }); }
+      }).catch(function () { add("error", "the chat does not answer"); });
   });
   // the login ends here (the session is revoked at the auth service); the login page after it
   document.getElementById("logout").addEventListener("click", function () {
