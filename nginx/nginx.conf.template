@@ -67,7 +67,8 @@ http {
         }
         location = /auth/login {
             limit_req zone=login burst=5 nodelay;
-            proxy_pass http://auth:9000;
+            set $auth http://auth:9000;
+            proxy_pass $auth;
             proxy_set_header Host $host;
             proxy_set_header X-Forwarded-Proto $scheme;
             proxy_set_header X-Forwarded-For $remote_addr;
@@ -75,13 +76,15 @@ http {
         # the login from another device: the phone asks about a ticket and redeems it (see auth.pl)
         location ~ ^/auth/qr/(peek|redeem)$ {
             limit_req zone=login burst=5 nodelay;
-            proxy_pass http://auth:9000;
+            set $auth http://auth:9000;
+            proxy_pass $auth;
             proxy_set_header Host $host;
             proxy_set_header X-Forwarded-Proto $scheme;
             proxy_set_header X-Forwarded-For $remote_addr;
         }
         location /auth/ {
-            proxy_pass http://auth:9000;
+            set $auth http://auth:9000;
+            proxy_pass $auth;
             proxy_set_header Host $host;
             proxy_set_header X-Forwarded-Proto $scheme;
             proxy_set_header X-Forwarded-For $remote_addr;
@@ -89,7 +92,8 @@ http {
         # the check of a request (auth_request): the auth service's JWT check, internal only
         location = /_gate {
             internal;
-            proxy_pass http://auth:9000/auth/verify;
+            set $auth_verify http://auth:9000/auth/verify;
+            proxy_pass $auth_verify;
             proxy_pass_request_body off;
             proxy_set_header Content-Length "";
             proxy_set_header Host $host;
