@@ -44,10 +44,12 @@ our $MAX_REQUEST = 8192;
 
 # --- accounts ---------------------------------------------------------------------------------
 
-# a Linux account name, as a directory name too: lowercase, no dots or slashes
+# a login name, also the name of the Linux account and of the user's directory: lowercase
+# letters, digits, and . _ @ + - (an e-mail address is one); it starts with a letter or digit
+# (so no "..", no leading dash); never a slash, a colon or a comma (the account files' separators)
 sub valid_user {
     my ($name) = @_;
-    return defined $name && $name =~ m/\A[a-z_][a-z0-9_-]{0,31}\z/ && $name ne 'root';
+    return defined $name && $name =~ m/\A[a-z0-9][a-z0-9._\@+-]{0,63}\z/ && $name ne 'root';
 }
 
 # the roles of a user: the groups that start with aicli- and have the user as a member
@@ -193,7 +195,7 @@ sub user_command {
     my $cmd = shift(@args) // '';
     if ($cmd eq 'add') {
         my ($name, @roles) = @args;
-        die "auth: a user name: lowercase letters, digits, - and _\n" unless valid_user($name);
+        die "auth: a user name: lowercase letters, digits and . _ @ + - (an e-mail address is one), up to 64\n" unless valid_user($name);
         die "auth: $name exists\n" if getpwnam($name);
         for my $r (@roles) { die "auth: $r is no role (aicli-...)\n" unless valid_role($r) }
         $RUN->('useradd', '-M', '-s', '/usr/sbin/nologin', '-U', $name) or die "auth: useradd failed\n";

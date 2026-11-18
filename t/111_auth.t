@@ -64,10 +64,17 @@ is($why, 'not a compact JWS', "not a compact JWS");
 # the accounts and the roles
 ok(valid_user('alice'), "a plain account name");
 ok(valid_user('dev-2_x'), "with a dash and an underscore");
+ok(valid_user('user1@home.local'), "an e-mail address is an account name");
+ok(valid_user('first.last'), "and a dot");
 ok(!valid_user('../etc'), "a path is no account");
+ok(!valid_user('.hidden'), "no leading dot");
+ok(!valid_user('a/b'), "no slash");
+ok(!valid_user('a:b'), "no colon (the account files' separator)");
+ok(!valid_user('a,b'), "no comma (the group files' separator)");
+ok(!valid_user('a b'), "no space");
 ok(!valid_user('Alice'), "upper case is no account");
 ok(!valid_user('root'), "root is no account of the web");
-ok(!valid_user('a' x 33), "too long");
+ok(!valid_user('a' x 65), "too long");
 ok(!valid_user(undef), "undef is no account");
 is_deeply([roles_of('no-such-user-xyz')], [], "an unknown user has no roles");
 ok(!pam_ok('no-such-user-xyz', 'wrong'), "an unknown user is not logged in (PAM)");
