@@ -40,7 +40,7 @@ services:
   # The agent: the web interface (ai.pl --ui) with its projects. It is what
   # `aicli.sh --broker --root $AI_PROJECTS --ui` starts by hand. Its provider settings
   # (AI_API_KEY, AI_PROVIDER, AI_MODEL, AI_LOCAL_SERVER, AI_UI_TOKEN, ...) go in
-  # agent.env, next to this file; it is optional.
+  # .agent.env, next to this file (deploy.sh writes it); it is optional.
   agent:
     build:
       context: .
@@ -56,7 +56,7 @@ services:
       - --ui=${AGENT_PORT:-8080}
       - --ui-bind=0.0.0.0
     env_file:
-      - path: ./agent.env
+      - path: ./.agent.env
         required: false
     environment:
       # the agent's web tools go through the proxy, its search is the searxng of this file

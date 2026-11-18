@@ -3,4 +3,5 @@
 build-watch.log
 .build-trigger
 agent.env
+.agent.env
 .env

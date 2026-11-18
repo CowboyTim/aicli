@@ -1,5 +1,5 @@
 #!/usr/bin/perl
-# deploy.sh (the part that writes): the .env and agent.env of the stack, from the environment and the files:
+# deploy.sh (the part that writes): the .env and .agent.env of the stack, from the environment and the files:
 # the secrets are made once and kept, a required value is refused when missing, the
 # stale address of the broker is dropped
 use strict; use warnings;
@@ -34,7 +34,7 @@ my %in = (
 
 is(run_setup(%in), 0, "the first run with what it needs");
 my $env_f = "$dir/.env";
-my $agent_f = "$dir/agent.env";
+my $agent_f = "$dir/.agent.env";
 is(value($env_f, 'PUBLIC_DOMAIN'), 'ai.example.org', "the domain is written");
 like(value($env_f, 'SEARXNG_SECRET'), qr/\A[0-9a-f]{64}\z/, "a secret is made");
 like(value($env_f, 'SEARXNG_API_TOKEN'), qr/\A[0-9a-f]{64}\z/, "and the token of searxng");
@@ -69,6 +69,21 @@ my $other = File::Temp::tempdir("aicli_setup2_XXXXXX", TMPDIR => 1, CLEANUP => 1
     waitpid($pid, 0);
     isnt($? >> 8, 0, "without the domain the deploy.sh stops");
     like(slurp("$other/err"), qr/PUBLIC_DOMAIN is needed/, "and says which setting is missing");
+}
+
+# an agent.env of earlier versions moves to .agent.env with its settings
+{
+    my $old = File::Temp::tempdir("aicli_setup3_XXXXXX", TMPDIR => 1, CLEANUP => 1);
+    open(my $o, '>', "$old/agent.env") or die $!; print {$o} "AI_UI_TOKEN=keep-me\n"; close $o;
+    my $pid = fork() // die "fork: $!";
+    if (!$pid) {
+        %ENV = (PATH => $ENV{PATH}, HOME => $old, AICLI_ENV_ONLY => 1, %in);
+        exec("bash", stage($old)) or POSIX::_exit(9);
+    }
+    waitpid($pid, 0);
+    is($? >> 8, 0, "a run with an old agent.env");
+    ok(!-e "$old/agent.env", "the old agent.env is gone");
+    is(value("$old/.agent.env", 'AI_UI_TOKEN'), 'keep-me', "its settings are in .agent.env");
 }
 
 done_testing();

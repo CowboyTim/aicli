@@ -570,11 +570,11 @@ public IPv6 address of `PUBLIC_DOMAIN` on the network `dmz-aicli`, and serves TL
    set by hand at the DNS provider.
 3. Port 80 and 443 on that address must reach the host (ufw rules for the prefix).
 4. `PUBLIC_DOMAIN=… CERTBOT_EMAIL=… AI_PROJECTS=… ./deploy.sh`. It writes `.env` and
-   `agent.env`, looks up the `AAAA` record, creates `dmz-aicli`, gets the
+   `.agent.env`, looks up the `AAAA` record, creates `dmz-aicli`, gets the
    certificate (certbot runs on the domain's address and answers the HTTP challenge on port
    80, with nginx stopped meanwhile), and starts the stack.
 5. The page is at `https://PUBLIC_DOMAIN/?token=...`; the token is in
-   `docker compose logs agent` (or `AI_UI_TOKEN` in `agent.env`).
+   `docker compose logs agent` (or `AI_UI_TOKEN` in `.agent.env`).
 
 The certificate lasts about 90 days. `DO_CERTBOT=1 ./deploy.sh` renews it when it is due
 (run it from cron every few weeks, or by hand).

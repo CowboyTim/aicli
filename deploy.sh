@@ -8,16 +8,21 @@
 #   ./deploy.sh [docker compose up arguments, default: -d --build]
 #   DO_CERTBOT=1 ./deploy.sh      also renews the certificate when it is due (every ~60 days)
 #
-# First it writes .env and agent.env (below). A setting given in the environment is written,
+# First it writes .env and .agent.env (below). A setting given in the environment is written,
 # a setting already in the files stays, and the secrets are made once and kept (the tokens of
 # other tools must not change between runs). AICLI_ENV_ONLY=1 stops after the files.
 set -eu
 cd "$(dirname "$(readlink -f "$0")")"
 
-# --- .env and agent.env ------------------------------------------------------------------
+# --- .env and .agent.env -----------------------------------------------------------------
 umask 077
 env_f=.env
-agent_f=agent.env
+agent_f=.agent.env
+# an agent.env of earlier versions moves to .agent.env (its settings stay)
+if [ -f agent.env ] && [ ! -e "$agent_f" ]; then
+    mv agent.env "$agent_f"
+    echo "moved agent.env to $agent_f"
+fi
 touch "$env_f" "$agent_f"
 
 # the value of KEY in FILE, or nothing
