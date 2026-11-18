@@ -84,7 +84,8 @@ services:
     cap_add:
       - SYS_PTRACE
     restart: unless-stopped
-  # auth: the logins (PAM, the accounts of this container: docker compose exec auth useradd ...)
+  # auth: the logins (PAM, the accounts of this container, kept in the volume:
+  #   docker compose exec -it auth perl /usr/local/lib/aicli/auth.pl user add NAME aicli-user)
   # and the JWT that nginx checks (auth_request). No port is published: nginx reaches it on aicli-net.
   auth:
     build:

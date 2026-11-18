@@ -21,8 +21,11 @@
 #   AI_AUTH_LIFETIME  seconds a login lasts (default 43200)
 #   AI_AUTH_PAM_SERVICE  the PAM service (default aicli-auth, /etc/pam.d/aicli-auth)
 #
-# Usage: auth.pl            serve
+# Usage: auth.pl            serve (the accounts of the state are made again first)
 #        auth.pl --check   check that the key and PAM are usable, then exit
+#        auth.pl user add NAME [ROLE...] | passwd NAME | del NAME | list
+#        auth.pl user role add|remove NAME ROLE
+#   (in the container: docker compose exec -it auth perl /usr/local/lib/aicli/auth.pl user add NAME aicli-user)
 
 use strict; use warnings;
 use IO::Socket::IP ();
@@ -93,6 +96,150 @@ sub pam_ok {
         && Authen::PAM::pam_acct_mgmt($pamh, Authen::PAM::PAM_SILENT()) == Authen::PAM::PAM_SUCCESS();
     Authen::PAM::pam_end($pamh, 0);
     return $ok ? 1 : 0;
+}
+
+# --- the accounts, kept in the volume ----------------------------------------------------------
+# PAM reads /etc/passwd and /etc/shadow, which a container rebuild throws away. A bind mount
+# over those files does not work: useradd and passwd replace them by a rename, which a mount
+# point refuses. So the files themselves are kept: a copy of the four account files is in
+# AI_AUTH_STATE (the volume), copied in at every start and copied out after every admin change.
+# The copy is the whole file: a system account that a newer image adds is missing from the copy
+# until the copy is removed (then the image's files are taken again, and the accounts of the
+# admin are gone too: they are kept only in the copy).
+
+our $ETC_DEFAULT = '/etc';
+our $STATE_DEFAULT = '/var/lib/aicli-auth/etc';
+our @ACCOUNT_FILES = (
+    [ 'passwd', 0644 ], [ 'group', 0644 ], [ 'shadow', 0640 ], [ 'gshadow', 0640 ],
+);
+
+# the commands that change the system; a test replaces it
+our $RUN = sub {
+    my @cmd = @_;
+    system { $cmd[0] } @cmd;
+    return $? == 0;
+};
+
+sub valid_role {
+    my ($name) = @_;
+    return defined $name && $name =~ m/\Aaicli-[a-z0-9_-]{1,27}\z/;
+}
+
+sub etc_dir { return $ENV{AI_AUTH_ETC} // $ETC_DEFAULT }
+sub state_dir { return $ENV{AI_AUTH_STATE} // $STATE_DEFAULT }
+
+# the bytes of a file, or undef
+sub _slurp {
+    my ($file) = @_;
+    open(my $fh, '<', $file) or return undef;
+    binmode $fh;
+    local $/;
+    my $data = <$fh>;
+    close $fh;
+    return $data;
+}
+
+# write FILE with DATA and MODE, through a temp name in the same directory (so it is one rename)
+sub _replace {
+    my ($file, $data, $mode, $owner_group) = @_;
+    my $tmp = "$file.new";
+    unlink $tmp;
+    sysopen(my $fh, $tmp, Fcntl::O_WRONLY() | Fcntl::O_CREAT() | Fcntl::O_EXCL(), $mode)
+        or die "auth: cannot write $tmp: $!\n";
+    binmode $fh;
+    print {$fh} $data;
+    close $fh or die "auth: cannot write $tmp: $!\n";
+    if (defined $owner_group and $> == 0) { # the group of shadow: root only
+        chown(0, $owner_group, $tmp) or die "auth: cannot chown $tmp: $!\n";
+    }
+    chmod($mode, $tmp);
+    rename($tmp, $file) or die "auth: cannot replace $file: $!\n";
+    return;
+}
+
+# copy the account files of /etc to the state
+sub save_accounts {
+    my $dir = state_dir();
+    if (!-d $dir) {
+        require File::Path;
+        File::Path::make_path($dir, { mode => 0700 });
+    }
+    for my $f (@ACCOUNT_FILES) {
+        my $data = _slurp(etc_dir()."/$f->[0]");
+        die "auth: cannot read ".etc_dir()."/$f->[0]\n" unless defined $data;
+        _replace("$dir/$f->[0]", $data, 0600);
+    }
+    return;
+}
+
+# copy the state back to /etc at a start, when the state has the files
+sub restore_accounts {
+    my $dir = state_dir();
+    my @have = grep { -f "$dir/$_->[0]" } @ACCOUNT_FILES;
+    return 0 unless @have == @ACCOUNT_FILES;
+    my $shadow_gid = (getgrnam('shadow'))[2];
+    for my $f (@ACCOUNT_FILES) {
+        my $data = _slurp("$dir/$f->[0]");
+        die "auth: cannot read $dir/$f->[0]\n" unless defined $data;
+        my $owner = $f->[0] =~ m/shadow/ ? $shadow_gid : undef;
+        _replace(etc_dir()."/$f->[0]", $data, $f->[1], $owner);
+    }
+    print STDERR "auth: accounts restored from $dir\n";
+    return 1;
+}
+
+# the admin commands: user add|passwd|del|list, role add|remove
+sub user_command {
+    my (@args) = @_;
+    my $cmd = shift(@args) // '';
+    if ($cmd eq 'add') {
+        my ($name, @roles) = @args;
+        die "auth: a user name: lowercase letters, digits, - and _\n" unless valid_user($name);
+        die "auth: $name exists\n" if getpwnam($name);
+        for my $r (@roles) { die "auth: $r is no role (aicli-...)\n" unless valid_role($r) }
+        $RUN->('useradd', '-M', '-s', '/usr/sbin/nologin', '-U', $name) or die "auth: useradd failed\n";
+        for my $r (@roles) {
+            $RUN->('groupadd', '-f', $r) or die "auth: groupadd $r failed\n";
+            $RUN->('gpasswd', '-a', $name, $r) or die "auth: gpasswd failed\n";
+        }
+        $RUN->('passwd', $name) or die "auth: no password set for $name\n";
+        save_accounts();
+        print "auth: $name added (roles: @roles)\n";
+    } elsif ($cmd eq 'passwd') {
+        my ($name) = @args;
+        die "auth: no account ".($name // '')."\n" unless $name and getpwnam($name);
+        $RUN->('passwd', $name) or die "auth: passwd failed\n";
+        save_accounts();
+    } elsif ($cmd eq 'role') {
+        my ($op, $name, $r) = @args;
+        die "auth: no account ".($name // '')."\n" unless $name and getpwnam($name);
+        die "auth: ".($r // '')." is no role (aicli-...)\n" unless valid_role($r);
+        if (($op // '') eq 'add') {
+            $RUN->('groupadd', '-f', $r) or die "auth: groupadd $r failed\n";
+            $RUN->('gpasswd', '-a', $name, $r) or die "auth: gpasswd failed\n";
+        } elsif (($op // '') eq 'remove') {
+            $RUN->('gpasswd', '-d', $name, $r) or die "auth: gpasswd failed\n";
+        } else {
+            die "auth: role add|remove NAME ROLE\n";
+        }
+        save_accounts();
+    } elsif ($cmd eq 'del') {
+        my ($name) = @args;
+        die "auth: no account ".($name // '')."\n" unless $name and getpwnam($name);
+        $RUN->('userdel', $name) or die "auth: userdel failed\n";
+        save_accounts();
+        print "auth: $name deleted\n";
+    } elsif ($cmd eq 'list') {
+        setpwent();
+        while (my ($name) = getpwent()) {
+            my @roles = roles_of($name);
+            print "$name  roles: @roles\n" if @roles;
+        }
+        endpwent();
+    } else {
+        die "auth: user add NAME [ROLE...] | passwd NAME | del NAME | list\n        role add|remove NAME ROLE\n";
+    }
+    return 0;
 }
 
 # --- the key and the JWT -----------------------------------------------------------------------
@@ -366,6 +513,10 @@ sub serve {
 
 sub main {
     my ($arg) = @ARGV;
+    if (defined $arg and $arg eq 'user') {
+        shift @ARGV;
+        return user_command(@ARGV);
+    }
     my $key_file = $ENV{AI_AUTH_KEY} // '/var/lib/aicli-auth/jwt-rsa.pem';
     my $rsa = load_key($key_file);
     if (defined $arg and $arg eq '--check') {
@@ -375,6 +526,7 @@ sub main {
         print "auth: key ok ($key_file), PAM service ".($ENV{AI_AUTH_PAM_SERVICE} // 'aicli-auth')."\n";
         return 0;
     }
+    restore_accounts();
     serve($rsa, $ENV{AI_AUTH_LISTEN} // '0.0.0.0:9000');
     return 0;
 }

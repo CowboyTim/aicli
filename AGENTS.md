@@ -276,6 +276,9 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   key in the volume `aicli-auth`, made at the first start) with `sub`, `roles` (the groups
   `aicli-*` of the account), `iat`, `exp`. `GET /auth/verify[?role=R]` is nginx's `auth_request`:
   200 with `X-User` and `X-Roles`, 401 without a valid token, 403 without the role.
+  The accounts: `auth.pl user add|passwd|del|list`, `role add|remove`. PAM reads `/etc`, so the
+  four account files are copied to the volume after a change and back at a start (a bind mount
+  over them fails: useradd renames over them).
 - **t/** – tests, **PLAN.md** – open work and ideas.
 
 ## How a turn works
