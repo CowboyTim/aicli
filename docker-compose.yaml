@@ -101,8 +101,14 @@ services:
       AI_AUTH_LIFETIME: ${AI_AUTH_LIFETIME:-43200}
     volumes:
       - aicli-auth:/var/lib/aicli-auth
+    # all capabilities dropped, but the three the account tools need to rewrite /etc/passwd and
+    # /etc/shadow (the owner and group of the new files, and writing files of root)
     cap_drop:
       - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
     security_opt:
       - no-new-privileges:true
     restart: unless-stopped
