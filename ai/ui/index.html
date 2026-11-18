@@ -418,7 +418,9 @@
       var o = document.createElement("option");
       o.value = s.name;
       var mark = sessBusy.indexOf(s.name) >= 0 ? "\u25cf " : "";
-      o.textContent = mark + "[" + (s.project || "root") + "] " + (s.first || s.name);
+      // a session with a name of its own (renamed) shows the name; the automatic ones their first message
+      var auto = s.name.indexOf("session-") === 0;
+      o.textContent = mark + "[" + (s.project || "root") + "] " + (auto ? (s.first || s.name) : s.name);
       o.title = s.cwd || s.name;
       session.appendChild(o);
     });
