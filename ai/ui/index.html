@@ -21,6 +21,11 @@
   #menu { display: none; position: absolute; top: 100%; right: 0; left: 0; z-index: 3; background: var(--bg);
           border-bottom: 1px solid var(--line); padding: 12px 16px; flex-direction: column; gap: 10px; box-shadow: 0 6px 16px rgba(0,0,0,.15); }
   #menu.open { display: flex; }
+  #qrnew, #qrclose { align-self: flex-start; font: inherit; font-size: 14px; padding: 4px 10px; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
+  #qrbox { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+  #qrbox[hidden] { display: none; }
+  #qrimg { width: 220px; height: 220px; background: #fff; padding: 8px; border-radius: 6px; }
+  #qrnote { font-size: 13px; color: var(--muted); }
   #renamesession { align-self: flex-start; font: inherit; font-size: 14px; padding: 4px 10px; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
   #delsession { align-self: flex-start; font: inherit; font-size: 14px; padding: 4px 10px; color: var(--err); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
   #logout { align-self: flex-start; font: inherit; font-size: 14px; padding: 4px 10px; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
@@ -130,6 +135,12 @@
       <option value="neon">neon</option>
     </select></label>
     <button id="logout" type="button">log out</button>
+    <button id="qrnew" type="button">log in on another device</button>
+    <div id="qrbox" hidden>
+      <img id="qrimg" alt="QR code: scan it with the phone">
+      <div id="qrnote"></div>
+      <button id="qrclose" type="button">close</button>
+    </div>
     <button id="renamesession" type="button">rename this session</button>
     <button id="delsession" type="button">delete this session</button>
   </div>
@@ -838,6 +849,20 @@
 
   abort.addEventListener("click", function () {
     fetch("/abort", { method: "POST" });
+  });
+  // a login on another device: a QR code (the server makes it for this session, two minutes, once)
+  var qrbox = document.getElementById("qrbox"), qrimg = document.getElementById("qrimg"), qrnote = document.getElementById("qrnote");
+  function qrClose() { qrbox.hidden = true; qrimg.removeAttribute("src"); }
+  document.getElementById("qrclose").addEventListener("click", qrClose);
+  document.getElementById("qrnew").addEventListener("click", function () {
+    fetch("/auth/qr/new", { method: "POST", credentials: "same-origin" }).then(function (r) {
+      if (!r.ok) { return r.text().then(function (t) { add("error", t.trim() || "no code"); }); }
+      return r.json().then(function (d) {
+        qrimg.src = "data:image/svg+xml;base64," + btoa(d.svg);
+        qrnote.textContent = "scan it with the phone within " + d.ttl + " seconds, then confirm there";
+        qrbox.hidden = false;
+      });
+    }).catch(function () { add("error", "the chat does not answer"); });
   });
   // the current session gets another name (letters, digits, . _ -); the page follows the server's events
   document.getElementById("renamesession").addEventListener("click", function () {

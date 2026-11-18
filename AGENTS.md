@@ -280,6 +280,11 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   token (`Set-Cookie`, the roles read again); a session (`sid`, every token of one login) ends a
   month after its login (AI_AUTH_SESSION_MAX). Logout revokes the session; `user del` and
   `user passwd` revoke the user's sessions. The revocation list is `revoked.json` in the volume.
+  Another device: `POST /auth/qr/new` (a live session) makes a ticket, 256 bits, 120 s, once, at most
+  3 open per user (kept as hashes, in memory); the menu shows it as a QR code (qrencode, SVG) of
+  `.../login.html#qr=TICKET` (a fragment: not sent to a server, not in a log). The phone
+  `POST /auth/qr/peek` (the user, nothing used), then `POST /auth/qr/redeem` after the user's
+  confirmation: a new session of its own.
   nginx serves the login page (`ai/ui/login.html`, public, with `ai/ui/theme.css`, mounted read-only
   at `/etc/nginx/ui`) and sends every other page through `auth_request` (`/_gate`): the agent gets
   `X-Aicli-Gate` (AI_GATE_SECRET, made by deploy.sh, shared with nginx) and `X-Aicli-User`. The

@@ -393,6 +393,82 @@ sub is_revoked {
     return 0;
 }
 
+# --- the login from another device (a QR code) ---------------------------------------------------
+# A logged-in user asks for a ticket: a random 256-bit value, valid for QR_TTL seconds, once, at
+# most QR_MAX open per user. It is shown as a QR code of the URL .../login.html#qr=TICKET (the
+# fragment is not sent to a server, nor logged). The phone opens the page, which asks the
+# service about the ticket (peek: the user, nothing used) and, when the user confirms, redeems it
+# (the ticket is used, the phone gets its own session). Only a hash of a ticket is kept, in memory:
+# a restart of the service ends the open tickets.
+
+our $QR_TTL = 120;
+our $QR_MAX = 3;
+our %QR; # sha256 hex of a ticket => { sub, exp }
+
+sub random_b64 {
+    my ($n) = @_;
+    open(my $fh, '<:raw', '/dev/urandom') or die "auth: no /dev/urandom: $!\n";
+    my $got = read($fh, my $bytes, $n);
+    close $fh;
+    die "auth: no random bytes\n" unless defined $got and $got == $n;
+    return MIME::Base64::encode_base64url($bytes);
+}
+
+sub _ticket_key { return Digest::SHA::sha256_hex($_[0] // '') }
+
+sub qr_issue {
+    my ($user, $now) = @_;
+    for my $k (keys %QR) { delete $QR{$k} if $QR{$k}{exp} < $now }
+    my $open = grep { $QR{$_}{sub} eq $user } keys %QR;
+    return undef if $open >= $QR_MAX;
+    my $t = random_b64(32);
+    $QR{_ticket_key($t)} = { sub => $user, exp => $now + $QR_TTL };
+    return $t;
+}
+
+# the user of a ticket that is valid now (nothing is used), or undef
+sub qr_peek {
+    my ($t, $now) = @_;
+    my $e = $QR{_ticket_key($t)} or return undef;
+    return $e->{exp} >= $now ? $e->{sub} : undef;
+}
+
+# the user of a valid ticket, and the ticket is used: it is not valid again
+sub qr_redeem {
+    my ($t, $now) = @_;
+    my $user = qr_peek($t, $now);
+    delete $QR{_ticket_key($t)} if defined $t;
+    return $user;
+}
+
+# the QR code of a text, as SVG (qrencode, a list: no shell)
+sub qr_svg {
+    my ($text) = @_;
+    open(my $fh, '-|', 'qrencode', '-t', 'SVG', '-m', '2', '-o', '-', $text) or return undef;
+    local $/;
+    my $svg = <$fh>;
+    close $fh;
+    return ($? == 0 and defined $svg and $svg =~ m/<svg/) ? $svg : undef;
+}
+
+# the claims of the request's token when it is a live session (not revoked, not too old), or undef
+sub current_claims {
+    my ($rsa, $req, $now) = @_;
+    my ($c) = jwt_verify($rsa, token_of($req), $now);
+    return undef unless $c;
+    return undef if is_revoked($c, load_revoked());
+    return undef if $now - ($c->{ses} // $c->{iat}) > session_max();
+    return $c;
+}
+
+# the JSON object of a request body with a ticket, or undef
+sub _ticket_body {
+    my ($req) = @_;
+    my $d = eval { $JSON->decode($req->{body} // '') };
+    return undef unless ref $d eq 'HASH' and defined $d->{ticket} and !ref $d->{ticket};
+    return $d->{ticket};
+}
+
 # --- HTTP ---------------------------------------------------------------------------------------
 
 sub url_decode {
@@ -483,6 +559,37 @@ sub handle {
         }
         print STDERR "auth: login refused for ".(valid_user($user) ? $user : '(not a user name)')."\n";
         return _response(401, 'unauthorized');
+    }
+    if ($path eq '/auth/qr/new' and $m eq 'POST') {
+        my $c = current_claims($rsa, $req, $now)
+            or return _response(401, 'unauthorized');
+        my $host = $req->{headers}{host} // '';
+        return _response(400, 'no host') unless $host =~ m/\A[A-Za-z0-9.:\[\]-]{1,255}\z/;
+        my $proto = ($req->{headers}{'x-forwarded-proto'} // '') eq 'http' ? 'http' : 'https';
+        my $t = qr_issue($c->{sub}, $now)
+            or return _response(429, 'too many open tickets: use one of them, or wait');
+        my $svg = qr_svg("$proto://$host/login.html#qr=$t")
+            or return _response(500, 'no QR code (qrencode)');
+        print STDERR "auth: qr ticket for $c->{sub} (valid $QR_TTL s)\n";
+        return _response(200, '', headers => [['Content-Type', 'application/json']],
+            body => $JSON->encode({ svg => $svg, ttl => $QR_TTL })."\n");
+    }
+    if ($path eq '/auth/qr/peek' and $m eq 'POST') {
+        my $t = _ticket_body($req) or return _response(400, 'a ticket is wanted');
+        my $user = qr_peek($t, $now) or return _response(401, 'unauthorized');
+        return _response(200, '', headers => [['Content-Type', 'application/json']],
+            body => $JSON->encode({ user => $user })."\n");
+    }
+    if ($path eq '/auth/qr/redeem' and $m eq 'POST') {
+        my $t = _ticket_body($req) or return _response(400, 'a ticket is wanted');
+        my $user = qr_redeem($t, $now);
+        return _response(401, 'unauthorized') unless defined $user and getpwnam($user);
+        my @roles = roles_of($user);
+        my $token = jwt_create($rsa, $user, \@roles, token_lifetime(), $now, $now, new_sid());
+        print STDERR "auth: login of $user from another device, roles @roles\n";
+        return _response(200, '', headers => [
+            ['Content-Type', 'application/json'], ['Set-Cookie', _cookie($token, session_max())],
+        ], body => $JSON->encode({ user => $user, roles => \@roles })."\n");
     }
     if ($path eq '/auth/logout' and $m eq 'POST') {
         my ($claims) = jwt_verify($rsa, token_of($req), $now);

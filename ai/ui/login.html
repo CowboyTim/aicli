@@ -14,9 +14,14 @@
   input, button { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 8px; }
   button { background: var(--user-bg); color: var(--accent); cursor: pointer; }
   #err { color: var(--err); min-height: 1.2em; font-size: 14px; }
+  #qrask { max-width: 320px; margin: 10vh auto; } #qrask .row { display: flex; gap: 8px; }
 </style>
 </head>
 <body>
+<div id="qrask" hidden>
+  <p>Log in this device as <b id="qruser"></b>?</p>
+  <div class="row"><button id="qryes" type="button">log in</button> <button id="qrno" type="button">cancel</button></div>
+</div>
 <form id="f" method="post" action="/auth/login">
   <label>User <input name="user" autocomplete="off" required autofocus></label>
   <label>Password <input name="password" type="password" autocomplete="off" required></label>
@@ -32,6 +37,38 @@
     if (l) { document.documentElement.setAttribute("data-look", l); }
   } catch (e) { /* no storage: the system's */ }
 })();
+// a login from another device: the QR code of a logged-in browser (#qr=TICKET, not sent anywhere
+// but here). The ticket is asked about (peek: nothing used) and used only when the user confirms.
+var qrTicket = null;
+var qrMatch = location.hash.match(/^#qr=([A-Za-z0-9_-]{20,})$/);
+if (qrMatch) {
+  qrTicket = qrMatch[1];
+  history.replaceState(null, "", "/login.html");
+  document.getElementById("f").hidden = true;
+  var askErr = document.getElementById("err");
+  fetch("/auth/qr/peek", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ticket: qrTicket }) }).then(function (r) {
+      if (!r.ok) { throw new Error("no"); }
+      return r.json();
+    }).then(function (d) {
+      document.getElementById("qruser").textContent = d.user;
+      document.getElementById("qrask").hidden = false;
+    }).catch(function () {
+      askErr.textContent = "this code is not valid any more (it lasts two minutes, once): make a new one";
+    });
+}
+document.getElementById("qryes").addEventListener("click", function () {
+  var errEl = document.getElementById("err");
+  fetch("/auth/qr/redeem", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ticket: qrTicket }) }).then(function (r) {
+      if (r.ok) { location.href = "/"; } else { errEl.textContent = "this code is not valid any more"; }
+    }).catch(function () { errEl.textContent = "the login does not answer"; });
+});
+document.getElementById("qrno").addEventListener("click", function () {
+  qrTicket = null;
+  document.getElementById("qrask").hidden = true;
+  document.getElementById("f").hidden = false;
+});
 document.getElementById("f").addEventListener("submit", function (ev) {
   ev.preventDefault();
   var d = new URLSearchParams(new FormData(ev.target));

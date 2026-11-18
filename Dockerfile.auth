@@ -5,7 +5,7 @@ ARG BASE_IMAGE=ubuntu:24.04
 FROM ${BASE_IMAGE}
 RUN apt-get update \
  && apt-get install -y --no-install-recommends perl libjson-xs-perl libcrypt-openssl-rsa-perl \
-        libauthen-pam-perl libpam-modules \
+        libauthen-pam-perl libpam-modules qrencode \
  && rm -rf /var/lib/apt/lists/*
 COPY auth/aicli-auth.pam /etc/pam.d/aicli-auth
 COPY auth.pl /usr/local/lib/aicli/auth.pl
