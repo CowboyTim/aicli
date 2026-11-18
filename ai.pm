@@ -4827,6 +4827,32 @@ EOb
         required => ["id"],
         available => sub {$ai::IN_AGENT ? 0 : 1},
     },
+    pods => {
+        description => "list the projects under the root: which of them has its dev pod open, how many pods may be open at once, and the images a pod can use, with a note each. A pod is a container with the project's files, where bash, perl and grep of a session in that project run. Pods are closed by themselves when they are not used for a while. Use it before pod_open",
+        syntax => "///PODS_4b1e",
+        properties  => {},
+        required => [],
+        available => sub {pod_tools_on()},
+    },
+    pod_open => {
+        description => "start the dev pod of a project (its name as pods lists it), so that bash, perl and grep of a session on that project run there. The image is optional: the first image of pods is the default. Opening a pod takes a moment",
+        syntax => "///POD_OPEN_9d52+EO_7f31+EO_0c8d\n{{project}}\nEO_7f31[LENGTH({{project}})]\n{{image}}\nEO_0c8d[LENGTH({{image}})]\nPOD_OPEN_9d52",
+        properties  => {
+            "project" => {type => "string", description => "The name of the project, as pods lists it"},
+            "image" => {type => "string", description => "An image of pods; empty for the default"},
+        },
+        required => ["project"],
+        available => sub {pod_tools_on()},
+    },
+    pod_close => {
+        description => "stop and remove the dev pod of a project (its name as pods lists it). Its files are kept; a session that works in that project needs pod_open again",
+        syntax => "///POD_CLOSE_c03a+EO_3d6e\n{{project}}\nEO_3d6e[LENGTH({{project}})]\nPOD_CLOSE_c03a",
+        properties  => {
+            "project" => {type => "string", description => "The name of the project, as pods lists it"},
+        },
+        required => ["project"],
+        available => sub {pod_tools_on()},
+    },
     devel => {
         description => "find what a development language has installed, with versions, when you do not know the exact name: perl (modules: a filter is required, a regular expression for the module names), python (packages), lua (rocks), c and c++ (compilers, and libraries known to pkg-config), bash (the common tools on the PATH). Filters are regular expressions for the names; at most 40 lines come back. If you know the module name, run perl -MName -e 'print \$Name::VERSION' instead",
         syntax => "///DEVEL_9c3e+EO_5b7a+EO_e21d\n{{language}}\nEO_5b7a[LENGTH({{language}})]\n{{filter}}\nEO_e21d[LENGTH({{filter}})]\nDEVEL_9c3e",
@@ -5059,7 +5085,7 @@ sub pod_for_tools {
     return undef unless length($root // '');
     return undef if lc($::ORIG_ENV{AI_POD_TOOLS} // 'auto') =~ m/^(?:0|off|no)$/;
     my ($project) = ($ai::WORKSPACE // '') =~ m{\A\Q$root\E/([^/]+)}
-        or die "bash, perl and grep run in the pod of a project, and this directory is not one (under $root): use the file tools (find, list, read) here, or open a session in a project\n";
+        or die "bash, perl and grep run in the pod of a project, and this directory is not one (under $root): use the file tools (find, list, read) here, or work in a project (pods lists them)\n";
     return $project;
 }
 
@@ -5076,8 +5102,20 @@ sub _pod_path {
 # exit code are the tool's, as a local child's would be
 sub _pod_run {
     my ($project, @argv) = @_;
-    my $socket = $::ORIG_ENV{AI_BROKER_SOCKET} // '/run/aicli-broker/broker.sock';
     my %opts = $argv[0] eq 'grep' ? (exit_ok => [1]) : (); # grep: 1 is no match, not an error
+    return _broker_child({op => 'exec', project => $project, argv => [@argv]}, sub {
+        my ($answer) = @_;
+        print MIME::Base64::decode_base64($answer->{output} // '');
+        return $answer->{exit} // 1;
+    }, %opts);
+}
+
+# one request to the broker's socket, in a child (the chat does not wait on the
+# engine). $on_ok gets the answer and returns the text it prints and the exit code
+# (the tool's output comes from the child's output, a failure is a tool error)
+sub _broker_child {
+    my ($req, $on_ok, %opts) = @_;
+    my $socket = $::ORIG_ENV{AI_BROKER_SOCKET} // '/run/aicli-broker/broker.sock';
     return _run(sub {
         utils::load_cpan("MIME::Base64");
         utils::load_cpan("IO::Socket::UNIX");
@@ -5085,7 +5123,7 @@ sub _pod_run {
         my $answer = eval {
             my $c = IO::Socket::UNIX->new(Peer => $socket, Type => Socket::SOCK_STREAM())
                 or die "the broker is not reachable: $!\n";
-            print {$c} $::JSON->encode({op => 'exec', project => $project, argv => [@argv]})."\n";
+            print {$c} $::JSON->encode($req)."\n";
             my $l = <$c>;
             close($c);
             die "the broker gave no answer\n" unless defined $l;
@@ -5093,8 +5131,7 @@ sub _pod_run {
         };
         my $code = 1;
         if (ref($answer) eq 'HASH' and $answer->{ok}) {
-            print MIME::Base64::decode_base64($answer->{output} // '');
-            $code = $answer->{exit} // 1;
+            $code = $on_ok->($answer);
         } else {
             my $why = ref($answer) eq 'HASH' ? $answer->{error} : ($@ // 'no answer');
             $why =~ s/\s+\z//;
@@ -5103,6 +5140,68 @@ sub _pod_run {
         STDOUT->flush();
         POSIX::_exit($code);
     }, %opts);
+}
+
+# the pod tools (pods, pod_open, pod_close) are there when the stack has a broker and a root
+sub pod_tools_on {
+    return 0 unless length($::ORIG_ENV{AI_POD_ROOT} // '');
+    return 0 if lc($::ORIG_ENV{AI_POD_TOOLS} // 'auto') =~ m/^(?:0|off|no)$/;
+    return 1;
+}
+
+# the project of this session's workspace, or undef when it is none
+sub _session_project {
+    my $project = eval {pod_for_tools()};
+    return $project;
+}
+
+# the project name a pod tool was given (the broker checks it is a project)
+sub _project_arg {
+    my ($t_args) = @_;
+    my $project = utils::trim($t_args->[0] // '');
+    die "a project name is wanted (the projects are in pods)\n" unless length $project;
+    return $project;
+}
+
+# pods: the projects under the root, which pods are open, the images and the cap
+sub pods_4b1e {
+    my ($t_args) = @_;
+    my $here = _session_project() // '';
+    return _broker_child({op => 'projects'}, sub {
+        my ($a) = @_;
+        my @lines = ("projects: ".scalar(@{$a->{projects}})." under the root, ".$a->{open_count}." of $a->{max_pods} pods open");
+        push @lines, map {sprintf("  %s  %s%s", $_->{name}, $_->{open} ? 'open' : 'closed', $_->{name} eq $here ? '  (this session\'s project)' : '')} @{$a->{projects}};
+        push @lines, "images a pod can use (pod_open takes one as its second argument, the first is the default):";
+        push @lines, map {"  $_->{name}".($_->{note} ne '' ? "  $_->{note}" : '')} @{$a->{images}};
+        print join("\n", @lines)."\n";
+        return 0;
+    });
+}
+
+# pod_open: start the dev pod of a project (bash, perl and grep of a session in it run there)
+sub pod_open_9d52 {
+    my ($t_args) = @_;
+    my $project = _project_arg($t_args);
+    my $image = utils::trim($t_args->[1] // '');
+    my $req = {op => 'open', project => $project};
+    $req->{image} = $image if length $image;
+    return _broker_child($req, sub {
+        my ($a) = @_;
+        print "pod of $project is open".($a->{created} ? " (made now)" : " (it was open)")."\n";
+        return 0;
+    });
+}
+
+# pod_close: stop and remove the pod of a project; a session that works in it needs it open again
+sub pod_close_c03a {
+    my ($t_args) = @_;
+    my $project = _project_arg($t_args);
+    my $here = _session_project() // '';
+    return _broker_child({op => 'close', project => $project}, sub {
+        my $note = $project eq $here ? "; this session's bash, perl and grep need it open again (pod_open)" : '';
+        print "pod of $project is closed$note\n";
+        return 0;
+    });
 }
 
 sub bash_7c48 {

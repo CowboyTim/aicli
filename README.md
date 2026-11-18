@@ -555,6 +555,13 @@ its tools work (the tool reports that otherwise). Each tool call starts a
 write, edit) still run in the agent's container, on the same mounted directory.
 `AI_POD_TOOLS=0` runs the tools in the agent's container again.
 
+The model opens and closes pods itself with three tools: `pods` (the projects, which
+are open, the images with a note each, the cap), `pod_open PROJECT [IMAGE]` and
+`pod_close PROJECT`. A session's `bash`, `perl` and `grep` still need its workspace to
+be a project whose pod is open. `broker.json` sets `max_pods` (at most that many pods
+open at once, 4 by default), `idle_minutes` (a pod unused for that long is closed, 30 by
+default, checked once a minute), and `image_notes` (one line per image, shown by `pods`).
+
 Host setup: install Podman, enable the user socket (`systemctl --user enable --now
 podman.socket`), and set `AI_PROJECTS`, `PODMAN_SOCKET`, `BROKER_UID`, `BROKER_GID`.
 

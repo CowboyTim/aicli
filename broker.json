@@ -3,6 +3,11 @@
   "engine": "/run/engine/podman.sock",
   "socket": "/run/aicli-broker/broker.sock",
   "images": ["local/ai/aicli:latest"],
+  "image_notes": {
+    "local/ai/aicli:latest": "the dev image: the languages, ImageMagick and the common development tools"
+  },
+  "max_pods": 4,
+  "idle_minutes": 30,
   "memory": "2g",
   "pids": 512,
   "userns": "keep-id"

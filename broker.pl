@@ -19,6 +19,7 @@
 
 use strict; use warnings;
 use IO::Socket::UNIX ();
+use IO::Select ();
 use Socket ();
 use JSON::XS ();
 use POSIX ();
@@ -52,6 +53,10 @@ sub new {
         userns    => $c{userns} // 'keep-id',
         socket    => $c{socket} // '/run/aicli-broker/broker.sock',
         remote    => [ref($c{remote}) eq 'ARRAY' ? @{$c{remote}} : ('podman-remote')],
+        max_pods  => $c{max_pods} // 4,                              # open pods at once
+        idle      => ($c{idle_minutes} // 30) * 60,                  # seconds unused before a close
+        notes     => ref($c{image_notes}) eq 'HASH' ? $c{image_notes} : {}, # image => one line for the model
+        last      => {},                                             # project => time of its last open or exec
     }, $class;
     die "broker: no image is allowed (images in the config)\n" unless @{$self->{images}};
     return $self;
@@ -90,8 +95,9 @@ sub _dispatch {
     return $self->_open($req) if $op eq 'open';
     return $self->_close($req) if $op eq 'close';
     return $self->_list() if $op eq 'list';
+    return $self->_projects() if $op eq 'projects';
     return $self->_exec($req) if $op eq 'exec';
-    return {ok => JSON::XS::false(), error => "unknown request '$op' (open, close or list)"};
+    return {ok => JSON::XS::false(), error => "unknown request '$op' (open, close, list or projects)"};
 }
 
 # a project's name: a directory directly under the root, not a link
@@ -116,6 +122,9 @@ sub _open {
     my $pod = _pod_name($name);
     my ($code, $pods) = $self->_engine('GET', '/libpod/pods/json');
     return $self->_failed("the engine did not list the pods", $code, $pods) unless $code == 200;
+    my %running = _running_projects($pods);
+    return {ok => JSON::XS::false(), error => "$self->{max_pods} pods are open already: close one first (projects lists them)"}
+        if !$running{$name} and keys(%running) >= $self->{max_pods};
     my %have = map {($_->{Name} // '') => 1} @{$self->_decoded($pods) // []};
     my $made = 0;
     if (!$have{$pod}) {
@@ -131,6 +140,7 @@ sub _open {
     $made = 1 if $code2 == 201;
     my ($c2, $b2) = $self->_engine('POST', "/libpod/pods/$pod/start");
     return $self->_failed("the pod could not be started", $c2, $b2) unless $c2 == 200 or $c2 == 304;
+    $self->{last}{$name} = time;
     return {ok => JSON::XS::true(), project => $name, pod => $pod, created => $made ? JSON::XS::true() : JSON::XS::false()};
 }
 
@@ -164,7 +174,51 @@ sub _close {
     return $self->_failed("the pod could not be stopped", $code, $body) unless $code == 200 or $code == 304 or $code == 404;
     ($code, $body) = $self->_engine('DELETE', "/libpod/pods/$pod?force=true");
     return $self->_failed("the pod could not be removed", $code, $body) unless $code == 200 or $code == 404;
+    delete $self->{last}{$name};
     return {ok => JSON::XS::true(), project => $name, pod => $pod};
+}
+
+# the projects under the root, which of them is open, the images a pod may use (with
+# their notes), and the cap: what the model reads to choose before it opens a pod
+sub _projects {
+    my ($self) = @_;
+    my ($code, $body) = $self->_engine('GET', '/libpod/pods/json');
+    return $self->_failed("the engine did not list the pods", $code, $body) unless $code == 200;
+    my %running = _running_projects($body);
+    opendir(my $dh, $self->{root}) or return {ok => JSON::XS::false(), error => "the root cannot be read: $!"};
+    my @names = sort grep {!m/\A\./} readdir($dh);
+    closedir($dh);
+    my @projects = map {{name => $_, open => $running{$_} ? JSON::XS::true() : JSON::XS::false()}}
+        grep {defined $self->project_name($_)} @names;
+    my @images = map {{name => $_, note => $self->{notes}{$_} // ''}} @{$self->{images}};
+    return {ok => JSON::XS::true(), projects => \@projects, images => \@images,
+        open_count => scalar(keys %running), max_pods => $self->{max_pods}};
+}
+
+# the open projects (their pods are running) among the engine's pods, as a hash
+sub _running_projects {
+    my ($body) = @_;
+    my $list = eval { $JSON->decode($body // '[]') };
+    return map {substr($_->{Name}, length('aicli-')) => 1}
+        grep {($_->{Name} // '') =~ m/\Aaicli-/ and ($_->{Status} // '') eq 'Running'}
+        @{ref($list) eq 'ARRAY' ? $list : []};
+}
+
+# the pods nobody has used for the idle time are closed. A pod this process has not
+# seen used (one open before a restart) counts from now, so it is not closed at once.
+sub _reap {
+    my ($self) = @_;
+    my ($code, $body) = $self->_engine('GET', '/libpod/pods/json');
+    return unless $code == 200;
+    my $now = time;
+    my %running = _running_projects($body);
+    for my $name (sort keys %running) {
+        $self->{last}{$name} //= $now;
+        next if $now - $self->{last}{$name} < $self->{idle};
+        my $r = $self->_close({project => $name});
+        _log("idle: pod of $name closed".($r->{ok} ? '' : ": $r->{error}"));
+    }
+    return;
 }
 
 sub _list {
@@ -194,11 +248,12 @@ sub _exec {
     return {ok => JSON::XS::false(), error => "the command is too long"} if $size > 256 * 1024;
     my $ctr = _pod_name($name).'-dev';
     my ($code, $body) = $self->_engine('GET', "/libpod/containers/$ctr/json");
-    return {ok => JSON::XS::false(), error => "the project's pod is not open (open it first)"} unless $code == 200;
+    return {ok => JSON::XS::false(), error => "the project's pod is not open (open it with pod_open first)"} unless $code == 200;
     my $state = $self->_decoded($body);
     return {ok => JSON::XS::false(), error => "the project's dev container is not running"}
         unless ref($state) eq 'HASH' and ref($state->{State}) eq 'HASH' and $state->{State}{Running};
     _log("exec project=$name program=$argv->[0]");
+    $self->{last}{$name} = time;
     my ($out, $exit) = _capture([@{$self->{remote}}, 'exec', '--workdir', '/work', $ctr, @$argv], $EXEC_MAX, 120);
     _log("exec project=$name program=$argv->[0] -> exit $exit");
     return {ok => JSON::XS::true(), exit => $exit, output => MIME::Base64::encode_base64($out // '', '')};
@@ -295,7 +350,16 @@ sub serve {
     my ($gid) = split ' ', $(;
     _log("listening on $path as uid $< gid ".($gid // '?'));
     local $SIG{PIPE} = 'IGNORE';
-    while (my $c = $srv->accept) {
+    my $sel = IO::Select->new($srv);
+    my $reaped = 0;
+    while (1) {
+        # the idle pods are closed once a minute, whether or not requests come (a failure is logged)
+        if (time - $reaped >= 60) {
+            $reaped = time;
+            eval { $self->_reap(); 1 } or _log("idle check failed: ".($@ =~ s/\s+\z//r));
+        }
+        next unless $sel->can_read(5);
+        my $c = $srv->accept or next;
         my $line = eval {
             local $SIG{ALRM} = sub { die "timeout\n" };
             alarm 10;
