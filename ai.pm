@@ -5059,7 +5059,7 @@ sub pod_for_tools {
     return undef unless length($root // '');
     return undef if lc($::ORIG_ENV{AI_POD_TOOLS} // 'auto') =~ m/^(?:0|off|no)$/;
     my ($project) = ($ai::WORKSPACE // '') =~ m{\A\Q$root\E/([^/]+)}
-        or die "the tools run in the pod of a project, and this directory is not one (under $root)\n";
+        or die "bash, perl and grep run in the pod of a project, and this directory is not one (under $root): use the file tools (find, list, read) here, or open a session in a project\n";
     return $project;
 }
 
