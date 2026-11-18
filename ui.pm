@@ -1046,10 +1046,20 @@ sub _dispatch {
         _send_to($active, {abort => 1}) if defined $active;
         return _json($cn, 200, {ok => \1});
     }
+    # take the last n exchanges out of the chat of the active session (a revert in the page)
+    if($p eq '/rewind' and $m eq 'POST'){
+        my $d = eval { $::JSON->decode($body // '') };
+        my $n = ref $d eq 'HASH' ? $d->{n} : undef;
+        return _json($cn, 400, {error => "n: the number of exchanges, 1 to 999"})
+            unless defined $n and "$n" =~ m/\A[1-9]\d{0,2}\z/;
+        return _json($cn, 503, {error => "no session"}) unless defined $active;
+        _send_to($active, {rewind => 0 + $n});
+        return _json($cn, 202, {ok => \1});
+    }
     if($p eq '/state' and $m eq 'GET'){
         return _json($cn, 200, _master_state());
     }
-    return _respond($cn, 405, 'text/plain', "method not allowed\n") if $p =~ m{^/(events|message|session|project|pod|voice|abort|state)$};
+    return _respond($cn, 405, 'text/plain', "method not allowed\n") if $p =~ m{^/(events|message|session|project|pod|voice|abort|state|rewind)$};
     return _respond($cn, 404, 'text/plain', "not found\n");
 }
 

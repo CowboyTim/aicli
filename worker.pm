@@ -6,7 +6,7 @@ package worker;
 #
 # The socket carries one JSON object per line:
 #   master -> worker: {"text": "..."}, {"audio": "base64 WAV"}, {"model": "provider/id"},
-#                     {"models": 1}, {"state": 1}, {"abort": 1}
+#                     {"models": 1}, {"state": 1}, {"abort": 1}, {"rewind": N}
 #   worker -> master: {"event": "text", "data": {"text": "..."}}, ...
 # The events are the ones of the web page (ui::publish). The worker ends when
 # the master closes the socket: after its turn, or at once when a turn runs.
@@ -108,6 +108,17 @@ sub _message {
         ui::publish(state => ui::_state());
     } elsif ($m->{abort}) {
         $::ABORT = 1 if $ai::BUSY;
+    } elsif (exists $m->{rewind}) {
+        # the last n exchanges are taken out of the chat (the page shows the history again)
+        my $n = "$m->{rewind}";
+        return unless $n =~ m/\A[1-9]\d{0,2}\z/;
+        if ($ai::BUSY) {
+            ui::publish(failed => {text => "wait for the answer before taking an exchange out"});
+            return;
+        }
+        my @gone = ai::rewind_chat($n);
+        return unless @gone;
+        ui::publish(history => ui::_history_data($ai::AI_SESSION));
     }
     return;
 }

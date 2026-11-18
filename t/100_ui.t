@@ -374,6 +374,24 @@ SKIP: {
     $ui::OUTBOX = [];
 }
 
+# --- the revert: the last n exchanges go out of the chat (the worker does it) ---
+
+{
+    $ui::active = 'test-session';
+    my $r = request('POST', '/rewind', body => '{"n":2}');
+    is(status_of($r), 401, "rewind: needs the token");
+    $ui::OUTBOX = [];
+    $r = request('POST', '/rewind', cookie => $ok_cookie, body => '{"n":2}');
+    is(status_of($r), 202, "rewind: accepted");
+    is_deeply($ui::OUTBOX->[0], ['test-session', {rewind => 2}], "rewind: sent to the session's worker");
+    for my $bad ('{"n":0}', '{"n":"x"}', '{"n":1000}', '{}', 'not json') {
+        $r = request('POST', '/rewind', cookie => $ok_cookie, body => $bad);
+        is(status_of($r), 400, "rewind: $bad is refused");
+    }
+    is(scalar(@$ui::OUTBOX), 1, "and nothing else was sent");
+    $ui::OUTBOX = [];
+}
+
 {
     TestAI::setup(AI_API_KEY => 'sk-test', AI_PROVIDER => 'openai', AI_LOCAL_SERVER => undef, AI_API_KEY_OPENROUTER => 'sk-or-test');
     @ai::ALL_MODELS = (['openai', 'gpt-a'], ['openrouter', 'llama-b']);

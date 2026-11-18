@@ -65,6 +65,9 @@
   .tool { color: var(--accent); font-size: 13px; margin-top: 8px; }
   .result { color: var(--muted); font-size: 13px; margin-left: 1.5em; }
   .usage { color: var(--muted); font-size: 13px; }
+  /* the tag of an answer: its usage, and a revert (the exchange goes out of the chat) */
+  .tag { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin: 6px 0 0; font-size: 12px; color: var(--muted); }
+  .tag button { font: inherit; font-size: 12px; padding: 1px 8px; color: var(--muted); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
   /* waiting: a spinner and the seconds while a request has no answer yet */
   .wait { color: var(--muted); font-size: 13px; margin: 0 0 8px; }
 
@@ -640,8 +643,44 @@
   es.addEventListener("heard", function (e) {
     add("user", JSON.parse(e.data).text);
   });
+  // the usage of an answer is a tag on it, with a revert; without an answer of this turn, a line
+  function turnAnswer() {
+    for (var i = log.children.length - 1; i >= 0; i--) {
+      var c = log.children[i];
+      if (c.classList.contains("user")) { return null; }
+      if (c.classList.contains("answer")) { return c; }
+    }
+    return null;
+  }
+  function exchangesFrom(answer) {
+    // the exchange of the answer: its user message and what follows, to the end of the chat
+    var kids = Array.prototype.slice.call(log.children), i = kids.indexOf(answer), u = -1;
+    for (var k = i; k >= 0; k--) { if (kids[k].classList.contains("user")) { u = k; break; } }
+    var from = u < 0 ? 0 : u;
+    return kids.slice(from).filter(function (c) { return c.classList.contains("user"); }).length;
+  }
+  function revertFrom(answer) {
+    var n = exchangesFrom(answer);
+    if (!confirm(n === 1 ? "take this exchange out of the chat?" : "take this exchange and the " + (n - 1) + " after it out of the chat?")) { return; }
+    fetch("/rewind", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ n: n }) }).then(function (r) {
+        if (!r.ok) { return r.json().catch(function () { return {}; }).then(function (d) { add("error", d.error || "not taken out"); }); }
+      }).catch(function () { add("error", "the chat does not answer"); });
+  }
   es.addEventListener("usage", function (e) {
-    add("usage", JSON.parse(e.data).text);
+    var text = JSON.parse(e.data).text;
+    var answer = turnAnswer();
+    if (!answer) { add("usage", text); return; }
+    var tag = el("div"), span = el("span"), btn = el("button");
+    tag.className = "tag";
+    span.textContent = text;
+    btn.type = "button";
+    btn.textContent = "revert";
+    btn.title = "take this exchange out of the chat";
+    btn.addEventListener("click", function () { revertFrom(answer); });
+    tag.appendChild(span);
+    tag.appendChild(btn);
+    answer.appendChild(tag);
   });
   // a tool line or its result is a block of its own: the next text starts a new one
   es.addEventListener("tool", function (e) {
