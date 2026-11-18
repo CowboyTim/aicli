@@ -52,7 +52,6 @@ RUN chmod 0755 /usr/local/bin/aicli-devices \
 ENV HOME=/ai
 USER root
 WORKDIR /ai
-VOLUME /ai
 #ENTRYPOINT ["strace", "-f", "-tt", "-s", "512", "/usr/bin/perl", "/ai.pl"]
 ENTRYPOINT ["/usr/bin/perl", "/ai.pl"]
 
@@ -120,6 +119,5 @@ RUN perl -I/ -Mai -e 'tools::devel_build("/usr/share/aicli/devel")'
 ENV HOME=/ai
 USER root
 WORKDIR /ai
-VOLUME /ai
 #ENTRYPOINT ["strace", "-f", "-tt", "-s", "512", "/usr/bin/perl", "/ai.pl"]
 ENTRYPOINT ["/usr/bin/perl", "/ai.pl"]
