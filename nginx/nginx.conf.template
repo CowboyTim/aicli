@@ -55,16 +55,7 @@ http {
             return 444;
         }
 
-        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-        add_header X-Frame-Options DENY always;
-        add_header X-Content-Type-Options nosniff always;
-        add_header Referrer-Policy "no-referrer" always;
-        # the page has an inline script and style (ai/ui/index.html): 'unsafe-inline' until
-        # they are files of their own
-        add_header Content-Security-Policy "default-src 'self'; img-src 'self' data: blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'" always;
-        add_header Cross-Origin-Opener-Policy "same-origin" always;
-        add_header Cross-Origin-Resource-Policy "same-origin" always;
-        add_header Permissions-Policy "camera=(), geolocation=()" always;
+        include /etc/nginx/security-headers.conf;
 
         # public: the login page and the stylesheet it uses (ai/ui, mounted here), and the
         # login itself (the auth service). Everything else needs the login (auth_request).
@@ -116,6 +107,10 @@ http {
             # the login first: no valid JWT goes to the login page
             auth_request /_gate;
             auth_request_set $aicli_user $upstream_http_x_user;
+            # a renewed login (the auth service renews it in its second half): its cookie goes on
+            auth_request_set $aicli_cookie $upstream_http_set_cookie;
+            add_header Set-Cookie $aicli_cookie always;
+            include /etc/nginx/security-headers.conf;
             error_page 401 = @login;
             # the agent by its name on the network aicli (resolved when a request comes, so nginx
             # starts whether or not the agent is up)

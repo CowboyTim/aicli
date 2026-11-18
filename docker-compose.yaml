@@ -169,6 +169,7 @@ services:
       - letsencrypt:/etc/nginx/certs:ro
       # the static files: the login page and its stylesheet (the other pages are the agent's)
       - ./ai/ui:/etc/nginx/ui:ro
+      - ./nginx/security-headers.conf:/etc/nginx/security-headers.conf:ro
     restart: unless-stopped
 
 networks:
