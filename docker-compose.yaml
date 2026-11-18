@@ -98,7 +98,9 @@ services:
       - aicli
     environment:
       AI_AUTH_LISTEN: 0.0.0.0:9000
-      AI_AUTH_LIFETIME: ${AI_AUTH_LIFETIME:-43200}
+      # a token lasts an hour and is renewed while in use; a session lasts a month (then a login)
+      AI_AUTH_LIFETIME: ${AI_AUTH_LIFETIME:-3600}
+      AI_AUTH_SESSION_MAX: ${AI_AUTH_SESSION_MAX:-2592000}
     volumes:
       - aicli-auth:/var/lib/aicli-auth
     # all capabilities dropped, but the three the account tools need to rewrite /etc/passwd and

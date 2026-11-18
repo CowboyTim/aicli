@@ -17,7 +17,9 @@
 # Environment:
 #   AI_AUTH_LISTEN    host:port to listen on (default 0.0.0.0:9000)
 #   AI_AUTH_KEY       the RSA key file (default /var/lib/aicli-auth/jwt-rsa.pem)
-#   AI_AUTH_LIFETIME  seconds a login lasts (default 43200)
+#   AI_AUTH_LIFETIME     seconds a token lasts; renewed in its second half (default 3600)
+#   AI_AUTH_SESSION_MAX  seconds from a login to the end of its session (default 2592000: a month)
+#   AI_AUTH_REVOKED      the revocation list (default /var/lib/aicli-auth/revoked.json)
 #   AI_AUTH_PAM_SERVICE  the PAM service (default aicli-auth, /etc/pam.d/aicli-auth)
 #
 # Usage: auth.pl            serve (the accounts of the state are made again first)
@@ -211,6 +213,7 @@ sub user_command {
         die "auth: no account ".($name // '')."\n" unless $name and getpwnam($name);
         $RUN->('passwd', $name) or die "auth: passwd failed\n";
         save_accounts();
+        revoke_user($name, time());
     } elsif ($cmd eq 'role') {
         my ($op, $name, $r) = @args;
         die "auth: no account ".($name // '')."\n" unless $name and getpwnam($name);
@@ -229,6 +232,7 @@ sub user_command {
         die "auth: no account ".($name // '')."\n" unless $name and getpwnam($name);
         $RUN->('userdel', $name) or die "auth: userdel failed\n";
         save_accounts();
+        revoke_user($name, time());
         print "auth: $name deleted\n";
     } elsif ($cmd eq 'list') {
         setpwent();
@@ -273,12 +277,17 @@ sub _sign_rs256 {
 }
 
 # a token for the user; the claims are the given ones, plus iss, iat and exp
+# a token: sid is the login (kept by every renewal, revoked by logout), ses the time of the
+# login (the session ends session_max seconds after it), iat and exp the token's own life
 sub jwt_create {
-    my ($rsa, $user, $roles, $lifetime, $now) = @_;
+    my ($rsa, $user, $roles, $lifetime, $now, $ses, $sid) = @_;
     $now //= time();
+    $ses //= $now;
+    $sid //= new_sid();
     my $header = MIME::Base64::encode_base64url($JSON->encode({ alg => 'RS256', typ => 'JWT' }));
     my $payload = MIME::Base64::encode_base64url($JSON->encode({
-        iss => $ISSUER, sub => $user, roles => [ @$roles ], iat => $now, exp => $now + $lifetime,
+        iss => $ISSUER, sub => $user, roles => [ @$roles ], sid => $sid, ses => $ses,
+        iat => $now, exp => $now + $lifetime,
     }));
     my $signed = "$header.$payload";
     my $sig = _sign_rs256($rsa, $signed);
@@ -306,6 +315,82 @@ sub jwt_verify {
     return (undef, 'expired') unless defined $claims->{exp} and $claims->{exp} > $now;
     return (undef, 'issued in the future') if ($claims->{iat} // 0) > $now + 60;
     return ($claims, undef);
+}
+
+# --- sessions: renewal and the revocation list --------------------------------------------------
+# A login lasts token_lifetime() seconds; a request in the second half of that gets a new token
+# (the roles read again, the account must still exist), so the user stays logged in while in use.
+# The session as a whole ends session_max() seconds after the login: then a login is needed.
+# Revoked: a session (logout), or every session of a user before a time (user del, passwd).
+# The list is a JSON file in the volume, entries are dropped when their session has ended.
+
+our $REVOKED_DEFAULT = '/var/lib/aicli-auth/revoked.json';
+
+sub token_lifetime { return $ENV{AI_AUTH_LIFETIME} // 3600 }
+sub session_max    { return $ENV{AI_AUTH_SESSION_MAX} // 2592000 }
+sub revoked_file   { return $ENV{AI_AUTH_REVOKED} // $REVOKED_DEFAULT }
+
+# a random id of 16 bytes, base64url
+sub new_sid {
+    open(my $fh, '<:raw', '/dev/urandom') or die "auth: no /dev/urandom: $!\n";
+    my $n = read($fh, my $bytes, 16);
+    close $fh;
+    die "auth: no random bytes\n" unless defined $n and $n == 16;
+    return MIME::Base64::encode_base64url($bytes);
+}
+
+sub load_revoked {
+    my $file = revoked_file();
+    return { sessions => {}, users => {} } unless -e $file;
+    my $data = _slurp($file);
+    my $r = defined $data ? eval { $JSON->decode($data) } : undef;
+    return { sessions => {}, users => {} } unless ref $r eq 'HASH';
+    $r->{sessions} //= {};
+    $r->{users} //= {};
+    return $r;
+}
+
+sub save_revoked {
+    my ($r, $now) = @_;
+    # the sessions that have ended are not needed any more
+    for my $sid (keys %{ $r->{sessions} }) {
+        delete $r->{sessions}{$sid} if $r->{sessions}{$sid} < $now;
+    }
+    my $file = revoked_file();
+    my ($dir) = $file =~ m{\A(.*)/[^/]*\z};
+    if (defined $dir and length $dir and !-d $dir) {
+        require File::Path;
+        File::Path::make_path($dir, { mode => 0700 });
+    }
+    _replace($file, $JSON->encode($r), 0600);
+    return;
+}
+
+# the session of the claims is over for good (logout)
+sub revoke_session {
+    my ($claims, $now) = @_;
+    my $r = load_revoked();
+    $r->{sessions}{$claims->{sid}} = ($claims->{ses} // $claims->{iat}) + session_max();
+    save_revoked($r, $now);
+    return;
+}
+
+# every session of the user that began before now is over (the account was deleted or its
+# password changed)
+sub revoke_user {
+    my ($name, $now) = @_;
+    my $r = load_revoked();
+    $r->{users}{$name} = $now;
+    save_revoked($r, $now);
+    return;
+}
+
+sub is_revoked {
+    my ($claims, $r) = @_;
+    return 1 if defined $claims->{sid} and exists $r->{sessions}{$claims->{sid}};
+    my $since = $r->{users}{$claims->{sub}};
+    return 1 if defined $since and ($claims->{ses} // $claims->{iat}) <= $since;
+    return 0;
 }
 
 # --- HTTP ---------------------------------------------------------------------------------------
@@ -384,23 +469,24 @@ sub handle {
     $now //= time();
     my $path = $req->{path} // '';
     my $m = $req->{method} // '';
-    my $lifetime = $ENV{AI_AUTH_LIFETIME} // 43200;
 
     if ($path eq '/auth/login' and $m eq 'POST') {
         my $f = parse_form($req->{body});
         my ($user, $password) = ($f->{user} // '', $f->{password} // '');
         if (valid_user($user) and pam_ok($user, $password)) {
             my @roles = roles_of($user);
-            my $token = jwt_create($rsa, $user, \@roles, $lifetime, $now);
+            my $token = jwt_create($rsa, $user, \@roles, token_lifetime(), $now, $now, new_sid());
             print STDERR "auth: login $user, roles @roles\n";
             return _response(200, '', headers => [
-                ['Content-Type', 'application/json'], ['Set-Cookie', _cookie($token, $lifetime)],
+                ['Content-Type', 'application/json'], ['Set-Cookie', _cookie($token, session_max())],
             ], body => $JSON->encode({ user => $user, roles => \@roles })."\n");
         }
         print STDERR "auth: login refused for ".(valid_user($user) ? $user : '(not a user name)')."\n";
         return _response(401, 'unauthorized');
     }
     if ($path eq '/auth/logout' and $m eq 'POST') {
+        my ($claims) = jwt_verify($rsa, token_of($req), $now);
+        revoke_session($claims, $now) if $claims;
         return _response(200, 'logged out', headers => [['Set-Cookie', _cookie('', 0)]]);
     }
     if ($path eq '/auth/verify') { # nginx's subrequest may use any method
@@ -408,6 +494,28 @@ sub handle {
         if (!$claims) {
             print STDERR "auth: verify refused: $why\n";
             return _response(401, 'unauthorized');
+        }
+        if (is_revoked($claims, load_revoked())) {
+            print STDERR "auth: verify refused: session revoked ($claims->{sub})\n";
+            return _response(401, 'unauthorized');
+        }
+        my $ses = $claims->{ses} // $claims->{iat};
+        if ($now - $ses > session_max()) {
+            print STDERR "auth: verify refused: session of $claims->{sub} is too old\n";
+            return _response(401, 'unauthorized');
+        }
+        # the second half of the token's life: a new token, the roles read again
+        my @set_cookie;
+        if ($now - $claims->{iat} >= token_lifetime() / 2) {
+            my $name = $claims->{sub};
+            if (!getpwnam($name)) {
+                print STDERR "auth: verify refused: no account $name\n";
+                return _response(401, 'unauthorized');
+            }
+            my @roles = roles_of($name);
+            my $token = jwt_create($rsa, $name, \@roles, token_lifetime(), $now, $ses, $claims->{sid});
+            @set_cookie = (['Set-Cookie', _cookie($token, session_max())]);
+            $claims = { sub => $name, roles => \@roles };
         }
         my $need = $req->{query}{role};
         if (defined $need and length $need) {
@@ -418,7 +526,7 @@ sub handle {
             }
         }
         return _response(200, 'ok', headers => [
-            ['X-User', $claims->{sub}], ['X-Roles', join(',', @{ $claims->{roles} // [] })],
+            ['X-User', $claims->{sub}], ['X-Roles', join(',', @{ $claims->{roles} // [] })], @set_cookie,
         ]);
     }
     return _response(404, 'not found');

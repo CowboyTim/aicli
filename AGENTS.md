@@ -276,6 +276,10 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   key in the volume `aicli-auth`, made at the first start) with `sub`, `roles` (the groups
   `aicli-*` of the account), `iat`, `exp`. `GET /auth/verify[?role=R]` is nginx's `auth_request`:
   200 with `X-User` and `X-Roles`, 401 without a valid token, 403 without the role.
+  Sessions: a token lasts an hour (AI_AUTH_LIFETIME); a request in its second half gets a new
+  token (`Set-Cookie`, the roles read again); a session (`sid`, every token of one login) ends a
+  month after its login (AI_AUTH_SESSION_MAX). Logout revokes the session; `user del` and
+  `user passwd` revoke the user's sessions. The revocation list is `revoked.json` in the volume.
   nginx serves the login page (`ai/ui/login.html`, public, with `ai/ui/theme.css`, mounted read-only
   at `/etc/nginx/ui`) and sends every other page through `auth_request` (`/_gate`): the agent gets
   `X-Aicli-Gate` (AI_GATE_SECRET, made by deploy.sh, shared with nginx) and `X-Aicli-User`. The
