@@ -283,7 +283,9 @@ sub _broker_ask {
 # the projects, each with the state of its pod, from the broker's list
 sub _pods_data {
     my ($r) = @_;
-    my %pod = map {(substr($_->{name}, 6) => $_->{status} // '')} @{$r->{pods} // []}; # aicli-<project>
+    # the panel shows the base pods (aicli-base-<project>): the basic tools of a project
+    my %pod = map {(substr($_->{name}, length('aicli-base-')) => $_->{status} // '')}
+        grep {($_->{name} // '') =~ m/\Aaicli-base-/} @{$r->{pods} // []};
     return {
         ok       => $r->{ok} ? JSON::XS::true() : JSON::XS::false(),
         error    => $r->{error} // '',

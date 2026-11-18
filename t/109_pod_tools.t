@@ -38,7 +38,7 @@ my $engine = "$base/engine.sock";
 my $epid = fork() // die "fork: $!";
 if (!$epid) {
     my $srv = IO::Socket::UNIX->new(Local => $engine, Type => Socket::SOCK_STREAM(), Listen => 5) or POSIX::_exit(1);
-    my %pods = ('aicli-alpha' => 1);
+    my %pods = ('aicli-base-alpha' => 1);
     while (my $c = $srv->accept) {
         my $buf = '';
         while ($buf !~ m/\r\n\r\n/) { my $n = sysread($c, my $x, 4096); last unless $n; $buf .= $x }
@@ -76,14 +76,14 @@ $::ORIG_ENV{AI_BROKER_SOCKET} = $bsock;
 $ai::WORKSPACE = "$root/alpha";
 
 my $out = tools::bash_7c48(['echo hi']);
-like($out, qr/ran: exec --workdir \/work aicli-alpha-dev bash -c echo hi/, "bash runs in the dev container of the project, as bash -c");
+like($out, qr/ran: exec --workdir \/work aicli-base-alpha-dev bash -c echo hi/, "bash runs in the dev container of the project, as bash -c");
 
 my $ok = eval { tools::bash_7c48(['fail']); 1 };
 ok(!$ok, "a command that fails is a tool error");
 like($@, qr/exit code: 3/, "with the exit code of the command");
 
 $out = tools::grep_6629(["$root/alpha/src", 'needle']);
-like($out, qr/ran: exec --workdir \/work aicli-alpha-dev grep -rn -e needle -- src\n/, "grep: the path is the pod's, relative to the project");
+like($out, qr/ran: exec --workdir \/work aicli-base-alpha-dev grep -rn -e needle -- src\n/, "grep: the path is the pod's, relative to the project");
 
 # the process is in its workspace, as a worker is
 chdir("$root/alpha/src");
@@ -99,8 +99,8 @@ ok(!$ok, "a workspace that is no project is refused");
 like($@, qr/not one/, "and says so");
 $ai::WORKSPACE = "$root/loose"; # a project whose pod is not open
 $ok = eval { tools::bash_7c48(['echo']); 1 };
-ok(!$ok, "a project without an open pod is refused");
-like($@, qr/not open/, "and says so");
+ok(!$ok, "a call on a project whose pod is closed tries to open it first");
+like($@, qr/could not be pulled/, "here the engine has no image to open it with, so the call says so");
 
 $ai::WORKSPACE = "$root/alpha";
 $ok = eval { tools::grep_6629(["/etc/passwd", 'root']); 1 };

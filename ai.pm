@@ -4828,29 +4828,40 @@ EOb
         available => sub {$ai::IN_AGENT ? 0 : 1},
     },
     pods => {
-        description => "list the projects under the root: which of them has its dev pod open, how many pods may be open at once, and the images a pod can use, with a note each. A pod is a container with the project's files, where bash, perl and grep of a session in that project run. Pods are closed by themselves when they are not used for a while. Use it before pod_open",
+        description => "list the projects under the root with which of their pods are open, how many pods may be open at once, and the kinds of pod: base runs the basic tools (bash, perl, grep), the others are toolchains, each with the programs it runs and a note. A pod is a container with the project's files. A pod opens by itself on its first use and is closed when it is not used for a while. Use it before pod_run",
         syntax => "///PODS_4b1e",
         properties  => {},
         required => [],
         available => sub {pod_tools_on()},
     },
     pod_open => {
-        description => "start the dev pod of a project (its name as pods lists it), so that bash, perl and grep of a session on that project run there. The image is optional: the first image of pods is the default. Opening a pod takes a moment",
-        syntax => "///POD_OPEN_9d52+EO_7f31+EO_0c8d\n{{project}}\nEO_7f31[LENGTH({{project}})]\n{{image}}\nEO_0c8d[LENGTH({{image}})]\nPOD_OPEN_9d52",
+        description => "start the pod of a kind (a name of pods; base when empty) for a project (its name as pods lists it). Pods also open by themselves on their first use, so this is for keeping one open or checking it. Opening a pod takes a moment",
+        syntax => "///POD_OPEN_9d52+EO_7f31+EO_0c8d\n{{project}}\nEO_7f31[LENGTH({{project}})]\n{{pod}}\nEO_0c8d[LENGTH({{pod}})]\nPOD_OPEN_9d52",
         properties  => {
             "project" => {type => "string", description => "The name of the project, as pods lists it"},
-            "image" => {type => "string", description => "An image of pods; empty for the default"},
+            "pod" => {type => "string", description => "The kind of pod, as pods lists it; empty for base"},
         },
         required => ["project"],
         available => sub {pod_tools_on()},
     },
     pod_close => {
-        description => "stop and remove the dev pod of a project (its name as pods lists it). Its files are kept; a session that works in that project needs pod_open again",
-        syntax => "///POD_CLOSE_c03a+EO_3d6e\n{{project}}\nEO_3d6e[LENGTH({{project}})]\nPOD_CLOSE_c03a",
+        description => "stop and remove a pod of a kind (a name of pods; base when empty) of a project (its name as pods lists it). The project's files are kept; the pod opens again on its next use, or with pod_open",
+        syntax => "///POD_CLOSE_c03a+EO_3d6e+EO_8b21\n{{project}}\nEO_3d6e[LENGTH({{project}})]\n{{pod}}\nEO_8b21[LENGTH({{pod}})]\nPOD_CLOSE_c03a",
         properties  => {
             "project" => {type => "string", description => "The name of the project, as pods lists it"},
+            "pod" => {type => "string", description => "The kind of pod, as pods lists it; empty for base"},
         },
         required => ["project"],
+        available => sub {pod_tools_on()},
+    },
+    pod_run => {
+        description => "run one program in a pod of the session's project, for a toolchain: the pod is a name of pods, and the program must be one that pod lists there (node in the node pod, for example). The command is the program and its arguments, split on spaces: no quotes and no shell. The basic tools (bash, perl, grep) do not need this: they run in the base pod by themselves",
+        syntax => "///POD_RUN_5a7e+EO_c4d1+EO_9e60\n{{pod}}\nEO_c4d1[LENGTH({{pod}})]\n{{command}}\nEO_9e60[LENGTH({{command}})]\nPOD_RUN_5a7e",
+        properties  => {
+            "pod" => {type => "string", description => "The kind of pod, as pods lists it"},
+            "command" => {type => "string", description => "The program and its arguments, separated by spaces"},
+        },
+        required => ["pod", "command"],
         available => sub {pod_tools_on()},
     },
     devel => {
@@ -5101,9 +5112,9 @@ sub _pod_path {
 # the program in the pod of a project, through the broker's socket; its output and
 # exit code are the tool's, as a local child's would be
 sub _pod_run {
-    my ($project, @argv) = @_;
+    my ($project, $kind, @argv) = @_;
     my %opts = $argv[0] eq 'grep' ? (exit_ok => [1]) : (); # grep: 1 is no match, not an error
-    return _broker_child({op => 'exec', project => $project, argv => [@argv]}, sub {
+    return _broker_child({op => 'exec', project => $project, pod => $kind, argv => [@argv]}, sub {
         my ($answer) = @_;
         print MIME::Base64::decode_base64($answer->{output} // '');
         return $answer->{exit} // 1;
@@ -5170,44 +5181,67 @@ sub pods_4b1e {
     return _broker_child({op => 'projects'}, sub {
         my ($a) = @_;
         my @lines = ("projects: ".scalar(@{$a->{projects}})." under the root, ".$a->{open_count}." of $a->{max_pods} pods open");
-        push @lines, map {sprintf("  %s  %s%s", $_->{name}, $_->{open} ? 'open' : 'closed', $_->{name} eq $here ? '  (this session\'s project)' : '')} @{$a->{projects}};
-        push @lines, "images a pod can use (pod_open takes one as its second argument, the first is the default):";
-        push @lines, map {"  $_->{name}".($_->{note} ne '' ? "  $_->{note}" : '')} @{$a->{images}};
+        for my $p (@{$a->{projects}}) {
+            my $state = join(', ', map {"$_ ".($p->{pods}{$_} ? 'open' : 'closed')} sort keys %{$p->{pods}});
+            push @lines, sprintf("  %s  %s%s", $p->{name}, $state, $p->{name} eq $here ? '  (this session\'s project)' : '');
+        }
+        push @lines, "pods (a call opens its pod when it is closed; pod_run and pod_open take one of these names):";
+        push @lines, map {"  $_->{name}  ".join(' ', @{$_->{programs}}).($_->{note} ne '' ? "  ($_->{note})" : '')} @{$a->{pods}};
         print join("\n", @lines)."\n";
         return 0;
     });
 }
 
-# pod_open: start the dev pod of a project (bash, perl and grep of a session in it run there)
+# the pod kind a tool was given (a name of pods); base when none
+sub _kind_arg {
+    my ($t_args, $i) = @_;
+    my $kind = utils::trim($t_args->[$i] // '');
+    return length($kind) ? $kind : 'base';
+}
+
+# pod_open: start the pod of a project of a kind (the basic tools are base)
 sub pod_open_9d52 {
     my ($t_args) = @_;
     my $project = _project_arg($t_args);
-    my $image = utils::trim($t_args->[1] // '');
-    my $req = {op => 'open', project => $project};
-    $req->{image} = $image if length $image;
-    return _broker_child($req, sub {
+    my $kind = _kind_arg($t_args, 1);
+    return _broker_child({op => 'open', project => $project, pod => $kind}, sub {
         my ($a) = @_;
-        print "pod of $project is open".($a->{created} ? " (made now)" : " (it was open)")."\n";
+        print "$kind pod of $project is open".($a->{created} ? " (made now)" : " (it was open)")."\n";
         return 0;
     });
 }
 
-# pod_close: stop and remove the pod of a project; a session that works in it needs it open again
+# pod_close: stop and remove the pod of a project of a kind; a session that works in
+# its project's base pod needs it open again
 sub pod_close_c03a {
     my ($t_args) = @_;
     my $project = _project_arg($t_args);
+    my $kind = _kind_arg($t_args, 1);
     my $here = _session_project() // '';
-    return _broker_child({op => 'close', project => $project}, sub {
-        my $note = $project eq $here ? "; this session's bash, perl and grep need it open again (pod_open)" : '';
-        print "pod of $project is closed$note\n";
+    return _broker_child({op => 'close', project => $project, pod => $kind}, sub {
+        my $note = ($project eq $here and $kind eq 'base') ? "; this session's bash, perl and grep need it open again" : '';
+        print "$kind pod of $project is closed$note\n";
         return 0;
     });
+}
+
+# pod_run: one program in the pod of a kind, in the session's project. The command is
+# split on spaces (no quotes, no shell); the broker allows only the programs the kind lists
+sub pod_run_5a7e {
+    my ($t_args) = @_;
+    my $kind = utils::trim($t_args->[0] // '');
+    die "a pod kind is wanted (see pods)\n" unless length $kind;
+    my @argv = split ' ', ($t_args->[1] // '');
+    die "a command is wanted: the program and its arguments\n" unless @argv;
+    my $project = pod_for_tools();
+    die "the pod tools are off here\n" unless defined $project;
+    return _pod_run($project, $kind, @argv);
 }
 
 sub bash_7c48 {
     my ($t_args) = @_;
     if (defined(my $project = pod_for_tools())) {
-        return _pod_run($project, 'bash', '-c', $t_args->[0] // '');
+        return _pod_run($project, 'base', 'bash', '-c', $t_args->[0] // '');
     }
     utils::load_cpan("File::Temp");
     my ($fh, $fn) = File::Temp::tempfile("aicli_bash_XXXXXXXX", DIR => ai::tmpdir());
@@ -5241,7 +5275,7 @@ sub perl_d8d2 {
     die "need an actual perl program, size=0\n" unless length($code // "");
     if (defined(my $project = pod_for_tools())) {
         # in the pod the program is the sandbox: no Safe compartment here
-        return _pod_run($project, 'perl', '-e', $code);
+        return _pod_run($project, 'base', 'perl', '-e', $code);
     }
     my $safe = $::ORIG_ENV{AI_PERL_SAFE};
     utils::load_cpan("Safe") if $safe;
@@ -6123,7 +6157,7 @@ sub grep_6629 {
     my $pattern = $t_args->[1];
     die "not enough properties\n" unless length($t_args->[0] // '') and length($pattern // "");
     if (defined(my $project = pod_for_tools())) {
-        return _pod_run($project, 'grep', '-rn', '-e', $pattern, '--', _pod_path($t_args->[0]));
+        return _pod_run($project, 'base', 'grep', '-rn', '-e', $pattern, '--', _pod_path($t_args->[0]));
     }
     my $path = _path($t_args->[0]);
     return _run(sub {

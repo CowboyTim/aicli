@@ -4,18 +4,23 @@
 # socket of the host mounted; the agent talks to it over a Unix socket in a volume
 # that only the agent and the broker share. A request is one JSON line, the answer
 # one JSON line:
-#   {"op":"open","project":"alpha"}   start the pod of the project (image optional)
-#   {"op":"close","project":"alpha"}  stop and remove it
-#   {"op":"list"}                     the project pods
-# Nothing else is done. What a request names reaches the engine only as the
-# project's name (a directory directly under the root), its host path (under the
-# host root), an image of the allowlist, and the limits of the config: never a
-# privileged mode, a host network, a socket, or a path outside the root.
+#   {"op":"open","project":"alpha","pod":"node"}   start the pod of a kind (base by default)
+#   {"op":"close","project":"alpha","pod":"node"}  stop and remove it
+#   {"op":"list"}                                  the pods the engine has
+#   {"op":"projects"}                              the projects, their pods, the kinds
+#   {"op":"exec","project":"alpha","pod":"base","argv":["grep","-rn","x","."]}
+# A pod kind is a name of the config ("pods": image, programs, note): base for the
+# basic tools (bash, perl, grep), and others for a toolchain (node: node, npm, npx).
+# An exec runs only a program its kind lists, and opens the pod first when it is
+# closed. Nothing else is done. What a request names reaches the engine only as the
+# project's name (a directory directly under the root), its pod kind (of the config),
+# and the limits of the config: never a privileged mode, a host network, a socket,
+# a path outside the root, or an image the config does not name.
 #
 # Usage:
-#   broker.pl                 serve (AI_BROKER_CONFIG, a JSON file)
-#   broker.pl open NAME       ask a running broker (AI_BROKER_SOCKET), print the answer
-#   broker.pl close NAME | list
+#   broker.pl                      serve (AI_BROKER_CONFIG, a JSON file)
+#   broker.pl open NAME [KIND]     ask a running broker (AI_BROKER_SOCKET), print the answer
+#   broker.pl close NAME [KIND] | list
 
 use strict; use warnings;
 use IO::Socket::UNIX ();
@@ -47,19 +52,42 @@ sub new {
         root      => $c{root} // '/projects',
         host_root => $c{host_root},
         engine    => $c{engine} // '/run/engine/podman.sock',
-        images    => [ref($c{images}) eq 'ARRAY' ? @{$c{images}} : ()],
+        pods      => _pods_config(\%c),
         memory    => _bytes($c{memory} // '2g'),
         pids      => $c{pids} // 512,
         userns    => $c{userns} // 'keep-id',
         socket    => $c{socket} // '/run/aicli-broker/broker.sock',
         remote    => [ref($c{remote}) eq 'ARRAY' ? @{$c{remote}} : ('podman-remote')],
-        max_pods  => $c{max_pods} // 4,                              # open pods at once
+        max_pods  => $c{max_pods} // 4,                              # open pods at once, all kinds
         idle      => ($c{idle_minutes} // 30) * 60,                  # seconds unused before a close
-        notes     => ref($c{image_notes}) eq 'HASH' ? $c{image_notes} : {}, # image => one line for the model
-        last      => {},                                             # project => time of its last open or exec
+        tls_verify => $c{tls_verify} // 1,                           # the registry's certificate is checked
+        last      => {},                                             # "kind/project" => time of its last open or exec
     }, $class;
-    die "broker: no image is allowed (images in the config)\n" unless @{$self->{images}};
     return $self;
+}
+
+# the pod kinds of the config: kind => {image, programs, list, note}. Without "pods"
+# the one kind is base, with the first image and the basic programs (older configs).
+sub _pods_config {
+    my ($c) = @_;
+    my %pods;
+    if (ref($c->{pods}) eq 'HASH') {
+        for my $kind (sort keys %{$c->{pods}}) {
+            die "broker: a pod kind is a short lower-case name, not '$kind'\n" unless $kind =~ m/\A[a-z][a-z0-9]{0,15}\z/;
+            my $p = $c->{pods}{$kind};
+            die "broker: pod $kind needs an image\n" unless ref($p) eq 'HASH' and length($p->{image} // '');
+            my @programs = ref($p->{programs}) eq 'ARRAY' ? @{$p->{programs}} : ();
+            die "broker: pod $kind needs its programs\n" unless @programs;
+            $pods{$kind} = {image => $p->{image}, list => [@programs], programs => {map {($_ => 1)} @programs},
+                note => $p->{note} // ''};
+        }
+    } elsif (ref($c->{images}) eq 'ARRAY' and @{$c->{images}}) {
+        my @basic = qw(bash perl grep);
+        $pods{base} = {image => $c->{images}[0], list => [@basic], programs => {map {($_ => 1)} @basic},
+            note => ref($c->{image_notes}) eq 'HASH' ? ($c->{image_notes}{$c->{images}[0]} // '') : ''};
+    }
+    die "broker: no pod is configured (pods in the config)\n" unless %pods;
+    return \%pods;
 }
 
 # 2g, 512m, 4096k or bytes
@@ -71,9 +99,15 @@ sub _bytes {
     return $n * $m{lc $u};
 }
 
-# the programs a request may run in a project's pod (no shell: argv is a list)
-our %RUNNABLE = map {$_ => 1} qw(bash perl grep);
-our $EXEC_MAX = 1024 * 1024; # bytes of output kept
+# the output of a program run in a pod (no shell: argv is a list), at most this many bytes
+our $EXEC_MAX = 1024 * 1024;
+
+# the escaping of a path segment or a query value (an image reference has / and :)
+sub _escape {
+    my ($s) = @_;
+    $s =~ s/([^A-Za-z0-9._~-])/sprintf('%%%02X', ord($1))/ge;
+    return $s;
+}
 
 # the answer to one request (a JSON text), as a hash; every request is logged
 sub handle {
@@ -110,21 +144,26 @@ sub project_name {
     return $name;
 }
 
-sub _pod_name { return "aicli-$_[0]" }
+# the engine's name of a project's pod of a kind: aicli-<kind>-<project> (a kind has no dash)
+sub _pod_name { my ($kind, $name) = @_; return "aicli-$kind-$name" }
 
 sub _open {
     my ($self, $req) = @_;
     my $name = $self->project_name($req->{project})
         or return {ok => JSON::XS::false(), error => "no such project"};
-    my $image = $req->{image} // $self->{images}[0];
-    return {ok => JSON::XS::false(), error => "that image is not allowed"}
-        unless grep {$_ eq $image} @{$self->{images}};
-    my $pod = _pod_name($name);
+    my $kind = $req->{pod} // 'base';
+    my $spec = $self->{pods}{$kind}
+        or return {ok => JSON::XS::false(), error => "no such pod: '$kind' (pods lists them)"};
+    my $key = "$kind/$name";
+    my $image = $spec->{image};
+    my $pod = _pod_name($kind, $name);
     my ($code, $pods) = $self->_engine('GET', '/libpod/pods/json');
     return $self->_failed("the engine did not list the pods", $code, $pods) unless $code == 200;
-    my %running = _running_projects($pods);
+    my %running = _running($pods);
     return {ok => JSON::XS::false(), error => "$self->{max_pods} pods are open already: close one first (projects lists them)"}
-        if !$running{$name} and keys(%running) >= $self->{max_pods};
+        if !$running{$key} and keys(%running) >= $self->{max_pods};
+    my $pulled = $self->_image($image);
+    return $pulled if $pulled;
     my %have = map {($_->{Name} // '') => 1} @{$self->_decoded($pods) // []};
     my $made = 0;
     if (!$have{$pod}) {
@@ -140,8 +179,22 @@ sub _open {
     $made = 1 if $code2 == 201;
     my ($c2, $b2) = $self->_engine('POST', "/libpod/pods/$pod/start");
     return $self->_failed("the pod could not be started", $c2, $b2) unless $c2 == 200 or $c2 == 304;
-    $self->{last}{$name} = time;
-    return {ok => JSON::XS::true(), project => $name, pod => $pod, created => $made ? JSON::XS::true() : JSON::XS::false()};
+    $self->{last}{$key} = time;
+    return {ok => JSON::XS::true(), project => $name, kind => $kind, pod => $pod,
+        created => $made ? JSON::XS::true() : JSON::XS::false()};
+}
+
+# the image of a pod: pulled from its registry when the engine does not have it yet
+# (a local registry or a remote one, as the reference says). undef when it is there.
+sub _image {
+    my ($self, $ref) = @_;
+    my ($code) = $self->_engine('GET', '/libpod/images/'._escape($ref).'/json');
+    return undef if $code == 200;
+    my $tls = $self->{tls_verify} ? 'true' : 'false';
+    my ($c, $body) = $self->_engine('POST', '/libpod/images/pull?reference='._escape($ref)."&tlsVerify=$tls");
+    return $self->_failed("the image $ref could not be pulled", $c, $body)
+        unless $c == 200 and ($body // '') !~ m/"error"/;
+    return undef;
 }
 
 # the container of a project: its directory is the only host path it gets, and
@@ -169,39 +222,49 @@ sub _close {
     my ($self, $req) = @_;
     my $name = $self->project_name($req->{project})
         or return {ok => JSON::XS::false(), error => "no such project"};
-    my $pod = _pod_name($name);
+    my $kind = $req->{pod} // 'base';
+    return {ok => JSON::XS::false(), error => "no such pod: '$kind' (pods lists them)"} unless $self->{pods}{$kind};
+    my $pod = _pod_name($kind, $name);
     my ($code, $body) = $self->_engine('POST', "/libpod/pods/$pod/stop");
     return $self->_failed("the pod could not be stopped", $code, $body) unless $code == 200 or $code == 304 or $code == 404;
     ($code, $body) = $self->_engine('DELETE', "/libpod/pods/$pod?force=true");
     return $self->_failed("the pod could not be removed", $code, $body) unless $code == 200 or $code == 404;
-    delete $self->{last}{$name};
-    return {ok => JSON::XS::true(), project => $name, pod => $pod};
+    delete $self->{last}{"$kind/$name"};
+    return {ok => JSON::XS::true(), project => $name, kind => $kind, pod => $pod};
 }
 
-# the projects under the root, which of them is open, the images a pod may use (with
-# their notes), and the cap: what the model reads to choose before it opens a pod
+# the projects under the root with their pods (open or closed), the pod kinds (with
+# their programs and notes), and the cap: what the model reads to choose before it opens a pod
 sub _projects {
     my ($self) = @_;
     my ($code, $body) = $self->_engine('GET', '/libpod/pods/json');
     return $self->_failed("the engine did not list the pods", $code, $body) unless $code == 200;
-    my %running = _running_projects($body);
+    my %running = _running($body);
     opendir(my $dh, $self->{root}) or return {ok => JSON::XS::false(), error => "the root cannot be read: $!"};
     my @names = sort grep {!m/\A\./} readdir($dh);
     closedir($dh);
-    my @projects = map {{name => $_, open => $running{$_} ? JSON::XS::true() : JSON::XS::false()}}
-        grep {defined $self->project_name($_)} @names;
-    my @images = map {{name => $_, note => $self->{notes}{$_} // ''}} @{$self->{images}};
-    return {ok => JSON::XS::true(), projects => \@projects, images => \@images,
+    my @projects;
+    for my $p (grep {defined $self->project_name($_)} @names) {
+        my %pods = map {($_ => ($running{"$_/$p"} ? JSON::XS::true() : JSON::XS::false()))} sort keys %{$self->{pods}};
+        push @projects, {name => $p, pods => \%pods};
+    }
+    my @kinds = map {{name => $_, programs => $self->{pods}{$_}{list}, note => $self->{pods}{$_}{note}}}
+        sort keys %{$self->{pods}};
+    return {ok => JSON::XS::true(), projects => \@projects, pods => \@kinds,
         open_count => scalar(keys %running), max_pods => $self->{max_pods}};
 }
 
-# the open projects (their pods are running) among the engine's pods, as a hash
-sub _running_projects {
+# the running pods among the engine's pods, as "kind/project" => 1
+sub _running {
     my ($body) = @_;
     my $list = eval { $JSON->decode($body // '[]') };
-    return map {substr($_->{Name}, length('aicli-')) => 1}
-        grep {($_->{Name} // '') =~ m/\Aaicli-/ and ($_->{Status} // '') eq 'Running'}
-        @{ref($list) eq 'ARRAY' ? $list : []};
+    my %run;
+    for my $p (ref($list) eq 'ARRAY' ? @$list : ()) {
+        next unless ($p->{Status} // '') eq 'Running';
+        next unless ($p->{Name} // '') =~ m/\Aaicli-([a-z][a-z0-9]{0,15})-(.+)\z/;
+        $run{"$1/$2"} = 1;
+    }
+    return %run;
 }
 
 # the pods nobody has used for the idle time are closed. A pod this process has not
@@ -211,12 +274,13 @@ sub _reap {
     my ($code, $body) = $self->_engine('GET', '/libpod/pods/json');
     return unless $code == 200;
     my $now = time;
-    my %running = _running_projects($body);
-    for my $name (sort keys %running) {
-        $self->{last}{$name} //= $now;
-        next if $now - $self->{last}{$name} < $self->{idle};
-        my $r = $self->_close({project => $name});
-        _log("idle: pod of $name closed".($r->{ok} ? '' : ": $r->{error}"));
+    my %running = _running($body);
+    for my $key (sort keys %running) {
+        my ($kind, $name) = split m{/}, $key, 2;
+        $self->{last}{$key} //= $now;
+        next if $now - $self->{last}{$key} < $self->{idle};
+        my $r = $self->_close({project => $name, pod => $kind});
+        _log("idle: pod $key closed".($r->{ok} ? '' : ": $r->{error}"));
     }
     return;
 }
@@ -238,24 +302,31 @@ sub _exec {
     my ($self, $req) = @_;
     my $name = $self->project_name($req->{project})
         or return {ok => JSON::XS::false(), error => "no such project"};
+    my $kind = $req->{pod} // 'base';
+    my $spec = $self->{pods}{$kind}
+        or return {ok => JSON::XS::false(), error => "no such pod: '$kind' (pods lists them)"};
     my $argv = $req->{argv};
     return {ok => JSON::XS::false(), error => "a list of the program and its arguments is wanted"}
         unless ref($argv) eq 'ARRAY' and @$argv and @$argv <= 8 and !grep {ref($_) or !defined($_)} @$argv;
-    return {ok => JSON::XS::false(), error => "that program is not allowed (bash, perl or grep)"}
-        unless $RUNNABLE{$argv->[0]};
+    return {ok => JSON::XS::false(), error => "that program is not in the $kind pod (its programs: ".join(', ', @{$spec->{list}}).")"}
+        unless $spec->{programs}{$argv->[0]};
     my $size = 0;
     $size += length($_) for @$argv;
     return {ok => JSON::XS::false(), error => "the command is too long"} if $size > 256 * 1024;
-    my $ctr = _pod_name($name).'-dev';
-    my ($code, $body) = $self->_engine('GET', "/libpod/containers/$ctr/json");
-    return {ok => JSON::XS::false(), error => "the project's pod is not open (open it with pod_open first)"} unless $code == 200;
-    my $state = $self->_decoded($body);
-    return {ok => JSON::XS::false(), error => "the project's dev container is not running"}
-        unless ref($state) eq 'HASH' and ref($state->{State}) eq 'HASH' and $state->{State}{Running};
-    _log("exec project=$name program=$argv->[0]");
-    $self->{last}{$name} = time;
+    my $ctr = _pod_name($kind, $name).'-dev';
+    my $state = $self->_container_state($ctr);
+    if (!$state or !$state->{State}{Running}) {
+        # a call opens its pod when it is closed (the cap applies, as for an open)
+        my $o = $self->_open({project => $name, pod => $kind});
+        return $o unless $o->{ok};
+        $state = $self->_container_state($ctr);
+    }
+    return {ok => JSON::XS::false(), error => "the $kind pod of the project is not running"}
+        unless $state and $state->{State}{Running};
+    _log("exec project=$name pod=$kind program=$argv->[0]");
+    $self->{last}{"$kind/$name"} = time;
     my ($out, $exit) = _capture([@{$self->{remote}}, 'exec', '--workdir', '/work', $ctr, @$argv], $EXEC_MAX, 120);
-    _log("exec project=$name program=$argv->[0] -> exit $exit");
+    _log("exec project=$name pod=$kind program=$argv->[0] -> exit $exit");
     return {ok => JSON::XS::true(), exit => $exit, output => MIME::Base64::encode_base64($out // '', '')};
 }
 
@@ -302,6 +373,15 @@ sub _failed {
 sub _decoded {
     my ($self, $text) = @_;
     return eval {$JSON->decode($text // '')};
+}
+
+# the engine's state of a container (its State hash), or undef when there is none
+sub _container_state {
+    my ($self, $ctr) = @_;
+    my ($code, $body) = $self->_engine('GET', "/libpod/containers/$ctr/json");
+    return undef unless $code == 200;
+    my $s = $self->_decoded($body);
+    return ref($s) eq 'HASH' && ref($s->{State}) eq 'HASH' ? $s : undef;
 }
 
 # One request to the engine, HTTP/1.1 over its Unix socket. Returns (code, body).
@@ -394,7 +474,7 @@ sub main {
     my $cmd = $args[0] // 'serve';
     if ($cmd =~ m/\A(?:open|close)\z/) {
         my $socket = $ENV{AI_BROKER_SOCKET} // '/run/aicli-broker/broker.sock';
-        my $r = ask($socket, {op => $cmd, project => $args[1] // ''});
+        my $r = ask($socket, {op => $cmd, project => $args[1] // '', pod => $args[2] // 'base'});
         print JSON::XS->new->canonical(1)->pretty->encode($r);
         return $r->{ok} ? 0 : 1;
     }
@@ -412,8 +492,9 @@ sub main {
     $cfg->{socket}    = $ENV{AI_BROKER_SOCKET}    if length($ENV{AI_BROKER_SOCKET} // '');
     $cfg->{engine}    = $ENV{AI_BROKER_ENGINE}    if length($ENV{AI_BROKER_ENGINE} // '');
     my $b = broker->new(%$cfg);
-    broker::_log(sprintf("starting: root=%s host_root=%s engine=%s images=%s memory=%s pids=%s",
-        $b->{root}, $b->{host_root}, $b->{engine}, join(',', @{$b->{images}}), $b->{memory}, $b->{pids}));
+    broker::_log(sprintf("starting: root=%s host_root=%s engine=%s pods=%s memory=%s pids=%s",
+        $b->{root}, $b->{host_root}, $b->{engine}, join(',', map {"$_=$b->{pods}{$_}{image}"} sort keys %{$b->{pods}}),
+        $b->{memory}, $b->{pids}));
     $b->serve();
     return 0;
 }

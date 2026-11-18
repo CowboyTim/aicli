@@ -32,7 +32,7 @@ mkdir "$root/beta" or die "mkdir: $!";
 $ai::ROOT = $root;
 
 # the list of projects comes from the root; the pods from the broker
-my $data = ui::_pods_data({ok => JSON::XS::true(), pods => [{name => 'aicli-alpha', status => 'Running'}]});
+my $data = ui::_pods_data({ok => JSON::XS::true(), pods => [{name => 'aicli-base-alpha', status => 'Running'}]});
 is_deeply([map {[$_->{name}, $_->{status}, $_->{open} ? 1 : 0]} @{$data->{projects}}],
     [['alpha', 'Running', 1], ['beta', 'not started', 0]],
     "the projects with the state of their pods");
@@ -56,7 +56,11 @@ if (!$epid) {
         my ($method, $path) = $head =~ m{\A(\S+) (\S+)};
         $path =~ s{\A/v[0-9.]+}{};
         my ($code, $resp) = (404, '{"cause":"not faked"}');
-        if ($method eq 'GET' and $path eq '/libpod/pods/json') {
+        if ($method eq "GET" and $path =~ m{\A/libpod/images/}) {
+            ($code, $resp) = (200, "{}"); # the image is there
+        } elsif ($method eq "POST" and $path =~ m{\A/libpod/images/pull}) {
+            ($code, $resp) = (200, "{}");
+        } elsif ($method eq "GET" and $path eq "/libpod/pods/json") {
             ($code, $resp) = (200, $J->encode([map {{Name => $_, Status => 'Running'}} sort keys %pods]));
         } elsif ($method eq 'POST' and $path eq '/libpod/pods/create') {
             $pods{$J->decode($body)->{name}} = 1; ($code, $resp) = (201, '{}');
@@ -95,7 +99,7 @@ my @got;
 my ($broker_ev) = grep {$_->[0] eq 'broker'} @got;
 ok($broker_ev, "the answer of the broker comes as an event");
 ok($broker_ev->[1]{ok}, "open alpha is done");
-is($broker_ev->[1]{pod}, 'aicli-alpha', "and names the pod");
+is($broker_ev->[1]{pod}, 'aicli-base-alpha', "and names the pod");
 my ($pods_ev) = grep {$_->[0] eq 'pods'} @got;
 ok($pods_ev && $pods_ev->[1]{available}, "then the pods are sent again, with the broker there");
 my ($alpha) = grep {$_->{name} eq 'alpha'} @{$pods_ev->[1]{projects}};

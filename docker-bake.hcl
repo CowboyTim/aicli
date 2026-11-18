@@ -47,3 +47,31 @@ target "image-ci" {
   cache-from = ["type=gha"]
   cache-to   = ["type=gha,mode=max"]
 }
+
+// The pods of the broker: images of a registry the broker pulls from (REGISTRY, a
+// local registry on the host by default; see README.md, "The pods").
+variable "REGISTRY" {
+  default = "localhost:5000"
+}
+
+group "pods" {
+  targets = ["pod-base", "pod-node"]
+}
+
+// the base pod: bash, perl and grep, every project has it
+target "pod-base" {
+  context    = "pods"
+  dockerfile = "base.Dockerfile"
+  tags       = ["${REGISTRY}/aicli/pod-base:${TAG}"]
+  platforms  = split(",", PLATFORMS)
+  output     = ["type=registry"]
+}
+
+// the node pod: node, npm and npx
+target "pod-node" {
+  context    = "pods"
+  dockerfile = "node.Dockerfile"
+  tags       = ["${REGISTRY}/aicli/pod-node:${TAG}"]
+  platforms  = split(",", PLATFORMS)
+  output     = ["type=registry"]
+}

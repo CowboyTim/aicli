@@ -67,7 +67,11 @@ if (!$epid) {
         $path =~ s{\A/v[0-9.]+}{}; # the version prefix of the libpod paths
         if (open(my $r, '>>', $rec)) { print {$r} $J->encode({method => $method, path => $path, body => $body})."\n"; close $r }
         my ($code, $resp);
-        if ($method eq 'GET' and $path eq '/libpod/pods/json') {
+        if ($method eq "GET" and $path =~ m{\A/libpod/images/}) {
+            ($code, $resp) = (200, "{}"); # every image is there (the fake has no registry)
+        } elsif ($method eq "POST" and $path =~ m{\A/libpod/images/pull}) {
+            ($code, $resp) = (200, "{}");
+        } elsif ($method eq "GET" and $path eq "/libpod/pods/json") {
             ($code, $resp) = (200, $J->encode([map {{Name => $_, Status => 'Created'}} sort keys %pods]));
         } elsif ($method eq 'POST' and $path eq '/libpod/pods/create') {
             my $n = eval {$J->decode($body)->{name}};
@@ -129,8 +133,9 @@ for my $bad ('../beta', '.hidden', 'alpha/src', 'notes.txt', 'link', 'no-such', 
 }
 
 clear_records();
-$r = $b->handle($J->encode({op => 'open', project => 'alpha', image => 'docker.io/evil:latest'}));
-ok(!$r->{ok}, "an image that is not allowed is refused");
+$r = $b->handle($J->encode({op => 'open', project => 'alpha', pod => 'nosuch'}));
+ok(!$r->{ok}, "a pod kind the config does not name is refused");
+like($r->{error}, qr/no such pod: 'nosuch'/, "and says so");
 is(nrec(), 0, "and the engine is not asked for it");
 
 # --- open, reopen, list, close -----------------------------------------------
@@ -138,16 +143,17 @@ is(nrec(), 0, "and the engine is not asked for it");
 clear_records();
 $r = $b->handle($J->encode({op => 'open', project => 'alpha'}));
 ok($r->{ok}, "open alpha");
-is($r->{pod}, 'aicli-alpha', "its pod is named for it");
+is($r->{pod}, 'aicli-base-alpha', "its pod is named for it");
 ok($r->{created}, "and it was made");
 my @rec = records();
-is_deeply([map {"$_->{method} $_->{path}"} @rec],
-    ['GET /libpod/pods/json', 'POST /libpod/pods/create', 'POST /libpod/containers/create', 'POST /libpod/pods/aicli-alpha/start'],
-    "the calls: list, make the pod, make the container, start the pod");
+is_deeply([grep {!m{ /libpod/images/}} map {"$_->{method} $_->{path}"} @rec],
+    ['GET /libpod/pods/json', 'POST /libpod/pods/create', 'POST /libpod/containers/create', 'POST /libpod/pods/aicli-base-alpha/start'],
+    "the calls: list, make the pod, make the container, start the pod (the image is looked up first)");
+ok((grep {m{GET /libpod/images/}} map {"$_->{method} $_->{path}"} @rec), "the image of the pod is looked up");
 
 my ($spec) = grep {$_->{path} eq '/libpod/containers/create'} @rec;
 my $s = $spec->{body} ? $J->decode($spec->{body}) : {};
-is($s->{pod}, 'aicli-alpha', "the container is in the pod");
+is($s->{pod}, 'aicli-base-alpha', "the container is in the pod");
 is(scalar(@{$s->{mounts}}), 1, "one mount");
 is($s->{mounts}[0]{source}, '/host/projects/alpha', "the project's directory on the host, and only it");
 is($s->{mounts}[0]{destination}, '/work', "it is /work inside");
@@ -164,20 +170,20 @@ clear_records();
 $r = $b->handle($J->encode({op => 'open', project => 'alpha'}));
 ok($r->{ok}, "open alpha again");
 ok(!$r->{created}, "it is not made twice");
-is_deeply([map {"$_->{method} $_->{path}"} records()],
-    ['GET /libpod/pods/json', 'POST /libpod/containers/create', 'POST /libpod/pods/aicli-alpha/start'],
+is_deeply([grep {!m{ /libpod/images/}} map {"$_->{method} $_->{path}"} records()],
+    ['GET /libpod/pods/json', 'POST /libpod/containers/create', 'POST /libpod/pods/aicli-base-alpha/start'],
     "the pod is kept, the container is asked for (it is there already), the pod is started");
 
 $r = $b->handle($J->encode({op => 'open', project => 'beta'}));
 ok($r->{ok}, "open beta as well");
 
 $r = $b->handle('{"op":"list"}');
-is_deeply([sort map {$_->{name}} @{$r->{pods}}], ['aicli-alpha', 'aicli-beta'], "list: the project pods");
+is_deeply([sort map {$_->{name}} @{$r->{pods}}], ['aicli-base-alpha', 'aicli-base-beta'], "list: the project pods");
 
 $r = $b->handle($J->encode({op => 'close', project => 'alpha'}));
 ok($r->{ok}, "close alpha");
 $r = $b->handle('{"op":"list"}');
-is_deeply([map {$_->{name}} @{$r->{pods}}], ['aicli-beta'], "alpha is gone from the list");
+is_deeply([map {$_->{name}} @{$r->{pods}}], ['aicli-base-beta'], "alpha is gone from the list");
 
 # --- the engine not there -----------------------------------------------------
 
@@ -260,25 +266,31 @@ waitpid($bpid, 0);
 {
     my $execb = broker->new(
         root => $root, host_root => '/host/projects', engine => $engine_sock,
-        images => ['x'], remote => [$^X, '-e', 'print "ran: @ARGV\n"; exit($ARGV[-1] eq "fail" ? 3 : 0)', '--'],
+        pods => {base => {image => 'x', programs => [qw(bash perl grep)]}, node => {image => 'y', programs => [qw(node npm npx)]}},
+        remote => [$^X, '-e', 'print "ran: @ARGV\n"; exit($ARGV[-1] eq "fail" ? 3 : 0)', '--'],
     );
     $execb->handle($J->encode({op => 'open', project => 'alpha'}));
     my $r = $execb->handle($J->encode({op => 'exec', project => 'alpha', argv => ['bash', '-c', 'echo hi']}));
     ok($r->{ok}, "exec in an open project");
     is($r->{exit}, 0, "its exit code");
     my $text = MIME::Base64::decode_base64($r->{output});
-    like($text, qr/ran: exec --workdir \/work aicli-alpha-dev bash -c echo hi/, "the engine's client runs it in the dev container, in /work, with the program's argv");
+    like($text, qr/ran: exec --workdir \/work aicli-base-alpha-dev bash -c echo hi/, "the engine's client runs it in the dev container, in /work, with the program's argv");
     $r = $execb->handle($J->encode({op => 'exec', project => 'alpha', argv => ['bash', '-c', 'fail']}));
     is($r->{exit}, 3, "the exit code of the program comes back");
     $r = $execb->handle($J->encode({op => 'exec', project => 'alpha', argv => ['sh', '-c', 'rm -rf /']}));
     ok(!$r->{ok}, "a program that is not allowed is refused");
-    like($r->{error}, qr/not allowed/, "and says so");
+    like($r->{error}, qr/not in the base pod/, "and says so");
     $r = $execb->handle($J->encode({op => 'exec', project => 'alpha', argv => 'bash'}));
     ok(!$r->{ok}, "argv must be a list");
     mkdir "$root/gamma" unless -d "$root/gamma";
-    $r = $execb->handle($J->encode({op => 'exec', project => 'gamma', argv => ['bash']}));
-    ok(!$r->{ok}, "a project whose pod is not open is refused");
-    like($r->{error}, qr/not open/, "and says why");
+    $r = $execb->handle($J->encode({op => 'exec', project => 'gamma', argv => ['bash', '-c', 'echo']}));
+    ok($r->{ok}, "a call in a project whose pod is closed opens the pod first");
+    like(MIME::Base64::decode_base64($r->{output}), qr/ran: exec --workdir \/work aicli-base-gamma-dev bash/, "and runs there");
+    $r = $execb->handle($J->encode({op => 'exec', project => 'alpha', pod => 'node', argv => ['bash']}));
+    ok(!$r->{ok}, "a program the pod kind does not list is refused");
+    like($r->{error}, qr/not in the node pod \(its programs: node, npm, npx\)/, "and names the programs of that kind");
+    $r = $execb->handle($J->encode({op => 'exec', project => 'alpha', pod => 'base', argv => ['node', '-v']}));
+    ok(!$r->{ok}, "node is not a program of the base pod");
     $r = $execb->handle($J->encode({op => 'exec', project => '../x', argv => ['bash']}));
     ok(!$r->{ok}, "a bad project name is refused");
     $execb->handle($J->encode({op => 'close', project => 'alpha'}));

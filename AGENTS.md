@@ -234,11 +234,16 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
 - **broker.pl** – the broker: starts the dev pods of the projects through the
   rootless Podman engine (libpod API over its Unix socket), for the agents, and
   nothing else. Requests are JSON lines on its socket: `open`, `close`, `list`,
-  `projects` (the projects under the root with their open state, the images with their
-  notes, the cap: for the model's `pods` tool), `exec`. `open` refuses a new pod past
-  `max_pods` (open pods at once, not counting one already open); `_reap()` closes a pod
-  unused for `idle_minutes` (last open or exec, `$self->{last}`), once a minute from the
-  serve loop (a pod found open at a start counts from that start).
+  `projects` (the projects under the root with their pods' state, the kinds with their
+  programs and notes, the cap: for the model's `pods` tool), `exec`. A pod is a kind
+  (`pods` of `broker.json`: image, programs, note; `_pods_config()`, a kind is a short
+  lower-case name with no dash) and a project: engine name `aicli-<kind>-<project>`,
+  container `<pod>-dev`. `open` refuses a new pod past `max_pods` (all kinds, not counting
+  one already open) and pulls the image when the engine does not have it (`_image()`,
+  from the registry its reference names, `tls_verify`). `exec` checks the program against
+  its kind's list (`programs`), and opens the pod first when it is closed. `_reap()` closes
+  a pod unused for `idle_minutes` (last open or exec, `$self->{last}{"kind/project"}`), once
+  a minute from the serve loop (a pod found open at a start counts from that start).
   A project is a directory directly under the root (`project_name()`), its host
   path is `host_root/<name>` (podman binds it on the host, not in the broker's
   container). The container of a pod: one bind mount (`/work`), not privileged,
@@ -262,14 +267,17 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   tool error). The file tools (read, write, edit) still run here. `AI_POD_TOOLS=0` turns
   the pod off.
 - **The model's pod tools** (`ai.pm`, package `tools`, `pods_4b1e`, `pod_open_9d52`,
-  `pod_close_c03a`, `pod_tools_on`, `_broker_child`): the same socket as `_pod_run`
-  (`_broker_child` is the one request-in-a-child helper of both). `pods` lists the projects
-  (`op: projects`), `pod_open` asks `op: open` (with an optional image), `pod_close` asks
-  `op: close`. Available when `AI_POD_ROOT` is set and `AI_POD_TOOLS` is not off. A pod is
-  opened and closed only for a project under the root, with the broker's checks. Opening
-  a pod does not change the session's workspace: the workspace picks the pod for bash,
-  perl and grep, so they still need the session in a project. The web page's
-  pods panel is not refreshed by the model's calls (it updates when the page asks again).
+  `pod_close_c03a`, `pod_run_5a7e`, `pod_tools_on`, `_broker_child`, `_pod_run`): the same
+  socket for all (`_broker_child` is the one request-in-a-child helper). `bash`, `perl` and
+  `grep` are `_pod_run($project, 'base', ...)`: exec in the session's base pod. `pods` lists
+  the projects (`op: projects`), `pod_open` asks `op: open` (kind, default base), `pod_close`
+  asks `op: close`, `pod_run` execs a program of a kind in the session's project. Available
+  when `AI_POD_ROOT` is set and `AI_POD_TOOLS` is not off. The session's workspace still picks
+  the project; the kinds are the model's to choose. The web page's pods panel shows the base
+  pods only (`ui::_pods_data`) and is not refreshed by the model's calls.
+- **The pod images** (`pods/base.Dockerfile`, `pods/node.Dockerfile`, bake targets
+  `pod-base`, `pod-node` in the group `pods`): pushed to the registry `REGISTRY` (localhost:5000
+  by default) and pulled by the broker through Podman. The pod images carry no agent.
 - **The broker's `exec`** (`broker.pl`, `_exec`, `_capture`): only bash, perl and grep,
   in the dev container of an open project (`/work`), through `podman-remote` (the
   config's `remote`, `CONTAINER_HOST` in compose) with its output cut at 1 MB and a
@@ -601,7 +609,7 @@ Other APIs are reached through an OpenAI compatible gateway, such as LiteLLM or 
 | `t/89_context_thinking.t` | the reasoning setting, what the request says, the first request through compactions, `/context` |
 | `t/97_live.t` | a real model, only when `AI_LIVE_SERVER` is set (`AI_LIVE_MODEL`, optional `AI_LIVE_SEARXNG`): one answer, a native tool call, the thinking setting, search. Skipped otherwise |
 | `t/100_ui.t` | the web interface: routes, the token, origin check, body limits, the input queue, the event stream on socket pairs; the listen addresses (IPv4, IPv6, `::`), stop and start on the same port, TLS with a generated certificate (a https request, the Secure cookie), the state of the speech recognizer; then `ai.pl --ui` as a child, a message in and the streamed answer out, Ctrl-C |
-| `t/118_pod_control.t` | the model's pod tools: the projects (`projects`), the cap on open pods, an idle pod closed and one found open after a restart kept, `pods`, `pod_open` (image, already open, refusals), `pod_close` (the session's project noted), bash refused after its pod closed, through a real broker process (fake engine with containers) |
+| `t/118_pod_control.t` | the pod kinds (base, node): the projects and their pods, the cap across kinds, an idle pod closed and one found open after a restart kept, `pods`, `pod_open` (kind, already open, refusals), `pod_close` (the session's base pod noted), a closed base pod opened by a bash call, `pod_run` (node in its pod, a program of the base pod refused), through a real broker process (fake engine with containers and images) |
 | `t/109_pod_tools.t` | the tools of a project in its pod: bash, perl and grep through a real broker (fake engine, stand-in client): the program and its argv, the exit code, the pod's paths, a workspace that is no project or has no open pod refused, a path outside the project refused, AI_POD_TOOLS=0 runs them here |
 | `t/108_pods.t` | the pods of the web interface: the projects with their pod states, open and close through a real broker process (fake engine), the broker events and the list after them, no broker refused |
 | `t/107_broker.t` | the broker with a fake engine on a Unix socket: refused requests (not JSON, unknown ops, bad project names, links, files, images not allowed), the calls of open (list, pod, container, start), the spec (one mount, not privileged, no socket), reopen, list, close, no engine, the socket round trip, chunked answers |

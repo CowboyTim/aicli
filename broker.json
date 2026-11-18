@@ -2,9 +2,17 @@
   "root": "/projects",
   "engine": "/run/engine/podman.sock",
   "socket": "/run/aicli-broker/broker.sock",
-  "images": ["local/ai/aicli:latest"],
-  "image_notes": {
-    "local/ai/aicli:latest": "the dev image: the languages, ImageMagick and the common development tools"
+  "pods": {
+    "base": {
+      "image": "localhost:5000/aicli/pod-base:latest",
+      "programs": ["bash", "perl", "grep"],
+      "note": "the basic tools of every session: bash, perl and grep (Debian slim)"
+    },
+    "node": {
+      "image": "localhost:5000/aicli/pod-node:latest",
+      "programs": ["node", "npm", "npx"],
+      "note": "nodejs and npm, for nodejs projects only"
+    }
   },
   "max_pods": 4,
   "idle_minutes": 30,

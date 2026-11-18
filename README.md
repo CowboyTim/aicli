@@ -555,15 +555,51 @@ its tools work (the tool reports that otherwise). Each tool call starts a
 write, edit) still run in the agent's container, on the same mounted directory.
 `AI_POD_TOOLS=0` runs the tools in the agent's container again.
 
-The model opens and closes pods itself with three tools: `pods` (the projects, which
-are open, the images with a note each, the cap), `pod_open PROJECT [IMAGE]` and
-`pod_close PROJECT`. A session's `bash`, `perl` and `grep` still need its workspace to
-be a project whose pod is open. `broker.json` sets `max_pods` (at most that many pods
-open at once, 4 by default), `idle_minutes` (a pod unused for that long is closed, 30 by
-default, checked once a minute), and `image_notes` (one line per image, shown by `pods`).
+The model works with the pods through four tools: `pods` (the projects, which of their
+pods are open, the kinds of pod with their programs, the cap), `pod_open PROJECT [KIND]`,
+`pod_close PROJECT [KIND]` and `pod_run KIND COMMAND`. See "The pods" below.
 
 Host setup: install Podman, enable the user socket (`systemctl --user enable --now
 podman.socket`), and set `AI_PROJECTS`, `PODMAN_SOCKET`, `BROKER_UID`, `BROKER_GID`.
+
+## The pods
+
+A pod is a container with a project's files at `/work`, where a few programs run for
+the agent. There are kinds of pod, each one defined in `broker.json` (`pods`): the image
+(a registry reference), the programs it may run, and a note the model sees.
+
+- `base`: `bash`, `perl`, `grep`. The basic tools of every session, opened by the first
+  basic call. Built from `pods/base.Dockerfile` (Debian slim, no agent in it).
+- `node`: `node`, `npm`, `npx`, for nodejs projects only. Built from `pods/node.Dockerfile`.
+
+Other toolchains (ROCm, for example) are more kinds with their own image and programs,
+added to `broker.json`. A kind is a short lower-case name with no dash. A pod runs only
+the programs its kind lists: `pod_run node "npm test"` is allowed in the node pod, and
+`bash` in the node pod is refused. A call opens its pod when it is closed (the cap still
+applies). `max_pods` (4 by default) limits the open pods of all kinds, `idle_minutes`
+(30) closes a pod that has not been used for that long, checked once a minute.
+
+The images come from a registry the broker pulls from, so the build and the broker must
+share one. On the host, run a local registry and point the pod targets at it:
+
+```
+docker run -d --restart always -p 127.0.0.1:5000:5000 --name registry registry:2
+docker buildx bake pods          # pushes local/ai pod images to localhost:5000
+```
+
+Podman pulls from a plain-http registry only when it is listed as insecure: add to
+`~/.config/containers/registries.conf`:
+
+```
+[[registry]]
+location = "localhost:5000"
+insecure = true
+```
+
+A remote registry works the same way: set the image reference in `broker.json` (with
+`tls_verify` true, the default). Podman's own image store is what the broker uses, so
+an image built only with the Docker daemon is not visible to it until it is pushed to
+the registry.
 
 ## The public address (nginx, TLS)
 
