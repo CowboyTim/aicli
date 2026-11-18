@@ -61,6 +61,8 @@ services:
     environment:
       # the agent's web tools go through the proxy, its search is the searxng of this file
       AI_WEB_PROXY: http://proxy:3128
+      # the public name (nginx): the page prints its address, and the QR code is for it
+      AI_PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-}
       AI_SEARXNG_URL: http://searxng:8080
       AI_SEARXNG_PROXY: ""
       UID: ${BROKER_UID:-1000}

@@ -85,8 +85,12 @@ sub start {
               : $bind;
     my $phone_host = $phone =~ m/:/ ? "[$phone]" : $phone;
     my $phone_url = "$scheme://$phone_host:$port/?token=$token";
-    print STDERR "aicli web interface on the phone: $phone_url\n" if $phone ne $shown;
-    _qr($phone_url);
+    # behind nginx (compose sets AI_PUBLIC_DOMAIN): the public address is the one to open
+    my $public = $::ORIG_ENV{AI_PUBLIC_DOMAIN};
+    my $public_url = defined $public && length $public ? "https://$public/?token=$token" : undef;
+    print STDERR "aicli web interface (public): $public_url\n" if defined $public_url;
+    print STDERR "aicli web interface on the phone: $phone_url\n" if !defined $public_url and $phone ne $shown;
+    _qr($public_url // $phone_url);
     return $port;
 }
 
