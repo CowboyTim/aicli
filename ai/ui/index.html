@@ -83,6 +83,10 @@
   .answer li { margin: 0.15em 0; }
   .answer blockquote { margin: 0 0 0.7em; padding: 0 0 0 0.8em; border-left: 3px solid var(--line); color: var(--muted); }
   .answer hr { border: none; border-top: 1px solid var(--line); margin: 0.9em 0; }
+  .answer .table-wrap { overflow-x: auto; margin: 0 0 0.7em; max-width: 100%; }
+  .answer table { border-collapse: collapse; font-size: 0.95em; }
+  .answer th, .answer td { border: 1px solid var(--line); padding: 0.3em 0.6em; vertical-align: top; text-align: left; }
+  .answer th { font-weight: 600; }
   .answer pre { margin: 0 0 0.7em; padding: 8px 10px; background: var(--user-bg); border-radius: 6px; overflow-x: auto; white-space: pre; }
   .answer code { font-family: var(--mono); font-size: 0.92em; }
   .answer :not(pre) > code { background: var(--user-bg); padding: 0 0.3em; border-radius: 3px; }
@@ -227,7 +231,7 @@
   theme.addEventListener("change", function () { setTheme(theme.value); });
 
   // Markdown of an answer, as DOM nodes: never HTML from the text. Blocks:
-  // headings, paragraphs, lists, quotes, rules, fenced code. Inline: code, bold,
+  // headings, paragraphs, lists, tables, quotes, rules, fenced code. Inline: code, bold,
   // italic, links (http and https only). Anything else is plain text.
   function el(tag) { return document.createElement(tag); }
   function txt(s) { return document.createTextNode(s); }
@@ -252,6 +256,23 @@
   function startsBlock(l) {
     return RE_FENCE.test(l) || RE_HEAD.test(l) || RE_HR.test(l) || RE_QUOTE.test(l) || RE_ITEM.test(l);
   }
+  // a table: a row with pipes, and under it a delimiter row (| --- | :-: |)
+  var RE_TSEP = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+  function tableAt(lines, i) {
+    return i + 1 < lines.length && lines[i].indexOf("|") >= 0 && !RE_BLANK.test(lines[i]) &&
+      lines[i + 1].indexOf("|") >= 0 && RE_TSEP.test(lines[i + 1]);
+  }
+  // the cells of a row; \| is a pipe inside a cell
+  function cells(l) {
+    var s = l.trim();
+    if (s.charAt(0) === "|") { s = s.slice(1); }
+    if (s.slice(-1) === "|" && s.slice(-2) !== "\\|") { s = s.slice(0, -1); }
+    return s.split(/(?<!\\)\|/).map(function (c) { return c.trim().replace(/\\\|/g, "|"); });
+  }
+  function alignOf(c) {
+    var l = c.charAt(0) === ":", r = c.slice(-1) === ":";
+    return l && r ? "center" : r ? "right" : l ? "left" : "";
+  }
   function blocks(src, parent) {
     var lines = src.split("\n"), i = 0;
     while (i < lines.length) {
@@ -275,6 +296,37 @@
         continue;
       }
       if (RE_HR.test(line)) { parent.appendChild(el("hr")); i++; continue; }
+      if (tableAt(lines, i)) {
+        var aligns = cells(lines[i + 1]).map(alignOf);
+        var table = el("table"), thead = el("thead"), hrow = el("tr");
+        cells(lines[i]).forEach(function (c, k) {
+          var th = el("th");
+          th.style.textAlign = aligns[k] || "";
+          inline(c, th);
+          hrow.appendChild(th);
+        });
+        thead.appendChild(hrow);
+        table.appendChild(thead);
+        var tbody = el("tbody");
+        i += 2;
+        while (i < lines.length && !RE_BLANK.test(lines[i]) && lines[i].indexOf("|") >= 0) {
+          var row = el("tr");
+          cells(lines[i]).forEach(function (c, k) {
+            var td = el("td");
+            td.style.textAlign = aligns[k] || "";
+            inline(c, td);
+            row.appendChild(td);
+          });
+          tbody.appendChild(row);
+          i++;
+        }
+        table.appendChild(tbody);
+        var wrap = el("div");
+        wrap.className = "table-wrap";
+        wrap.appendChild(table);
+        parent.appendChild(wrap);
+        continue;
+      }
       if (RE_QUOTE.test(line)) {
         var q = [];
         while (i < lines.length && RE_QUOTE.test(lines[i])) { q.push(lines[i].replace(RE_QUOTE, "")); i++; }
@@ -306,7 +358,7 @@
       if (RE_BLANK.test(line)) { i++; continue; }
       // a paragraph: up to a blank line or the start of another block
       var para = [];
-      while (i < lines.length && !RE_BLANK.test(lines[i]) && !startsBlock(lines[i])) { para.push(lines[i]); i++; }
+      while (i < lines.length && !RE_BLANK.test(lines[i]) && !startsBlock(lines[i]) && !tableAt(lines, i)) { para.push(lines[i]); i++; }
       var p = el("p");
       para.forEach(function (l, k) {
         if (k) { p.appendChild(el("br")); }
