@@ -544,8 +544,13 @@
     current = null;
     if (d.more) { add("usage", "earlier messages of this session are not shown"); }
     (d.messages || []).forEach(function (m) {
-      if (m.role === "user") { add("user", m.text); }
-      else { var node = add("answer", ""); node.raw = m.text; drawAnswer(node); }
+      if (m.role === "user") { add("user", m.text); return; }
+      // the thinking of the answer (kept in the session's meta file), its usage as the tag
+      if (m.thinking) { thinkStart(); thinkAdd(m.thinking); thinkDone("thought"); }
+      var node = add("answer", "");
+      node.raw = m.text;
+      drawAnswer(node);
+      if (m.usage) { addTag(node, m.usage); }
     });
     window.scrollTo(0, document.body.scrollHeight);
   });
@@ -616,6 +621,14 @@
     think.count.textContent = " \u00b7 " + think.chars + " chars";
     window.scrollTo(0, document.body.scrollHeight);
   }
+  // a thinking block that is over already (the history): its label, no timing
+  function thinkDone(label) {
+    if (!think) { return; }
+    clearInterval(think.timer);
+    think.spin.textContent = "\u2713";
+    think.label.textContent = label;
+    think = null;
+  }
   function thinkEnd() {
     if (!think) { return; }
     clearInterval(think.timer);
@@ -667,10 +680,7 @@
         if (!r.ok) { return r.json().catch(function () { return {}; }).then(function (d) { add("error", d.error || "not taken out"); }); }
       }).catch(function () { add("error", "the chat does not answer"); });
   }
-  es.addEventListener("usage", function (e) {
-    var text = JSON.parse(e.data).text;
-    var answer = turnAnswer();
-    if (!answer) { add("usage", text); return; }
+  function addTag(answer, text) {
     var tag = el("div"), span = el("span"), btn = el("button");
     tag.className = "tag";
     span.textContent = text;
@@ -681,6 +691,12 @@
     tag.appendChild(span);
     tag.appendChild(btn);
     answer.appendChild(tag);
+  }
+  es.addEventListener("usage", function (e) {
+    var text = JSON.parse(e.data).text;
+    var answer = turnAnswer();
+    if (!answer) { add("usage", text); return; }
+    addTag(answer, text);
   });
   // a tool line or its result is a block of its own: the next text starts a new one
   es.addEventListener("tool", function (e) {

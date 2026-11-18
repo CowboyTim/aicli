@@ -361,15 +361,28 @@ our $HISTORY_MAX = 200;
 
 sub _history_data {
     my ($name) = @_;
-    my $file = "$ai::SESSIONS_DIR/".($name // '')."/chat";
+    my $dir = "$ai::SESSIONS_DIR/".($name // '');
+    my $file = "$dir/chat";
     my @all = (defined $name and -f $file) ? eval {ai::load_messages($file)} : ();
-    my @msgs = grep {ai::is_user_input($_) or (($_->{role} // '') eq 'assistant' and length($_->{content} // ''))} @all;
-    my $more = @msgs > $HISTORY_MAX ? 1 : 0;
-    splice(@msgs, 0, @msgs - $HISTORY_MAX) if $more;
+    my %meta = (defined $name and @all) ? ai::meta_of($dir, \@all) : ();
+    # the messages shown, by their index in the chat (the meta is by index)
+    my @shown = grep {
+        ai::is_user_input($all[$_]) or ((($all[$_]{role} // '') eq 'assistant') and length($all[$_]{content} // ''))
+    } 0 .. $#all;
+    my $more = @shown > $HISTORY_MAX ? 1 : 0;
+    splice(@shown, 0, @shown - $HISTORY_MAX) if $more;
     return {
         session  => $name // '',
         more     => $more ? \1 : \0,
-        messages => [map {{role => ($_->{role} eq 'user' ? 'user' : 'assistant'), text => $_->{content}}} @msgs],
+        messages => [map {
+            my $m = $all[$_];
+            my $out = {role => ($m->{role} eq 'user' ? 'user' : 'assistant'), text => $m->{content}};
+            if ($meta{$_}) {
+                $out->{thinking} = $meta{$_}{thinking} if length $meta{$_}{thinking};
+                $out->{usage} = $meta{$_}{usage} if length $meta{$_}{usage};
+            }
+            $out;
+        } @shown],
     };
 }
 

@@ -1514,6 +1514,7 @@ sub request_completion {
     $info->{t_end} = Time::HiRes::time();
     $info->{usage} = $st->{usage};
     $info->{timings} = $st->{timings};
+    $info->{reasoning} = $st->{reasoning}; # out of band: not in the answer, kept in the meta file
     $ended = 1;
     $tick = undef;
 
@@ -2001,6 +2002,60 @@ sub is_user_input {
 # Take the last $n exchanges out of the conversation: the last thing the user
 # said and all that followed. Only the end changes, what a cache has of the
 # start stays valid. Returns the removed messages, oldest first.
+# The meta file of a session: one JSON line per kept answer, with the thinking of the model
+# and the usage line of the request (what the page shows, never sent to the model). A line
+# names the index of its message in the chat and a hash of the answer: after a rewind or a
+# compaction the index may hold another message, and then the line is not used.
+sub meta_file { my ($dir) = @_; return "$dir/meta" }
+
+sub _answer_key {
+    my ($text) = @_;
+    require Digest::SHA;
+    return Digest::SHA::sha256_hex(to_bytes($text // ''));
+}
+
+# the thinking of an answer: its <think> blocks, and the reasoning the API sent apart
+sub thinking_of {
+    my ($resp, $info) = @_;
+    my $t = join('', $resp =~ m{<think>(.*?)</think>}sg);
+    $t .= $info->{reasoning} // '';
+    return $t;
+}
+
+sub record_meta {
+    my ($answer, $resp, $info, $usage) = @_;
+    my $dir = $AI_SESSION_DIR or return;
+    my @msgs = load_messages();
+    return unless @msgs;
+    my $index = $#msgs;
+    my $thinking = thinking_of($resp, $info);
+    return unless length($thinking) or length($usage // '');
+    my $line = $::JSON->encode({
+        i => $index, k => _answer_key($answer), thinking => $thinking, usage => $usage // '',
+    });
+    open(my $fh, '>>', meta_file($dir)) or do { log::error("cannot write the meta file: $!"); return };
+    print {$fh} "$line\n";
+    close $fh;
+    return;
+}
+
+# the meta of a session for its messages: index => {thinking, usage}, the lines that match
+sub meta_of {
+    my ($dir, $msgs) = @_;
+    my %meta;
+    my $file = meta_file($dir);
+    return %meta unless -f $file;
+    open(my $fh, '<', $file) or return %meta;
+    while (my $l = <$fh>) {
+        my $r = eval { $::JSON->decode($l) } or next;
+        my $m = $msgs->[$r->{i} // -1] or next;
+        next unless ($m->{role} // '') eq 'assistant' and _answer_key($m->{content}) eq ($r->{k} // '');
+        $meta{$r->{i}} = {thinking => $r->{thinking} // '', usage => $r->{usage} // ''};
+    }
+    close $fh;
+    return %meta;
+}
+
 sub rewind_chat {
     my ($n) = @_;
     my @msgs = load_messages();
@@ -2102,13 +2157,17 @@ sub chat_completion {
         $assistant{tool_calls} = [map {+{id => $_->{id}, type => 'function',
             function => {name => $_->{name}, arguments => $_->{arguments}}}} @$native]
             if @$native;
-        append_messages(\%assistant)
-            if length($answer) or @$native;
+        my $kept = 0;
+        if(length($answer) or @$native){
+            append_messages(\%assistant);
+            $kept = 1;
+        }
         if(!defined $err or length($resp)){
             my @u = record_usage(\@msgs, $resp, $info);
             status_info(out => $u[1], info => $info);
             # the footer has it all, the line is for when there is none
             my $usage = usage_line(@u, $info);
+            record_meta($answer, $resp, $info, $usage) if $kept;
             emit(usage => {text => $usage}); # the web page, as well as the terminal
             print "${colors::cyan_color}$usage${colors::reset_color}\n"
                 if ($::ORIG_ENV{AI_SHOW_USAGE} // ($TUI->bar() ? 0 : 1));

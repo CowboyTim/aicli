@@ -500,6 +500,11 @@ command, 1 to leave; a command line never reaches the LLM. `/retry` and
 
 ## Sessions
 
+`meta` (JSON lines, `record_meta()`, `meta_of()`): the thinking and the usage line of each kept
+answer, for the web page's history. Never in the chat messages (the model would get them). A line
+matches its message by index and by a hash of the answer, so a rewind or a compaction makes it
+unused without any clean-up.
+
 `$AI_DIR/sessions/<name>/` with `chat` (conversation), `prompt` + `template`
 (system prompt and the template it came from), `model`, `history` (readline,
 saved and loaded by `use_session()` when the session changes).
