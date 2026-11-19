@@ -192,6 +192,72 @@ sub restore_accounts {
 }
 
 # the admin commands: user add|passwd|del|list, role add|remove
+# --- passwords: the rules of this app and the hash are here, not in the system's passwd (which
+# has rules of its own). The password is read here, checked here, hashed here (SHA-512 crypt,
+# AI_AUTH_ROUNDS rounds, the length AI_AUTH_MINLEN); usermod -p only stores the hash.
+our $PW_ALPHABET = join '', ('.', '/', 0 .. 9, 'A' .. 'Z', 'a' .. 'z');
+sub min_password { return $ENV{AI_AUTH_MINLEN} // 10 }
+sub hash_rounds  { return $ENV{AI_AUTH_ROUNDS} // 100000 }
+
+# the reason a password is no good for an account, or undef
+sub password_problem {
+    my ($name, $pw) = @_;
+    return 'a password is wanted' unless defined $pw and length $pw;
+    return 'the password is shorter than '.min_password().' characters' if length($pw) < min_password();
+    return 'the password is printable ASCII (no control characters)' unless $pw =~ m/\A[\x20-\x7e]+\z/;
+    return 'the password is the account name' if lc($pw) eq lc($name // '');
+    return undef;
+}
+
+# a SHA-512 crypt hash ($6$) of the password, with a random salt
+sub hash_password {
+    my ($pw) = @_;
+    open(my $fh, '<:raw', '/dev/urandom') or die "auth: no /dev/urandom: $!\n";
+    my $got = read($fh, my $bytes, 16);
+    close $fh;
+    die "auth: no random bytes\n" unless defined $got and $got == 16;
+    my $salt = join '', map { substr($PW_ALPHABET, ord(substr($bytes, $_, 1)) % 64, 1) } 0 .. 15;
+    my $hash = crypt($pw, sprintf('$6$rounds=%d$%s', hash_rounds(), $salt));
+    die "auth: this system cannot make a SHA-512 hash\n" unless defined $hash and $hash =~ m/\A\$6\$/;
+    return $hash;
+}
+
+# one line from the terminal with the echo off, or from the input when there is no terminal
+sub read_password {
+    my ($prompt) = @_;
+    print STDERR $prompt;
+    my $tty = -t STDIN;
+    my ($termios, $lflag);
+    if ($tty) {
+        require POSIX;
+        $termios = POSIX::Termios->new;
+        $termios->getattr(0);
+        $lflag = $termios->getlflag;
+        $termios->setlflag($lflag & ~POSIX::ECHO());
+        $termios->setattr(0, POSIX::TCSANOW());
+    }
+    my $line = <STDIN>;
+    if ($tty) {
+        $termios->setlflag($lflag);
+        $termios->setattr(0, POSIX::TCSANOW());
+        print STDERR "\n";
+    }
+    return undef unless defined $line;
+    $line =~ s/\r?\n\z//;
+    return $line;
+}
+
+# the password of an account: asked twice, kept to the rules, stored as its hash
+sub set_password {
+    my ($name) = @_;
+    my $first = read_password("new password for $name: ");
+    my $again = read_password("again: ");
+    die "auth: the two passwords differ\n" unless defined $first and defined $again and $first eq $again;
+    if (defined(my $why = password_problem($name, $first))) { die "auth: $why\n" }
+    $RUN->('usermod', '-p', hash_password($first), $name) or die "auth: could not store the password of $name\n";
+    return 1;
+}
+
 sub user_command {
     my (@args) = @_;
     my $cmd = shift(@args) // '';
@@ -205,13 +271,13 @@ sub user_command {
             $RUN->('groupadd', '-f', $r) or die "auth: groupadd $r failed\n";
             $RUN->('gpasswd', '-a', $name, $r) or die "auth: gpasswd failed\n";
         }
-        $RUN->('passwd', $name) or die "auth: no password set for $name\n";
+        set_password($name);
         save_accounts();
         print "auth: $name added (roles: @roles)\n";
     } elsif ($cmd eq 'passwd') {
         my ($name) = @args;
         die "auth: no account ".($name // '')."\n" unless $name and getpwnam($name);
-        $RUN->('passwd', $name) or die "auth: passwd failed\n";
+        set_password($name);
         save_accounts();
         revoke_user($name, time());
     } elsif ($cmd eq 'role') {
