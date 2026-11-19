@@ -24,8 +24,8 @@ sub conn { my @got; return {got => \@got, send => sub { push @got, [@_] }} }
 
 sub hub {
     return remote_hub->new(agents => {
-        pi    => {tags => ['zigbee', 'armv6'], token_sha256 => hash_of($TOKEN{pi})},
-        strix => {tags => ['arduino', 'gfx1151'], token_sha256 => hash_of($TOKEN{strix})},
+        pi    => {tags => ['zigbee', 'armv6'], token_sha256 => hash_of($TOKEN{pi}), user => 'acme'},
+        strix => {tags => ['arduino', 'gfx1151'], token_sha256 => hash_of($TOKEN{strix}), user => 'acme'},
     });
 }
 
@@ -76,14 +76,14 @@ like($@, qr/its token/, "a token hash that is not sha256 is refused");
     $h->http(poll(bearer('pi')), $pi->{send}, 100);
     ok(!@{$pi->{got}}, "a poll with no job is held");
     my ($done, $id);
-    $id = $h->submit(project => 'alpha', tags => ['zigbee'], argv => ['perl', '-e', 'print 1'], timeout => 30,
+    $id = $h->submit(project => 'acme/alpha', account => 'acme', tags => ['zigbee'], argv => ['perl', '-e', 'print 1'], timeout => 30,
         now => 101, done => sub { $done = shift });
     ok($id, "a job for the zigbee tag is queued");
     my $job = job_of($pi);
     ok($job, "the held poll of pi gets the job");
     is($job->{id}, $id, "the job's id");
     is_deeply($job->{argv}, ['perl', '-e', 'print 1'], "its argv");
-    is($job->{project}, 'alpha', "its project");
+    is($job->{project}, 'acme/alpha', "its project");
     ok(!defined $done, "the job is not answered yet");
 
     # the wrong agent cannot answer it
@@ -113,7 +113,7 @@ like($@, qr/its token/, "a token hash that is not sha256 is refused");
     my $pi = conn();
     $h->http(poll(bearer('pi')), $pi->{send}, 100);
     my $done;
-    my $id = $h->submit(project => 'alpha', tags => ['zigbee'], argv => ['x'], timeout => 5, now => 100, done => sub { $done = shift });
+    my $id = $h->submit(project => 'acme/alpha', account => 'acme', tags => ['zigbee'], argv => ['x'], timeout => 5, now => 100, done => sub { $done = shift });
     my $c = conn();
     $h->http(result(bearer('pi'), $id, 'not json'), $c->{send}, 101);
     is($c->{got}[0][0], 400, "an answer that is not JSON: 400");
@@ -127,16 +127,16 @@ like($@, qr/its token/, "a token hash that is not sha256 is refused");
 {
     my $h = hub();
     my ($done, $r);
-    $r = $h->submit(project => 'alpha', tags => ['rocm'], argv => ['x'], now => 100, done => sub { $done = shift });
+    $r = $h->submit(project => 'acme/alpha', account => 'acme', tags => ['rocm'], argv => ['x'], now => 100, done => sub { $done = shift });
     ok(!$r, "no agent has the rocm tag: no job");
-    like($done->{error}, qr/no agent with the tags \(rocm\) is configured/, "and the reason");
+    like($done->{error}, qr/no agent of acme with the tags \(rocm\) is configured/, "and the reason");
     $done = undef;
-    $h->submit(project => 'alpha', tags => ['zigbee'], argv => ['x'], now => 100, done => sub { $done = shift });
+    $h->submit(project => 'acme/alpha', account => 'acme', tags => ['zigbee'], argv => ['x'], now => 100, done => sub { $done = shift });
     like($done->{error}, qr/is connected/, "an agent with the tag that never polled: not connected");
     $done = undef;
     $h->http(poll(bearer('pi')), conn()->{send}, 200);
     $h->tick(200);
-    $h->submit(project => 'alpha', tags => ['zigbee'], argv => ['x'], now => 201, done => sub { $done = shift });
+    $h->submit(project => 'acme/alpha', account => 'acme', tags => ['zigbee'], argv => ['x'], now => 201, done => sub { $done = shift });
     ok(!defined $done, "an agent that polled lately (its poll held): the job queues");
 }
 
@@ -152,7 +152,7 @@ like($@, qr/its token/, "a token hash that is not sha256 is refused");
 
     # pi is not polling now, but polled lately: the job queues
     my $done;
-    $h->submit(project => 'alpha', tags => ['zigbee'], argv => ['x'], now => 150, done => sub { $done = shift });
+    $h->submit(project => 'acme/alpha', account => 'acme', tags => ['zigbee'], argv => ['x'], now => 150, done => sub { $done = shift });
     ok(!defined $done, "a job waits for pi, which polled lately");
     $h->tick(150 + $remote_hub::JOB_WAIT - 1);
     ok(!defined $done, "still waiting before JOB_WAIT");
@@ -164,7 +164,7 @@ like($@, qr/its token/, "a token hash that is not sha256 is refused");
     my $pi = conn();
     $h->http(poll(bearer('pi')), $pi->{send}, 300);
     my $done;
-    my $id = $h->submit(project => 'alpha', tags => ['zigbee'], argv => ['x'], timeout => 20, now => 300, done => sub { $done = shift });
+    my $id = $h->submit(project => 'acme/alpha', account => 'acme', tags => ['zigbee'], argv => ['x'], timeout => 20, now => 300, done => sub { $done = shift });
     ok(job_of($pi), "pi takes the job");
     $h->tick(300 + 20 + $remote_hub::GRACE - 1);
     ok(!defined $done, "the agent has its timeout and the grace to answer");
@@ -184,7 +184,7 @@ like($@, qr/its token/, "a token hash that is not sha256 is refused");
     my $pi = conn();
     $h->http(poll(bearer('pi')), $pi->{send}, 100);
     my $done;
-    my $id = $h->submit(project => 'alpha', tags => ['zigbee'], argv => ['x'], timeout => 5, now => 100, done => sub { $done = shift });
+    my $id = $h->submit(project => 'acme/alpha', account => 'acme', tags => ['zigbee'], argv => ['x'], timeout => 5, now => 100, done => sub { $done = shift });
     my $big = MIME::Base64::encode_base64('a' x ($remote_hub::MAX_OUT + 10), '');
     $h->http(result(bearer('pi'), $id, $J->encode({exit => 0, output => $big})), conn()->{send}, 101);
     like($done->{output}, qr/\[output cut\]\n\z/, "an output over the cap is cut");

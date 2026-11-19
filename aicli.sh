@@ -17,7 +17,7 @@
 #   ./aicli.sh --broker        with --root: the broker's socket (volume aicli-broker, see docker-compose.yaml).
 #                              The web interface's pages start and stop the projects' pods from it, and
 #                              bash, perl and grep run in the pod of the project (AI_POD_TOOLS=0 turns that off)
-#   ./aicli.sh --root DIR      DIR is mounted as a whole, the projects are the directories in it, and
+#   ./aicli.sh --root DIR      DIR is mounted as a whole, the projects are the directories of its accounts (DIR/<account>/<project>), and
 #                              the container starts in the current directory (which must be in DIR):
 #                              one container for all projects, one web interface (ai.pl --ui from DIR)
 #

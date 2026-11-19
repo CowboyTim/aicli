@@ -22,12 +22,12 @@ my $tmp = File::Temp::tempdir("aicli_brk_XXXXXX", TMPDIR => 1, CLEANUP => 1);
 
 my $root = "$tmp/projects";
 mkdir $root or die "mkdir: $!";
-mkdir "$root/alpha" or die "mkdir: $!";
-mkdir "$root/beta" or die "mkdir: $!";
+mkdir "$root/acme" unless -d "$root/acme"; mkdir "$root/acme/alpha" or die "mkdir: $!";
+mkdir "$root/acme" unless -d "$root/acme"; mkdir "$root/acme/beta" or die "mkdir: $!";
 mkdir "$root/.hidden" or die "mkdir: $!";
 open(my $fh, '>', "$root/notes.txt") or die "notes: $!";
 close $fh;
-symlink("$root/alpha", "$root/link") or die "symlink: $!";
+symlink("$root/acme/alpha", "$root/link") or die "symlink: $!";
 
 is(broker::_bytes('2g'), 2 * 1024**3, "a memory size: 2g");
 is(broker::_bytes('512m'), 512 * 1024**2, "512m");
@@ -121,11 +121,11 @@ my $b = broker->new(
 
 my $r = $b->handle('not json');
 ok(!$r->{ok}, "not JSON is refused");
-$r = $b->handle('{"op":"run","project":"alpha"}');
+$r = $b->handle('{"op":"run","project":"acme/alpha"}');
 ok(!$r->{ok}, "an operation that is not open, close or list is refused");
 like($r->{error}, qr/unknown request 'run'/, "and the reason says which");
 
-for my $bad ('../beta', '.hidden', 'alpha/src', 'notes.txt', 'link', 'no-such', '', ' alpha', 'a' x 80) {
+for my $bad ('../beta', '.hidden', 'acme/alpha/src', 'notes.txt', 'link', 'no-such', '', ' alpha', 'a' x 80) {
     clear_records();
     my $res = $b->handle($J->encode({op => 'open', project => $bad}));
     ok(!$res->{ok}, "project '$bad' is refused");
@@ -133,7 +133,7 @@ for my $bad ('../beta', '.hidden', 'alpha/src', 'notes.txt', 'link', 'no-such', 
 }
 
 clear_records();
-$r = $b->handle($J->encode({op => 'open', project => 'alpha', pod => 'nosuch'}));
+$r = $b->handle($J->encode({op => 'open', project => 'acme/alpha', pod => 'nosuch'}));
 ok(!$r->{ok}, "a pod kind the config does not name is refused");
 like($r->{error}, qr/no such pod: 'nosuch'/, "and says so");
 is(nrec(), 0, "and the engine is not asked for it");
@@ -141,21 +141,21 @@ is(nrec(), 0, "and the engine is not asked for it");
 # --- open, reopen, list, close -----------------------------------------------
 
 clear_records();
-$r = $b->handle($J->encode({op => 'open', project => 'alpha'}));
+$r = $b->handle($J->encode({op => 'open', project => 'acme/alpha'}));
 ok($r->{ok}, "open alpha");
-is($r->{pod}, 'aicli-base-alpha', "its pod is named for it");
+is($r->{pod}, 'aicli-base-acme-alpha', "its pod is named for it");
 ok($r->{created}, "and it was made");
 my @rec = records();
 is_deeply([grep {!m{ /libpod/images/}} map {"$_->{method} $_->{path}"} @rec],
-    ['GET /libpod/pods/json', 'POST /libpod/pods/create', 'POST /libpod/containers/create', 'POST /libpod/pods/aicli-base-alpha/start'],
+    ['GET /libpod/pods/json', 'POST /libpod/pods/create', 'POST /libpod/containers/create', 'POST /libpod/pods/aicli-base-acme-alpha/start'],
     "the calls: list, make the pod, make the container, start the pod (the image is looked up first)");
 ok((grep {m{GET /libpod/images/}} map {"$_->{method} $_->{path}"} @rec), "the image of the pod is looked up");
 
 my ($spec) = grep {$_->{path} eq '/libpod/containers/create'} @rec;
 my $s = $spec->{body} ? $J->decode($spec->{body}) : {};
-is($s->{pod}, 'aicli-base-alpha', "the container is in the pod");
+is($s->{pod}, 'aicli-base-acme-alpha', "the container is in the pod");
 is(scalar(@{$s->{mounts}}), 1, "one mount");
-is($s->{mounts}[0]{source}, '/host/projects/alpha', "the project's directory on the host, and only it");
+is($s->{mounts}[0]{source}, '/host/projects/acme/alpha', "the project's directory on the host, and only it");
 is($s->{mounts}[0]{destination}, '/work', "it is /work inside");
 ok(!$s->{privileged}, "not privileged");
 is_deeply($s->{cap_drop}, ['ALL'], "no capabilities");
@@ -167,28 +167,28 @@ like($spec->{body}, qr/"limit":2147483648[,}]/, "the memory limit is a number in
 like($spec->{body}, qr/"limit":512[,}]/, "and so is the process limit");
 
 clear_records();
-$r = $b->handle($J->encode({op => 'open', project => 'alpha'}));
+$r = $b->handle($J->encode({op => 'open', project => 'acme/alpha'}));
 ok($r->{ok}, "open alpha again");
 ok(!$r->{created}, "it is not made twice");
 is_deeply([grep {!m{ /libpod/images/}} map {"$_->{method} $_->{path}"} records()],
-    ['GET /libpod/pods/json', 'POST /libpod/containers/create', 'POST /libpod/pods/aicli-base-alpha/start'],
+    ['GET /libpod/pods/json', 'POST /libpod/containers/create', 'POST /libpod/pods/aicli-base-acme-alpha/start'],
     "the pod is kept, the container is asked for (it is there already), the pod is started");
 
-$r = $b->handle($J->encode({op => 'open', project => 'beta'}));
+$r = $b->handle($J->encode({op => 'open', project => 'acme/beta'}));
 ok($r->{ok}, "open beta as well");
 
 $r = $b->handle('{"op":"list"}');
-is_deeply([sort map {$_->{name}} @{$r->{pods}}], ['aicli-base-alpha', 'aicli-base-beta'], "list: the project pods");
+is_deeply([sort map {$_->{name}} @{$r->{pods}}], ['aicli-base-acme-alpha', 'aicli-base-acme-beta'], "list: the project pods");
 
-$r = $b->handle($J->encode({op => 'close', project => 'alpha'}));
+$r = $b->handle($J->encode({op => 'close', project => 'acme/alpha'}));
 ok($r->{ok}, "close alpha");
 $r = $b->handle('{"op":"list"}');
-is_deeply([map {$_->{name}} @{$r->{pods}}], ['aicli-base-beta'], "alpha is gone from the list");
+is_deeply([map {$_->{name}} @{$r->{pods}}], ['aicli-base-acme-beta'], "alpha is gone from the list");
 
 # --- the engine not there -----------------------------------------------------
 
 my $lonely = broker->new(root => $root, host_root => '/host/projects', engine => "$tmp/none.sock", images => ['x']);
-$r = $lonely->handle($J->encode({op => 'open', project => 'alpha'}));
+$r = $lonely->handle($J->encode({op => 'open', project => 'acme/alpha'}));
 ok(!$r->{ok}, "without an engine the open fails");
 like($r->{error}, qr/not reachable/, "and says why: the engine is not reachable");
 
@@ -202,7 +202,7 @@ if (!$bpid) {
     POSIX::_exit(0);
 }
 for (1 .. 100) { last if -S $bsock; select(undef, undef, undef, 0.05) }
-my $answer = main::ask($bsock, {op => 'open', project => 'beta'});
+my $answer = main::ask($bsock, {op => 'open', project => 'acme/beta'});
 ok($answer->{ok}, "over the socket: open beta");
 $answer = main::ask($bsock, {op => 'open', project => '../etc'});
 ok(!$answer->{ok}, "over the socket: a bad project is refused");
@@ -217,7 +217,7 @@ waitpid($bpid, 0);
     my $old = $broker::LOG;
     $broker::LOG = $lf;
     $b->handle('{"op":"open","project":"../etc"}');
-    $b->handle($J->encode({op => 'open', project => 'alpha'}));
+    $b->handle($J->encode({op => 'open', project => 'acme/alpha'}));
     close($lf);
     $broker::LOG = $old;
     open(my $in, '<', $logf) or die "log: $!";
@@ -225,7 +225,7 @@ waitpid($bpid, 0);
     close($in);
     like($text, qr/request op=open project=\.\.\/etc -> refused: no such project/, "a refused request is logged, with the reason");
     like($text, qr/engine GET \/v4\.0\.0\/libpod\/pods\/json -> 200/, "an engine call is logged, with its status");
-    like($text, qr/request op=open project=alpha -> ok/, "and an accepted one");
+    like($text, qr/request op=open project=acme\/alpha -> ok/, "and an accepted one");
     unlike($text, qr/"mounts"|privileged/, "the body of a request is not logged");
 }
 
@@ -269,31 +269,31 @@ waitpid($bpid, 0);
         pods => {base => {image => 'x', programs => [qw(bash perl grep)]}, node => {image => 'y', programs => [qw(node npm npx)]}},
         remote => [$^X, '-e', 'print "ran: @ARGV\n"; exit($ARGV[-1] eq "fail" ? 3 : 0)', '--'],
     );
-    $execb->handle($J->encode({op => 'open', project => 'alpha'}));
-    my $r = $execb->handle($J->encode({op => 'exec', project => 'alpha', argv => ['bash', '-c', 'echo hi']}));
+    $execb->handle($J->encode({op => 'open', project => 'acme/alpha'}));
+    my $r = $execb->handle($J->encode({op => 'exec', project => 'acme/alpha', argv => ['bash', '-c', 'echo hi']}));
     ok($r->{ok}, "exec in an open project");
     is($r->{exit}, 0, "its exit code");
     my $text = MIME::Base64::decode_base64($r->{output});
-    like($text, qr/ran: exec --workdir \/work aicli-base-alpha-dev bash -c echo hi/, "the engine's client runs it in the dev container, in /work, with the program's argv");
-    $r = $execb->handle($J->encode({op => 'exec', project => 'alpha', argv => ['bash', '-c', 'fail']}));
+    like($text, qr/ran: exec --workdir \/work aicli-base-acme-alpha-dev bash -c echo hi/, "the engine's client runs it in the dev container, in /work, with the program's argv");
+    $r = $execb->handle($J->encode({op => 'exec', project => 'acme/alpha', argv => ['bash', '-c', 'fail']}));
     is($r->{exit}, 3, "the exit code of the program comes back");
-    $r = $execb->handle($J->encode({op => 'exec', project => 'alpha', argv => ['sh', '-c', 'rm -rf /']}));
+    $r = $execb->handle($J->encode({op => 'exec', project => 'acme/alpha', argv => ['sh', '-c', 'rm -rf /']}));
     ok(!$r->{ok}, "a program that is not allowed is refused");
     like($r->{error}, qr/not in the base pod/, "and says so");
-    $r = $execb->handle($J->encode({op => 'exec', project => 'alpha', argv => 'bash'}));
+    $r = $execb->handle($J->encode({op => 'exec', project => 'acme/alpha', argv => 'bash'}));
     ok(!$r->{ok}, "argv must be a list");
-    mkdir "$root/gamma" unless -d "$root/gamma";
-    $r = $execb->handle($J->encode({op => 'exec', project => 'gamma', argv => ['bash', '-c', 'echo']}));
+    mkdir "$root/acme" unless -d "$root/acme"; mkdir "$root/acme/gamma" unless -d "$root/acme/gamma";
+    $r = $execb->handle($J->encode({op => 'exec', project => 'acme/gamma', argv => ['bash', '-c', 'echo']}));
     ok($r->{ok}, "a call in a project whose pod is closed opens the pod first");
-    like(MIME::Base64::decode_base64($r->{output}), qr/ran: exec --workdir \/work aicli-base-gamma-dev bash/, "and runs there");
-    $r = $execb->handle($J->encode({op => 'exec', project => 'alpha', pod => 'node', argv => ['bash']}));
+    like(MIME::Base64::decode_base64($r->{output}), qr/ran: exec --workdir \/work aicli-base-acme-gamma-dev bash/, "and runs there");
+    $r = $execb->handle($J->encode({op => 'exec', project => 'acme/alpha', pod => 'node', argv => ['bash']}));
     ok(!$r->{ok}, "a program the pod kind does not list is refused");
     like($r->{error}, qr/not in the node pod \(its programs: node, npm, npx\)/, "and names the programs of that kind");
-    $r = $execb->handle($J->encode({op => 'exec', project => 'alpha', pod => 'base', argv => ['node', '-v']}));
+    $r = $execb->handle($J->encode({op => 'exec', project => 'acme/alpha', pod => 'base', argv => ['node', '-v']}));
     ok(!$r->{ok}, "node is not a program of the base pod");
     $r = $execb->handle($J->encode({op => 'exec', project => '../x', argv => ['bash']}));
     ok(!$r->{ok}, "a bad project name is refused");
-    $execb->handle($J->encode({op => 'close', project => 'alpha'}));
+    $execb->handle($J->encode({op => 'close', project => 'acme/alpha'}));
 }
 
 # --- the chunked answers of the engine ---------------------------------------

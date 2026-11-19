@@ -2325,11 +2325,19 @@ sub list_sessions {
 # --- projects: the directories under the root (the workspace at start) ----------
 
 # the projects, by name: the directories directly under the root (not hidden, not links)
+# the projects: account/project, a directory in an account's directory under the root (the
+# accounts are the directories directly under the root; hidden entries and links are left out)
 sub project_dirs {
     return [] unless defined $ROOT and -d $ROOT;
     opendir(my $dh, $ROOT) or return [];
-    my @p = sort grep {!m/^\./ and -d "$ROOT/$_" and !-l "$ROOT/$_"} readdir($dh);
+    my @accounts = sort grep {!m/^\./ and -d "$ROOT/$_" and !-l "$ROOT/$_"} readdir($dh);
     closedir($dh);
+    my @p;
+    for my $a (@accounts) {
+        opendir(my $ah, "$ROOT/$a") or next;
+        push @p, map {"$a/$_"} sort grep {!m/^\./ and -d "$ROOT/$a/$_" and !-l "$ROOT/$a/$_"} readdir($ah);
+        closedir($ah);
+    }
     return \@p;
 }
 
@@ -5095,8 +5103,8 @@ sub pod_for_tools {
     my $root = $::ORIG_ENV{AI_POD_ROOT};
     return undef unless length($root // '');
     return undef if lc($::ORIG_ENV{AI_POD_TOOLS} // 'auto') =~ m/^(?:0|off|no)$/;
-    my ($project) = ($ai::WORKSPACE // '') =~ m{\A\Q$root\E/([^/]+)}
-        or die "bash, perl and grep run in the pod of a project, and this directory is not one (under $root): use the file tools (find, list, read) here, or work in a project (pods lists them)\n";
+    my ($project) = ($ai::WORKSPACE // '') =~ m{\A\Q$root\E/([^/]+/[^/]+)(?:/|\z)}
+        or die "bash, perl and grep run in the pod of a project, and this directory is not one (under $root/<account>): use the file tools (find, list, read) here, or work in a project (pods lists them)\n";
     return $project;
 }
 

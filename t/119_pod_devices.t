@@ -97,7 +97,7 @@ is_deeply($devs, [], "a kind with no devices passes none");
 
 my ($rdevs, $rgids) = $b->_device_specs($b->{pods}{rocm});
 my $x = {devices => $rdevs, groups => [44, 992], env => {ROCM_PATH => '/opt/rocm'}, seccomp => 'unconfined', ipc => 'host'};
-my $spec = $b->_container_spec('alpha', 'aicli-rocm-alpha', 'img-rocm', $x);
+my $spec = $b->_container_spec('acme/alpha', 'aicli-rocm-alpha', 'img-rocm', $x);
 is($spec->{devices}[0]{path}, '/dev/kfd', "the device of the spec");
 is_deeply($spec->{groups}, ['44', '992'], "the groups, as strings");
 is($spec->{env}{ROCM_PATH}, '/opt/rocm', "the variables");
@@ -108,7 +108,7 @@ is_deeply($spec->{cap_drop}, ['ALL'], "still no capabilities");
 ok($spec->{no_new_privileges}, "still no new privileges");
 unlike($J->encode($spec), qr{"source":"/dev}, "no host device directory is mounted");
 
-my $plain = $b->_container_spec('alpha', 'aicli-base-alpha', 'img-bash', {});
+my $plain = $b->_container_spec('acme/alpha', 'aicli-base-acme-alpha', 'img-bash', {});
 ok(!exists $plain->{devices} && !exists $plain->{groups} && !exists $plain->{env} && !exists $plain->{ipc},
     "a kind with nothing added gets a spec as before");
 

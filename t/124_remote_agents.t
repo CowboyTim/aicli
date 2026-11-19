@@ -26,7 +26,7 @@ my $TOKEN = 'agent-token-'.$$.'-0123456789abcdef';
 plan skip_all => "no perl for the child processes" unless -x $^X;
 
 my $tmp = File::Temp::tempdir(CLEANUP => 1, DIR => '/tmp');
-mkdir "$tmp/root"; mkdir "$tmp/root/alpha";
+mkdir "$tmp/root"; mkdir "$tmp/root/acme"; mkdir "$tmp/root/acme/alpha";
 mkdir "$tmp/ai";
 
 sub free_port {
@@ -48,7 +48,7 @@ my $cfg = {
     pods => {
         arduino => {tags => ['arduino'], programs => ['perl', 'bash'], note => 'boards'},
     },
-    agents => {strix => {tags => ['arduino'], token_sha256 => Digest::SHA::sha256_hex($TOKEN)}},
+    agents => {strix => {tags => ['arduino'], token_sha256 => Digest::SHA::sha256_hex($TOKEN), user => 'acme'}},
 };
 open(my $cfh, '>', "$tmp/broker.json") or die $!;
 print {$cfh} $J->encode($cfg);
@@ -88,30 +88,30 @@ sub ask {
 # the agent connects (its first poll); until then the broker says so, which is retried
 my $first;
 ok(wait_for(sub {
-    $first = ask({op => 'exec', project => 'alpha', pod => 'arduino', argv => ['perl', '-e', 'print "hi\n"; exit 3']});
+    $first = ask({op => 'exec', project => 'acme/alpha', pod => 'arduino', argv => ['perl', '-e', 'print "hi\n"; exit 3']});
     ($first->{error} // '') !~ /is connected/;
 }, 20), "the agent connects");
 is($first->{ok}, 1, "the job ran on the agent");
 is($first->{exit}, 3, "its exit code");
 is(MIME::Base64::decode_base64($first->{output}), "hi\n", "its output");
 
-my $where = ask({op => 'exec', project => 'alpha', pod => 'arduino',
+my $where = ask({op => 'exec', project => 'acme/alpha', pod => 'arduino',
     argv => ['perl', '-MCwd', '-e', 'print Cwd::getcwd()']});
-is(MIME::Base64::decode_base64($where->{output}), "$tmp/work/alpha", "the job runs in the project's directory on the agent");
+is(MIME::Base64::decode_base64($where->{output}), "$tmp/work/acme/alpha", "the job runs in the project's directory on the agent");
 
-my $bash = ask({op => 'exec', project => 'alpha', pod => 'arduino', argv => ['bash', '-c', 'echo no']});
+my $bash = ask({op => 'exec', project => 'acme/alpha', pod => 'arduino', argv => ['bash', '-c', 'echo no']});
 is($bash->{exit}, 126, "a program the kind lists but the agent does not run: refused by the agent");
 like(MIME::Base64::decode_base64($bash->{output}), qr/refused: bash is not a program of this agent/, "and says so");
 
-my $nope = ask({op => 'exec', project => 'alpha', pod => 'arduino', argv => ['ls']});
+my $nope = ask({op => 'exec', project => 'acme/alpha', pod => 'arduino', argv => ['ls']});
 ok(!$nope->{ok}, "a program the kind does not list: refused by the broker");
 like($nope->{error}, qr/not in the arduino pod/, "and says so");
 
-my $open = ask({op => 'open', project => 'alpha', pod => 'arduino'});
+my $open = ask({op => 'open', project => 'acme/alpha', pod => 'arduino'});
 ok(!$open->{ok}, "open refuses a kind on an agent");
 like($open->{error}, qr/runs on an agent/, "and says so");
 
-my $unknown = ask({op => 'exec', project => 'alpha', pod => 'rocm', argv => ['perl', '-v']});
+my $unknown = ask({op => 'exec', project => 'acme/alpha', pod => 'rocm', argv => ['perl', '-v']});
 like($unknown->{error}, qr/no such pod/, "a kind that is not configured: refused");
 
 kill 'TERM', $agent_pid, $broker_pid;

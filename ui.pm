@@ -283,9 +283,12 @@ sub _broker_ask {
 # the projects, each with the state of its pod, from the broker's list
 sub _pods_data {
     my ($r) = @_;
-    # the panel shows the base pods (aicli-base-<project>): the basic tools of a project
-    my %pod = map {(substr($_->{name}, length('aicli-base-')) => $_->{status} // '')}
-        grep {($_->{name} // '') =~ m/\Aaicli-base-/} @{$r->{pods} // []};
+    # the panel shows the base pods (aicli-base-<account>-<project>): the basic tools of a project
+    my %pod;
+    for my $p (@{$r->{pods} // []}) {
+        next unless ($p->{name} // '') =~ m/\Aaicli-base-([A-Za-z0-9][A-Za-z0-9._]*)-(.+)\z/;
+        $pod{"$1/$2"} = $p->{status} // '';
+    }
     return {
         ok       => $r->{ok} ? JSON::XS::true() : JSON::XS::false(),
         error    => $r->{error} // '',
@@ -1109,8 +1112,8 @@ sub _dispatch {
     # once), the list, a revocation. The user is the login's (nginx sends it as X-Aicli-User).
     if($p =~ m{\A/agent/(token|list|revoke)\z} and (($p eq '/agent/token' and $m eq 'POST') or ($p eq '/agent/list' and $m eq 'GET') or ($p eq '/agent/revoke' and $m eq 'POST'))){
         my $user = $h->{'x-aicli-user'} // '';
-        return _json($cn, 403, {ok => \0, error => 'agents need the login (through nginx)'})
-            unless length $user and $user =~ m/\A[A-Za-z0-9._@-]{1,128}\z/;
+        return _json($cn, 403, {ok => \0, error => 'agents need the login (through nginx), and its name is an account name'})
+            unless length $user and $user =~ m/\A[A-Za-z0-9][A-Za-z0-9._]{0,31}\z/;
         my $req = {user => $user};
         if ($p eq '/agent/token') {
             $req->{op} = 'enroll_token';

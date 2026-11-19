@@ -26,10 +26,10 @@ my $J = JSON::XS->new->canonical(1)->utf8;
 my $base = Cwd::abs_path(File::Temp::tempdir("aicli_podt_XXXXXX", TMPDIR => 1, CLEANUP => 1));
 my $root = "$base/projects";
 mkdir $root or die "mkdir: $!";
-mkdir "$root/alpha" or die "mkdir: $!";
-mkdir "$root/alpha/src" or die "mkdir: $!";
-mkdir "$root/loose" or die "mkdir: $!";
-open(my $fh, '>', "$root/alpha/src/main.txt") or die "file: $!";
+mkdir "$root/acme" unless -d "$root/acme"; mkdir "$root/acme/alpha" or die "mkdir: $!";
+mkdir "$root/acme/alpha/src" or die "mkdir: $!";
+mkdir "$root/acme" unless -d "$root/acme"; mkdir "$root/acme/loose" or die "mkdir: $!";
+open(my $fh, '>', "$root/acme/alpha/src/main.txt") or die "file: $!";
 print {$fh} "needle here\n";
 close $fh;
 
@@ -38,7 +38,7 @@ my $engine = "$base/engine.sock";
 my $epid = fork() // die "fork: $!";
 if (!$epid) {
     my $srv = IO::Socket::UNIX->new(Local => $engine, Type => Socket::SOCK_STREAM(), Listen => 5) or POSIX::_exit(1);
-    my %pods = ('aicli-base-alpha' => 1);
+    my %pods = ('aicli-base-acme-alpha' => 1);
     while (my $c = $srv->accept) {
         my $buf = '';
         while ($buf !~ m/\r\n\r\n/) { my $n = sysread($c, my $x, 4096); last unless $n; $buf .= $x }
@@ -73,36 +73,36 @@ for (1 .. 100) { last if -S $bsock && -S $engine; select(undef, undef, undef, 0.
 
 $::ORIG_ENV{AI_POD_ROOT} = $root;
 $::ORIG_ENV{AI_BROKER_SOCKET} = $bsock;
-$ai::WORKSPACE = "$root/alpha";
+$ai::WORKSPACE = "$root/acme/alpha";
 
 my $out = tools::bash_7c48(['echo hi']);
-like($out, qr/ran: exec --workdir \/work aicli-base-alpha-dev bash -c echo hi/, "bash runs in the dev container of the project, as bash -c");
+like($out, qr/ran: exec --workdir \/work aicli-base-acme-alpha-dev bash -c echo hi/, "bash runs in the dev container of the project, as bash -c");
 
 my $ok = eval { tools::bash_7c48(['fail']); 1 };
 ok(!$ok, "a command that fails is a tool error");
 like($@, qr/exit code: 3/, "with the exit code of the command");
 
-$out = tools::grep_6629(["$root/alpha/src", 'needle']);
-like($out, qr/ran: exec --workdir \/work aicli-base-alpha-dev grep -rn -e needle -- src\n/, "grep: the path is the pod's, relative to the project");
+$out = tools::grep_6629(["$root/acme/alpha/src", 'needle']);
+like($out, qr/ran: exec --workdir \/work aicli-base-acme-alpha-dev grep -rn -e needle -- src\n/, "grep: the path is the pod's, relative to the project");
 
 # the process is in its workspace, as a worker is
-chdir("$root/alpha/src");
-$ai::WORKSPACE = "$root/alpha/src";
+chdir("$root/acme/alpha/src");
+$ai::WORKSPACE = "$root/acme/alpha/src";
 $out = tools::grep_6629(['.', 'needle']);
 like($out, qr/-- \.\n/, "a workspace inside the project: paths relative to it");
-chdir("$root/alpha");
-$ai::WORKSPACE = "$root/alpha";
+chdir("$root/acme/alpha");
+$ai::WORKSPACE = "$root/acme/alpha";
 
 $ai::WORKSPACE = $root; # the root itself is no project
 $ok = eval { tools::bash_7c48(['echo']); 1 };
 ok(!$ok, "a workspace that is no project is refused");
 like($@, qr/not one/, "and says so");
-$ai::WORKSPACE = "$root/loose"; # a project whose pod is not open
+$ai::WORKSPACE = "$root/acme/loose"; # a project whose pod is not open
 $ok = eval { tools::bash_7c48(['echo']); 1 };
 ok(!$ok, "a call on a project whose pod is closed tries to open it first");
 like($@, qr/could not be pulled/, "here the engine has no image to open it with, so the call says so");
 
-$ai::WORKSPACE = "$root/alpha";
+$ai::WORKSPACE = "$root/acme/alpha";
 $ok = eval { tools::grep_6629(["/etc/passwd", 'root']); 1 };
 ok(!$ok, "a path outside the project is refused");
 

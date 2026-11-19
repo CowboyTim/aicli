@@ -27,14 +27,14 @@ my $J = JSON::XS->new->canonical(1)->utf8;
 my $base = Cwd::abs_path(File::Temp::tempdir("aicli_pods_XXXXXX", TMPDIR => 1, CLEANUP => 1));
 my $root = "$base/projects";
 mkdir $root or die "mkdir: $!";
-mkdir "$root/alpha" or die "mkdir: $!";
-mkdir "$root/beta" or die "mkdir: $!";
+mkdir "$root/acme" unless -d "$root/acme"; mkdir "$root/acme/alpha" or die "mkdir: $!";
+mkdir "$root/acme" unless -d "$root/acme"; mkdir "$root/acme/beta" or die "mkdir: $!";
 $ai::ROOT = $root;
 
 # the list of projects comes from the root; the pods from the broker
-my $data = ui::_pods_data({ok => JSON::XS::true(), pods => [{name => 'aicli-base-alpha', status => 'Running'}]});
+my $data = ui::_pods_data({ok => JSON::XS::true(), pods => [{name => 'aicli-base-acme-alpha', status => 'Running'}]});
 is_deeply([map {[$_->{name}, $_->{status}, $_->{open} ? 1 : 0]} @{$data->{projects}}],
-    [['alpha', 'Running', 1], ['beta', 'not started', 0]],
+    [['acme/alpha', 'Running', 1], ['acme/beta', 'not started', 0]],
     "the projects with the state of their pods");
 ok(!$data->{available}, "without a broker socket the pods are not available");
 
@@ -93,28 +93,28 @@ my @got;
 {
     no warnings 'redefine';
     local *ui::publish = sub { push @got, [@_] };
-    ui::_pod_request('open', 'alpha');
+    ui::_pod_request('open', 'acme/alpha');
     loop::run(sub { grep {$_->[0] eq 'pods'} @got });
 }
 my ($broker_ev) = grep {$_->[0] eq 'broker'} @got;
 ok($broker_ev, "the answer of the broker comes as an event");
 ok($broker_ev->[1]{ok}, "open alpha is done");
-is($broker_ev->[1]{pod}, 'aicli-base-alpha', "and names the pod");
+is($broker_ev->[1]{pod}, 'aicli-base-acme-alpha', "and names the pod");
 my ($pods_ev) = grep {$_->[0] eq 'pods'} @got;
 ok($pods_ev && $pods_ev->[1]{available}, "then the pods are sent again, with the broker there");
-my ($alpha) = grep {$_->{name} eq 'alpha'} @{$pods_ev->[1]{projects}};
+my ($alpha) = grep {$_->{name} eq 'acme/alpha'} @{$pods_ev->[1]{projects}};
 ok($alpha && $alpha->{open}, "and alpha has its pod");
 
 @got = ();
 {
     no warnings 'redefine';
     local *ui::publish = sub { push @got, [@_] };
-    ui::_pod_request('close', 'alpha');
+    ui::_pod_request('close', 'acme/alpha');
     loop::run(sub { grep {$_->[0] eq 'pods'} @got });
 }
 ok((grep {$_->[0] eq 'broker' and $_->[1]{ok}} @got), "close alpha is done");
 ($pods_ev) = grep {$_->[0] eq 'pods'} @got;
-($alpha) = grep {$_->{name} eq 'alpha'} @{$pods_ev->[1]{projects}};
+($alpha) = grep {$_->{name} eq 'acme/alpha'} @{$pods_ev->[1]{projects}};
 ok(!$alpha->{open}, "and alpha has no pod any more");
 
 # a broker that is not there: the page is told why, nothing else breaks

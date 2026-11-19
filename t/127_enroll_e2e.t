@@ -21,7 +21,7 @@ my $broker_pl = Cwd::abs_path("$FindBin::Bin/../broker.pl");
 my $ai_pl     = Cwd::abs_path("$FindBin::Bin/../ai.pl");
 
 my $tmp = File::Temp::tempdir(CLEANUP => 1, DIR => '/tmp');
-mkdir "$tmp/root"; mkdir "$tmp/root/alpha";
+mkdir "$tmp/root"; mkdir "$tmp/root/acme"; mkdir "$tmp/root/acme/alpha";
 mkdir "$tmp/ai";
 my $socket = "$tmp/broker.sock";
 
@@ -64,7 +64,7 @@ sub ask {
 }
 
 # the web interface's operations for a user
-my $t = ask({op => 'enroll_token', user => 'alice'});
+my $t = ask({op => 'enroll_token', user => 'acme'});
 ok($t->{ok}, "a token for alice");
 my $token = $t->{token};
 ok(length($token) >= 40, "a long one");
@@ -85,7 +85,7 @@ ok(-f "$tmp/ai/agent.json", "its credentials are kept");
 is((stat("$tmp/ai/agent.json"))[2] & 07777, 0600, "in a file only the user reads");
 unlike($out, qr/\Q$token\E/, "the enrollment token is not printed");
 
-my $list = ask({op => 'agents', user => 'alice'});
+my $list = ask({op => 'agents', user => 'acme'});
 is_deeply([map {$_->{name}} @{$list->{agents}}], ['strix'], "alice's agents: strix");
 is_deeply($list->{agents}[0]{tags}, ['arduino', 'gfx1151'], "with its tags");
 is(ask({op => 'agents', user => 'bob'})->{agents}[0], undef, "bob has none");
@@ -100,18 +100,18 @@ if (!$agent_pid) {
 
 my $first;
 ok(wait_for(sub {
-    $first = ask({op => 'exec', project => 'alpha', pod => 'arduino', argv => ['perl', '-e', 'print "from strix\n"']});
+    $first = ask({op => 'exec', project => 'acme/alpha', pod => 'arduino', argv => ['perl', '-e', 'print "from strix\n"']});
     ($first->{error} // '') !~ /is connected/;
 }, 20), "the enrolled agent connects");
 is($first->{exit}, 0, "the job runs on it");
 is(MIME::Base64::decode_base64($first->{output}), "from strix\n", "its output comes back");
 
 # a revocation: the job is refused from then on
-my $rev = ask({op => 'agent_revoke', user => 'alice', name => 'strix'});
-ok($rev->{ok}, "alice revokes strix");
-is_deeply(ask({op => 'agents', user => 'alice'})->{agents}, [], "and it is gone");
-my $after = ask({op => 'exec', project => 'alpha', pod => 'arduino', argv => ['perl', '-v']});
-like($after->{error}, qr/no agent with the tags \(arduino\) is configured/, "a job for its tags: no agent now");
+my $rev = ask({op => 'agent_revoke', user => 'acme', name => 'strix'});
+ok($rev->{ok}, "acme revokes strix");
+is_deeply(ask({op => 'agents', user => 'acme'})->{agents}, [], "and it is gone");
+my $after = ask({op => 'exec', project => 'acme/alpha', pod => 'arduino', argv => ['perl', '-v']});
+like($after->{error}, qr/no agent of acme with the tags \(arduino\) is configured/, "a job for its tags: no agent now");
 
 kill 'TERM', $agent_pid, $broker_pid;
 waitpid($_, 0) for $agent_pid, $broker_pid;

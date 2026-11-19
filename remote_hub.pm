@@ -74,7 +74,10 @@ sub new {
             die "remote agents: a tag is a short lower-case word, '$t'\n"
                 unless !ref($t) and $t =~ m/\A[a-z][a-z0-9-]{0,31}\z/;
         }
-        $agents{$name} = {tags => [@tags], token_sha256 => $a->{token_sha256}, user => undef, enrolled => 0};
+        my $user = $a->{user};
+        die "remote agents: agent '$name' has an account of a bad name\n"
+            if defined $user and $user !~ m/\A[A-Za-z0-9][A-Za-z0-9._]{0,31}\z/;
+        $agents{$name} = {tags => [@tags], token_sha256 => $a->{token_sha256}, user => $user, enrolled => 0};
     }
     return bless {
         file    => $file,
@@ -177,6 +180,15 @@ sub agent_of_token {
     return undef;
 }
 
+# an agent takes a job of an account only when it was enrolled by that account, and it has the
+# job's tags (the owner check: an agent of one account never runs the projects of another)
+sub _eligible {
+    my ($self, $name, $job) = @_;
+    my $a = $self->{agents}{$name} or return 0;
+    return 0 unless defined $a->{user} and defined $job->{account} and $a->{user} eq $job->{account};
+    return _has_tags($a->{tags}, $job->{tags});
+}
+
 sub _has_tags {
     my ($have, $need) = @_;
     my %h = map {($_ => 1)} @$have;
@@ -237,19 +249,21 @@ sub submit {
     my $now = $j{now} // time;
     my $need = $j{tags} // [];
     my $done = $j{done};
-    my @able = grep {_has_tags($self->{agents}{$_}{tags}, $need)} sort keys %{$self->{agents}};
+    my $account = $j{account} // '';
+    my $probe = {account => $account, tags => $need};
+    my @able = grep {$self->_eligible($_, $probe)} sort keys %{$self->{agents}};
     if (!@able) {
-        $done->({ok => JSON::XS::false(), error => "no agent with the tags (@$need) is configured"});
+        $done->({ok => JSON::XS::false(), error => "no agent of $account with the tags (@$need) is configured"});
         return;
     }
     my @online = grep {$self->_online($_, $now)} @able;
     if (!@online) {
-        $done->({ok => JSON::XS::false(), error => "no agent with the tags (@$need) is connected"});
+        $done->({ok => JSON::XS::false(), error => "no agent of $account with the tags (@$need) is connected"});
         return;
     }
     my $id = join('', map {sprintf('%02x', int(rand(256)))} 1 .. 12);
-    my $job = {id => $id, project => $j{project}, tags => [@$need], argv => $j{argv}, timeout => $j{timeout} // 120,
-        state => 'queued', submitted => $now, done => $done};
+    my $job = {id => $id, project => $j{project}, account => $account, tags => [@$need], argv => $j{argv},
+        timeout => $j{timeout} // 120, state => 'queued', submitted => $now, done => $done};
     $self->{jobs}{$id} = $job;
     push @{$self->{queue}}, $id;
     $self->_match($now);
@@ -269,8 +283,7 @@ sub _match {
     my @queue = @{$self->{queue}};
     for my $id (@queue) {
         my $job = $self->{jobs}{$id} or next;
-        my ($p) = grep {!$self->{busy}{$_->{name}} && _has_tags($self->{agents}{$_->{name}}{tags}, $job->{tags})}
-            @{$self->{pollers}};
+        my ($p) = grep {!$self->{busy}{$_->{name}} && $self->_eligible($_->{name}, $job)} @{$self->{pollers}};
         next unless $p;
         $self->_assign($job, $p, $now);
     }

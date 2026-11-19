@@ -172,6 +172,29 @@ as any client does; no client certificate). The agent's credential is its token.
   checked against the broker; how the arduino build output comes back, and whether
   the first step is the log only.
 
+## Open: accounts and ownership (one broker, a subtree per account)
+
+Decided: one broker. The projects live in subdirectories per account:
+`AI_PROJECTS/<account>/<project>`. An account is the login name (X-Aicli-User from nginx);
+a project belongs to the account in its path.
+
+- **The broker's requests** carry the account and the project; the broker resolves the host
+  path as `<root>/<account>/<project>` and refuses links and paths outside it.
+- **Pod engine names** carry the account: `aicli-<kind>-<account>-<project>`, so two accounts
+  with the same project name do not collide.
+- **Owner check:** a job for a kind with tags goes only to an agent enrolled by the same
+  account as the project. The hub keeps the account of each agent (`user`).
+- **Static agents of broker.json** have no account: they get no jobs for a project until they
+  are given an owner.
+- **Built:** the broker takes `account/project` and checks both parts, the pod names carry the
+  account, the hub gives a job only to an agent of the job's account, `project_dirs()` and the
+  pods panel list account/project. The tools need no account setting: a project's path holds it.
+  Tests updated to the new layout (t/104 to t/128); the full suite passes.
+- **Open:** moving the existing flat projects of the host into `AI_PROJECTS/<account>/` (a host
+  step, with the login name of the account); the page lists the projects of every account, not
+  only the login's; the session start does not yet check the account of a project against the
+  login (a multi-user step).
+
 ## Open: devel and hardware
 
 - **Devel probe counts:** `devel` reports `lua: 0` and `python: 1` on the

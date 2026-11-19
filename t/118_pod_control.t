@@ -29,7 +29,7 @@ my $J = JSON::XS->new->canonical(1)->utf8;
 my $base = Cwd::abs_path(File::Temp::tempdir("aicli_podc_XXXXXX", TMPDIR => 1, CLEANUP => 1));
 my $root = "$base/projects";
 mkdir $root or die "mkdir: $!";
-mkdir "$root/$_" or die "mkdir: $!" for qw(alpha beta gamma);
+mkdir "$root/acme" or die "mkdir: $!"; mkdir "$root/acme/$_" or die "mkdir: $!" for qw(alpha beta gamma);
 open(my $touch, '>', "$root/afile") or die "file: $!";
 close $touch;
 
@@ -37,7 +37,7 @@ close $touch;
 my $engine = "$base/engine.sock";
 my $epid = fork() // die "fork: $!";
 if (!$epid) {
-    my %pods = ('aicli-base-alpha' => 'Running');
+    my %pods = ('aicli-base-acme-alpha' => 'Running');
     my %ctrs;   # the dev containers: a pod's container goes with the pod
     my $srv = IO::Socket::UNIX->new(Local => $engine, Type => Socket::SOCK_STREAM(), Listen => 5) or POSIX::_exit(1);
     while (my $c = $srv->accept) {
@@ -90,9 +90,9 @@ is($b->{idle}, 1800, "the idle time: 30 minutes, in seconds");
 
 my $p = $b->_projects();
 ok($p->{ok}, "projects answers");
-is_deeply([map {$_->{name}} @{$p->{projects}}], [qw(alpha beta gamma)], "the projects are the directories under the root (not the file)");
-ok($p->{projects}[0]{pods}{base}, "alpha's base pod runs");
-ok(!$p->{projects}[1]{pods}{base}, "beta's base pod is closed");
+is_deeply([map {$_->{name}} @{$p->{projects}}], [qw(acme/alpha acme/beta acme/gamma)], "the projects are the directories under the root (not the file)");
+ok($p->{projects}[0]{pods}{base}, "acme/alpha's base pod runs");
+ok(!$p->{projects}[1]{pods}{base}, "acme/beta's base pod is closed");
 ok(!$p->{projects}[0]{pods}{node}, "and alpha has no node pod");
 is($p->{open_count}, 1, "one pod open");
 is($p->{max_pods}, 2, "with the cap");
@@ -101,38 +101,38 @@ is($p->{pods}[0]{note}, 'the basic tools', "with their notes");
 is_deeply($p->{pods}[1]{programs}, [qw(node npm npx)], "and their programs");
 ok(!exists $p->{pods}[0]{image}, "the images are not for the model");
 
-my $r = $b->_open({project => 'beta', pod => 'nosuch'});
+my $r = $b->_open({project => 'acme/beta', pod => 'nosuch'});
 ok(!$r->{ok}, "a kind the config does not name is refused");
 like($r->{error}, qr/no such pod: 'nosuch'/, "and says so");
-$r = $b->_open({project => 'beta'});
+$r = $b->_open({project => 'acme/beta'});
 ok($r->{ok}, "beta opens (the cap is 2, alpha is one)");
 ok($r->{created}, "and is made now");
-$r = $b->_open({project => 'gamma'});
+$r = $b->_open({project => 'acme/gamma'});
 ok(!$r->{ok}, "a third pod is refused: the cap");
 like($r->{error}, qr/2 pods are open already/, "and says so");
-$r = $b->_open({project => 'alpha'});
+$r = $b->_open({project => 'acme/alpha'});
 ok($r->{ok}, "a pod that is open already opens again (it is not counted against the cap)");
-$r = $b->_close({project => 'beta'});
+$r = $b->_close({project => 'acme/beta'});
 ok($r->{ok}, "beta closes");
-$r = $b->_open({project => 'gamma'});
+$r = $b->_open({project => 'acme/gamma'});
 ok($r->{ok}, "so gamma can open");
-$r = $b->_open({project => 'alpha', pod => 'node'});
+$r = $b->_open({project => 'acme/alpha', pod => 'node'});
 ok(!$r->{ok}, "a node pod counts against the same cap");
 
 # the idle close: alpha unused for an hour is closed, gamma (used now) stays
-$b->{last}{'base/alpha'} = time - 3600;
+$b->{last}{'base/acme/alpha'} = time - 3600;
 $b->_reap();
 $p = $b->_projects();
 my %open = map {$_->{name} => $_->{pods}{base}} @{$p->{projects}};
-ok(!$open{alpha}, "alpha, unused for an hour, is closed by the idle check");
-ok($open{gamma}, "gamma, used now, stays open");
+ok(!$open{'acme/alpha'}, "alpha, unused for an hour, is closed by the idle check");
+ok($open{'acme/gamma'}, "gamma, used now, stays open");
 
 # a broker started again: the pods it finds count from its start, so none is closed at once
 my $b2 = broker->new(%cfg, socket => "$base/unused2.sock");
 $b2->_reap();
 $p = $b2->_projects();
 %open = map {$_->{name} => $_->{pods}{base}} @{$p->{projects}};
-ok($open{gamma}, "after a restart an open pod is not closed at once");
+ok($open{'acme/gamma'}, "after a restart an open pod is not closed at once");
 
 # the tools, through a broker that serves its socket (a stand-in client for podman-remote)
 my $bsock = "$base/broker.sock";
@@ -148,7 +148,7 @@ for (1 .. 100) { last if -S $bsock; select(undef, undef, undef, 0.05) }
 
 $::ORIG_ENV{AI_POD_ROOT} = $root;
 $::ORIG_ENV{AI_BROKER_SOCKET} = $bsock;
-$ai::WORKSPACE = "$root/gamma";
+$ai::WORKSPACE = "$root/acme/gamma";
 
 ok(tools::available('pods'), "the pod tools are there with a root");
 ok(tools::available('pod_run'), "and pod_run");
@@ -170,24 +170,24 @@ like($out, qr/node  node npm npx  \(nodejs\)/, "and the node kind");
 like($out, qr/1 of 2 pods open/, "pods: the open count and the cap");
 
 my $bash = tools::bash_7c48(['echo hi']);
-like($bash, qr/ran: exec --workdir \/work aicli-base-gamma-dev bash -c echo hi/, "bash runs in the open base pod of the session");
+like($bash, qr/ran: exec --workdir \/work aicli-base-acme-gamma-dev bash -c echo hi/, "bash runs in the open base pod of the session");
 
-$out = tools::pod_close_c03a(['gamma']);
-like($out, qr/base pod of gamma is closed; this session's bash, perl and grep need it open again/, "pod_close: says the session needs it open again");
+$out = tools::pod_close_c03a(['acme/gamma']);
+like($out, qr/base pod of acme\/gamma is closed; this session's bash, perl and grep need it open again/, "pod_close: says the session needs it open again");
 my $ok = eval { tools::bash_7c48(['echo']); 1 };
 ok($ok, "bash in a closed base pod opens it first");
 
-$out = tools::pod_open_9d52(['alpha', 'base']);
-like($out, qr/base pod of alpha is open \(made now\)/, "pod_open: alpha's base pod was closed by the idle check, so it is made now");
-$out = tools::pod_open_9d52(['gamma']);
-like($out, qr/base pod of gamma is open \(it was open\)/, "pod_open with no kind is the base pod, and it was open (the bash call before)");
-$ok = eval { tools::pod_open_9d52(['beta']); 1 };
+$out = tools::pod_open_9d52(['acme/alpha', 'base']);
+like($out, qr/base pod of acme\/alpha is open \(made now\)/, "pod_open: alpha's base pod was closed by the idle check, so it is made now");
+$out = tools::pod_open_9d52(['acme/gamma']);
+like($out, qr/base pod of acme\/gamma is open \(it was open\)/, "pod_open with no kind is the base pod, and it was open (the bash call before)");
+$ok = eval { tools::pod_open_9d52(['acme/beta']); 1 };
 ok(!$ok, "a third pod is refused by the cap");
 like($@, qr/pods are open already/, "and the tool says why");
 $ok = eval { tools::pod_open_9d52(['']); 1 };
 ok(!$ok, "pod_open without a project is refused");
 like($@, qr/a project name is wanted/, "and says what is wanted");
-$ok = eval { tools::pod_open_9d52(['gamma', 'bad']); 1 };
+$ok = eval { tools::pod_open_9d52(['acme/gamma', 'bad']); 1 };
 ok(!$ok, "pod_open of a kind the config does not name is refused");
 like($@, qr/no such pod: 'bad'/, "and says so");
 $ok = eval { tools::pod_close_c03a(['nosuch']); 1 };
@@ -195,10 +195,10 @@ ok(!$ok, "pod_close of no project is refused");
 like($@, qr/no such project/, "and says so");
 
 # pod_run: a toolchain's program in its own pod; the basic tools' pod runs only its own programs
-$out = tools::pod_close_c03a(['alpha']);
-like($out, qr/base pod of alpha is closed/, "alpha's base pod closes, to make room for a node pod");
+$out = tools::pod_close_c03a(['acme/alpha']);
+like($out, qr/base pod of acme\/alpha is closed/, "acme/alpha's base pod closes, to make room for a node pod");
 $out = tools::pod_run_5a7e(['node', 'node -v']);
-like($out, qr/ran: exec --workdir \/work aicli-node-gamma-dev node -v/, "pod_run: node runs in the node pod of the session's project");
+like($out, qr/ran: exec --workdir \/work aicli-node-acme-gamma-dev node -v/, "pod_run: node runs in the node pod of the session's project");
 $ok = eval { tools::pod_run_5a7e(['base', 'node -v']); 1 };
 ok(!$ok, "node is not a program of the base pod");
 like($@, qr/not in the base pod \(its programs: bash, perl, grep\)/, "and the broker says what the base pod runs");

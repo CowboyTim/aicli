@@ -2,7 +2,8 @@
 # of the host. It is the only container that has the engine socket; the agent
 # containers get the broker's socket from the volume aicli-broker, and nothing else.
 #
-#   AI_PROJECTS     the host directory of the projects (the root; its subdirectories are the projects)
+#   AI_PROJECTS     the host directory of the projects: the root; its subdirectories are the accounts, and
+#                   the subdirectories of an account are its projects (AI_PROJECTS/<account>/<project>)
 #   PODMAN_SOCKET   the rootless Podman socket of the user that runs the broker
 #   BROKER_UID      that user's UID (the owner of the socket; the agents run as the same UID)
 #   BROKER_GID      its GID

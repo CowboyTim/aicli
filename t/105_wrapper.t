@@ -42,17 +42,17 @@ sub run_wrapper {
 
 my $root = Cwd::abs_path(File::Temp::tempdir("aicli_root_XXXXXX", TMPDIR => 1, CLEANUP => 1)) . "/master";
 mkdir $root or die "mkdir: $!";
-mkdir "$root/alpha" or die "mkdir: $!";
-mkdir "$root/alpha/src" or die "mkdir: $!";
-mkdir "$root/beta" or die "mkdir: $!";
+mkdir "$root/acme" unless -d "$root/acme"; mkdir "$root/acme/alpha" or die "mkdir: $!";
+mkdir "$root/acme/alpha/src" or die "mkdir: $!";
+mkdir "$root/acme" unless -d "$root/acme"; mkdir "$root/acme/beta" or die "mkdir: $!";
 
 {
-    my ($status, $args, $err) = run_wrapper("$root/alpha/src", '--root', $root, '-c');
+    my ($status, $args, $err) = run_wrapper("$root/acme/alpha/src", '--root', $root, '-c');
     is($status, 0, "--root from a project runs");
     ok((grep {$_ eq "$root:/workdir/master"} @$args), "the root is mounted at /workdir/master");
     my @w_index = grep {$args->[$_] eq '-w'} 0 .. $#$args;
-    is($args->[$w_index[0] + 1], '/workdir/master/alpha/src', "the container starts in the project");
-    ok((grep {$_ eq "CDIR=/workdir/master/alpha/src"} @$args), "and CDIR says so");
+    is($args->[$w_index[0] + 1], '/workdir/master/acme/alpha/src', "the container starts in the project");
+    ok((grep {$_ eq "CDIR=/workdir/master/acme/alpha/src"} @$args), "and CDIR says so");
     ok((grep {$_ eq 'aicli-tester-root-master'} @$args), "the container is named for the root");
     unlike(join(' ', @$args), qr{$tmp/ }, "nothing of the temp directory is mounted");
 }
@@ -76,9 +76,9 @@ mkdir "$root/beta" or die "mkdir: $!";
 }
 
 {
-    my ($status, $args) = run_wrapper("$root/beta");
+    my ($status, $args) = run_wrapper("$root/acme/beta");
     is($status, 0, "without --root the directory is mounted, as before");
-    ok((grep {$_ eq "$root/beta:/workdir/beta"} @$args), "the current directory at /workdir/<its name>");
+    ok((grep {$_ eq "$root/acme/beta:/workdir/beta"} @$args), "the current directory at /workdir/<its name>");
     my @w_index = grep {$args->[$_] eq '-w'} 0 .. $#$args;
     is($args->[$w_index[0] + 1], '/workdir/beta', "and the container starts there");
 }
@@ -90,7 +90,7 @@ mkdir "$root/beta" or die "mkdir: $!";
 }
 
 {
-    my ($status, $args) = run_wrapper("$root/alpha", '--root', $root, '--broker');
+    my ($status, $args) = run_wrapper("$root/acme/alpha", '--root', $root, '--broker');
     is($status, 0, "--broker with --root runs");
     ok((grep {$_ eq 'AI_POD_ROOT=/workdir/master'} @$args), "the tools' pods are the projects of the root, as the container sees it");
     ok((grep {$_ eq 'aicli-broker:/run/aicli-broker'} @$args), "the broker's socket volume is mounted");

@@ -40,6 +40,10 @@ package broker;
 
 my $JSON = JSON::XS->new->canonical(1)->utf8;
 
+# an account: the name of a login, a directory under the root (no dash: a pod's name is split at
+# its dashes, see _pod_name)
+our $ACCOUNT_RE = qr/[A-Za-z0-9][A-Za-z0-9._]{0,31}/;
+
 # the log: one line per event on stderr, which `docker logs` shows. Never a request's
 # whole body, and nothing of the engine's answers but the status code.
 our $LOG = \*STDERR;
@@ -154,8 +158,8 @@ sub _dispatch {
     # token (shown once), the list, and a revocation
     if ($op eq 'enroll_token' or $op eq 'agents' or $op eq 'agent_revoke') {
         my $user = $req->{user};
-        return {ok => JSON::XS::false(), error => "a user is wanted"}
-            unless defined $user and !ref($user) and length($user) and length($user) <= 128;
+        return {ok => JSON::XS::false(), error => "a user (an account name) is wanted"}
+            unless defined $user and !ref($user) and $user =~ m/\A$ACCOUNT_RE\z/;
         return {ok => JSON::XS::true(), token => $self->{hub}->issue_enroll($user)} if $op eq 'enroll_token';
         return {ok => JSON::XS::true(), agents => $self->{hub}->agents_of($user)} if $op eq 'agents';
         return {ok => JSON::XS::false(), error => "a name of an agent is wanted"}
@@ -165,18 +169,25 @@ sub _dispatch {
     return {ok => JSON::XS::false(), error => "unknown request '$op' (open, close, list, projects, exec, enroll_token, agents or agent_revoke)"};
 }
 
-# a project's name: a directory directly under the root, not a link
+# a project's name: account/project, the project a directory in the account's directory under
+# the root; neither of them a link
 sub project_name {
     my ($self, $name) = @_;
-    return undef unless defined $name and !ref($name)
-        and $name =~ m/\A[A-Za-z0-9][A-Za-z0-9._-]{0,62}\z/;
-    my $dir = "$self->{root}/$name";
+    return undef unless defined $name and !ref($name);
+    my ($account, $project) = $name =~ m{\A($ACCOUNT_RE)/([A-Za-z0-9][A-Za-z0-9._-]{0,62})\z} or return undef;
+    my $adir = "$self->{root}/$account";
+    return undef unless -d $adir and !-l $adir;
+    my $dir = "$adir/$project";
     return undef unless -d $dir and !-l $dir;
     return $name;
 }
 
-# the engine's name of a project's pod of a kind: aicli-<kind>-<project> (a kind has no dash)
-sub _pod_name { my ($kind, $name) = @_; return "aicli-$kind-$name" }
+# the account of a project name (the first part), or undef
+sub account_of { my ($name) = @_; return undef unless defined $name; my ($a) = $name =~ m{\A([^/]+)/}; return $a }
+
+# the engine's name of a project's pod of a kind: aicli-<kind>-<account>-<project>. A kind has
+# no dash, nor an account (see $ACCOUNT_RE): the name splits back into its parts.
+sub _pod_name { my ($kind, $name) = @_; my ($a, $p) = split m{/}, $name, 2; return "aicli-$kind-$a-$p" }
 
 sub _open {
     my ($self, $req) = @_;
@@ -466,12 +477,19 @@ sub _projects {
     return $self->_failed("the engine did not list the pods", $code, $body) unless $code == 200;
     my %running = _running($body);
     opendir(my $dh, $self->{root}) or return {ok => JSON::XS::false(), error => "the root cannot be read: $!"};
-    my @names = sort grep {!m/\A\./} readdir($dh);
+    my @accounts = sort grep {!m/\A\./ and -d "$self->{root}/$_" and !-l "$self->{root}/$_"} readdir($dh);
     closedir($dh);
     my @projects;
-    for my $p (grep {defined $self->project_name($_)} @names) {
-        my %pods = map {($_ => ($running{"$_/$p"} ? JSON::XS::true() : JSON::XS::false()))} sort keys %{$self->{pods}};
-        push @projects, {name => $p, pods => \%pods};
+    for my $a (@accounts) {
+        next unless $a =~ m/\A$ACCOUNT_RE\z/;
+        opendir(my $ph, "$self->{root}/$a") or next;
+        my @names = sort grep {!m/\A\./} readdir($ph);
+        closedir($ph);
+        for my $n (grep {defined $self->project_name("$a/$_")} @names) {
+            my $p = "$a/$n";
+            my %pods = map {($_ => ($running{"$_/$p"} ? JSON::XS::true() : JSON::XS::false()))} sort keys %{$self->{pods}};
+            push @projects, {name => $p, pods => \%pods};
+        }
     }
     my @kinds = map {{name => $_, programs => $self->{pods}{$_}{list}, note => $self->{pods}{$_}{note}}}
         sort keys %{$self->{pods}};
@@ -486,8 +504,8 @@ sub _running {
     my %run;
     for my $p (ref($list) eq 'ARRAY' ? @$list : ()) {
         next unless ($p->{Status} // '') eq 'Running';
-        next unless ($p->{Name} // '') =~ m/\Aaicli-([a-z][a-z0-9]{0,15})-(.+)\z/;
-        $run{"$1/$2"} = 1;
+        next unless ($p->{Name} // '') =~ m/\Aaicli-([a-z][a-z0-9]{0,15})-($ACCOUNT_RE)-(.+)\z/;
+        $run{"$1/$2/$3"} = 1;
     }
     return %run;
 }
@@ -545,7 +563,7 @@ sub _exec {
         # a kind on an agent: the answer comes when the agent has run it (or it is refused now)
         return {ok => JSON::XS::false(), error => "the $kind kind runs on an agent, and this call cannot wait for one"}
             unless $send;
-        $self->{hub}->submit(project => $name, tags => $spec->{tags}, argv => $argv, timeout => $AGENT_EXEC_TIMEOUT,
+        $self->{hub}->submit(project => $name, account => account_of($name), tags => $spec->{tags}, argv => $argv, timeout => $AGENT_EXEC_TIMEOUT,
             done => sub {
                 my ($r) = @_;
                 _log("exec project=$name pod=$kind program=$argv->[0] on an agent -> "

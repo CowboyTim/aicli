@@ -118,7 +118,8 @@ sub _run {
         return $self->_result($id, 126, "refused: $argv->[0] is not a program of this agent (its programs: "
             .join(', ', sort keys %{$self->{programs}}).")\n");
     }
-    if ($project !~ m/\A[A-Za-z0-9][A-Za-z0-9._-]{0,62}\z/) {
+    # account/project: the broker's names (its accounts have no dash, see broker.pl)
+    if ($project !~ m{\A[A-Za-z0-9][A-Za-z0-9._]{0,31}/[A-Za-z0-9][A-Za-z0-9._-]{0,62}\z}) {
         return $self->_result($id, 2, "no such project\n");
     }
     my $dir = "$self->{work}/$project";

@@ -235,7 +235,7 @@ calls; the last 200 messages). Every session runs in a process of its own
 (a worker of the interface): sessions run at the same time, a busy one shows
 as busy in the list, and an idle one is stopped after `AI_WORKER_IDLE` seconds
 (900 by default). A session's project is the directory it was made in: the
-directories directly under the root (where the interface was started) are the
+directories of the accounts under the root (where the interface was started) are the
 projects. The page's project select switches to the newest session of a project,
 or makes one; a new session's prompt carries that project's `AGENTS.md`, and its
 worker may only write in the project (and the temp directory and its own

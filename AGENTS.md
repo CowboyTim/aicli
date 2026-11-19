@@ -133,7 +133,7 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   directory is chowned, with its content when the owner changes), then
   `ai::chat_setup(); ai::setup_commands(); ai::chat_loop();`. Holds the POD.
 - **ai.pm** – several packages in one file. Projects (`$ROOT`, the workspace at
-  start): `project_dirs()` (the directories under the root, not hidden, not links),
+  start): `project_dirs()` (the projects: account/project, the directories of the accounts under the root, not hidden, not links),
   `session_project($name)` (the `cwd` file of a session, relative to the root),
   `project_path($rel)`, `in_project($dir, $code)` (the process and the workspace
   are the project for the time of the call: a new session's prompt names it).
@@ -244,7 +244,7 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   its kind's list (`programs`), and opens the pod first when it is closed. `_reap()` closes
   a pod unused for `idle_minutes` (last open or exec, `$self->{last}{"kind/project"}`), once
   a minute from the serve loop (a pod found open at a start counts from that start).
-  A project is a directory directly under the root (`project_name()`), its host
+  A project is `account/project`: a directory of an account's directory under the root (`project_name()`), its host
   path is `host_root/<name>` (podman binds it on the host, not in the broker's
   container). The container of a pod: one bind mount (`/work`), not privileged,
   `cap_drop ALL`, no new privileges, memory and pids limits, the image from the
