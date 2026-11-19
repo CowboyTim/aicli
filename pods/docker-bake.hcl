@@ -20,10 +20,16 @@ variable "IMAGE_REPO" {
   default = "aicli-pod"
 }
 
+variable "AICLI_REGISTRY_HOST" {
+  # the registry host the pod images are pushed to and pulled from (an external registry, set in
+  # the environment; bake reads a variable of the same name from it). The broker takes
+  # AICLI_POD_REGISTRY from its compose settings.
+  default = ""
+}
+
 variable "REGISTRY" {
-  # the registry the pod images are pushed to and pulled from (an external registry, set with
-  # REGISTRY in the environment; the broker takes AICLI_POD_REGISTRY from its compose settings).
-  default = "${getenv("AICLI_REGISTRY_HOST")}/aicli"
+  # the image prefix of the pod images: ${AICLI_REGISTRY_HOST}/aicli
+  default = "${AICLI_REGISTRY_HOST}/aicli"
 }
 
 variable "ROCM_IMAGE" {
