@@ -68,6 +68,11 @@ v=$(need CERTBOT_EMAIL)
 set_key "$env_f" CERTBOT_EMAIL "$v"
 v=$(need AI_PROJECTS)
 set_key "$env_f" AI_PROJECTS "$v"
+# the login of the pod registry (the broker pulls with it): in the environment or .env
+for k in AICLI_REGISTRY_HOST AICLI_REGISTRY_USER AICLI_REGISTRY_PASSWORD; do
+    v=$(need $k)
+    set_key "$env_f" "$k" "$v"
+done
 # the IPv6 prefix of the containers (the /120 and its gateway): from the environment or .env
 # (kept from the first run on)
 v=$(need IPV6_PREFIX)
