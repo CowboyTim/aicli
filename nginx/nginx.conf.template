@@ -82,16 +82,6 @@ http {
             proxy_set_header X-Forwarded-Proto $scheme;
             proxy_set_header X-Forwarded-For $remote_addr;
         }
-        # the registry token route is for the LAN only (nginx-local): never from the internet
-        location = /auth/registry/token {
-            return 404;
-        }
-
-        # the registry is on the LAN only (nginx-local): no push or pull through the internet
-        location /v2/ {
-            return 404;
-        }
-
         location /auth/ {
             set $auth http://auth:9000;
             proxy_pass $auth;

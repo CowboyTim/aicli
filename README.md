@@ -609,10 +609,6 @@ The bake file tags each image twice: `aicli-pod:<kind>` for local use (`run.sh`)
 (override it in the environment). The broker uses Podman's image store, which the Docker
 daemon does not share, so the pull from the registry is what makes an image visible to it.
 
-The token route in `auth.pl` (`/auth/registry/token`) implements the Docker registry's
-token protocol with this stack's accounts. It is not used by the registry above unless that
-registry is set up to ask it; the public nginx refuses the route and `/v2/`.
-
 ### Devices and groups
 
 `run.sh` passes devices by name and adds the groups that own them. The broker does the

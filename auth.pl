@@ -540,97 +540,6 @@ sub _cookie {
 
 
 # the answer to a request: [status, [headers], body]. $rsa is the key of the tokens; $now the time.
-# --- the registry: the token protocol of the Docker registry (distribution) --------------
-# docker and podman do not log in with a cookie: a request for a token comes with Basic
-# credentials (or none), and the registry checks the token it gets. The token is signed
-# with this service's key; the registry has only the certificate of the public key (the
-# file below, made here at start), so it can check tokens and never make one. Pull is for
-# anyone who asks (the registry is reached on the LAN only, see nginx); push is for the
-# accounts in the role aicli-registry, and only for repositories under aicli/.
-our $REGISTRY_SERVICE = 'aicli-registry';
-our $REGISTRY_CERT_DEFAULT = '/var/lib/aicli-registry-auth/token.crt';
-our $REPO_RX = qr{\Aaicli/[a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)*\z};
-
-sub registry_cert_file { return $ENV{AI_AUTH_REGISTRY_CERT} // $REGISTRY_CERT_DEFAULT }
-
-# the certificate of the key's public half, made when it is missing or older than the key
-sub registry_cert {
-    my ($key_file) = @_;
-    my $cert = registry_cert_file();
-    return $cert if -s $cert and -M $cert <= -M $key_file;
-    my $tmp = "$cert.tmp";
-    system('openssl', 'req', '-new', '-x509', '-key', $key_file, '-out', $tmp, '-days', '3650',
-        '-subj', '/CN=aicli-auth') == 0 or die "auth: cannot make the registry's certificate (openssl)\n";
-    rename($tmp, $cert) or die "auth: cannot write $cert: $!\n";
-    return $cert;
-}
-
-# a registry token: the access list of the registry's protocol, five minutes long
-sub registry_token_create {
-    my ($rsa, $user, $access, $now) = @_;
-    $now //= time();
-    my $header = MIME::Base64::encode_base64url($JSON->encode({ alg => 'RS256', typ => 'JWT' }));
-    my $payload = MIME::Base64::encode_base64url($JSON->encode({
-        iss => $ISSUER, sub => $user // '', aud => $REGISTRY_SERVICE,
-        iat => $now, nbf => $now, exp => $now + 300, jti => random_b64(16),
-        access => $access,
-    }));
-    my $signed = "$header.$payload";
-    return "$signed." . MIME::Base64::encode_base64url(_sign_rs256($rsa, $signed));
-}
-
-# the access a request gets from its scopes ("repository:NAME:actions"): pull for any
-# repository under aicli/, push only for the role aicli-registry; anything else is dropped
-sub registry_access {
-    my ($user, $scopes) = @_;
-    my $can_push = defined $user && grep { $_ eq 'aicli-registry' } roles_of($user);
-    my @access;
-    for my $s (@$scopes) {
-        my ($type, $name, $acts) = split /:/, $s, 3;
-        next unless ($type // '') eq 'repository' and defined $name and $name =~ $REPO_RX;
-        my %want = map { $_ => 1 } split /,/, $acts // '';
-        my @got = grep { $_ eq 'pull' or ($_ eq 'push' and $can_push) } sort keys %want;
-        push @access, { type => 'repository', name => $name, actions => \@got } if @got;
-    }
-    return @access;
-}
-
-# every value of a query parameter (the registry sends one "scope" per repository)
-sub query_values {
-    my ($req, $name) = @_;
-    my @v;
-    for my $pair (split /&/, $req->{qraw} // '') {
-        my ($k, $v) = split /=/, $pair, 2;
-        push @v, url_decode($v // '') if defined $k and url_decode($k) eq $name;
-    }
-    return @v;
-}
-
-# GET /auth/registry/token?service=aicli-registry&scope=repository:aicli/x:pull,push
-sub registry_token_answer {
-    my ($rsa, $req, $now) = @_;
-    return _response(400, 'unknown service') unless ($req->{query}{service} // '') eq $REGISTRY_SERVICE;
-    my $user;
-    my $auth = $req->{headers}{authorization} // '';
-    if ($auth =~ m/\ABasic\s+(\S+)\z/i) {
-        my ($u, $p) = split /:/, (MIME::Base64::decode_base64($1) // ''), 2;
-        if (!defined $p or !valid_user($u // '') or !pam_ok($u, $p)) {
-            print STDERR "auth: registry login refused for ".(valid_user($u // '') ? $u : '(not a user name)')."\n";
-            return _response(401, 'unauthorized', headers => [['WWW-Authenticate', 'Basic realm="aicli-registry"']]);
-        }
-        $user = $u;
-    }
-    my @access = registry_access($user, [ query_values($req, 'scope') ]);
-    print STDERR "auth: registry token for ".($user // 'anonymous').": "
-        .(join(' ', map { "$_->{name}:".join(',', @{ $_->{actions} }) } @access) || 'nothing')."\n";
-    my $token = registry_token_create($rsa, $user, \@access, $now);
-    my @t = gmtime($now);
-    my $issued = sprintf('%04d-%02d-%02dT%02d:%02d:%02dZ', $t[5] + 1900, $t[4] + 1, @t[3, 2, 1, 0]);
-    return _response(200, '', headers => [
-        ['Content-Type', 'application/json'], ['Cache-Control', 'no-store'],
-    ], body => $JSON->encode({ token => $token, access_token => $token, expires_in => 300, issued_at => $issued })."\n");
-}
-
 sub handle {
     my ($rsa, $req, $now) = @_;
     $now //= time();
@@ -686,9 +595,6 @@ sub handle {
         my ($claims) = jwt_verify($rsa, token_of($req), $now);
         revoke_session($claims, $now) if $claims;
         return _response(200, 'logged out', headers => [['Set-Cookie', _cookie('', 0)]]);
-    }
-    if ($path eq "/auth/registry/token" and $m eq "GET") {
-        return registry_token_answer($rsa, $req, $now);
     }
     if ($path eq '/auth/verify') { # nginx's subrequest may use any method
         my ($claims, $why) = jwt_verify($rsa, token_of($req), $now);
@@ -808,7 +714,6 @@ sub main {
         print "auth: key ok ($key_file), PAM service ".($ENV{AI_AUTH_PAM_SERVICE} // 'aicli-auth')."\n";
         return 0;
     }
-    eval { registry_cert($key_file); 1 } or print STDERR "auth: no registry certificate yet: $@";
     restore_accounts();
     serve($rsa, $ENV{AI_AUTH_LISTEN} // '0.0.0.0:9000');
     return 0;
