@@ -37,6 +37,14 @@
   #pods ul { list-style: none; margin: 0; padding: 0; }
   #pods li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 0; }
   #pods button { font-size: 13px; padding: 2px 8px; }
+  #agents { flex: 1 1 100%; font-size: 13px; color: var(--muted); }
+  #agents .agenthead { margin-bottom: 4px; }
+  #agents ul { list-style: none; margin: 0; padding: 0; }
+  #agents li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 0; }
+  #agents button { font-size: 13px; padding: 2px 8px; }
+  #agents .enroll { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
+  #agents .enroll input { flex: 1 1 auto; min-width: 0; font-family: monospace; font-size: 12px; }
+  #agents .enroll[hidden] { display: none; }
   #session option { max-width: 40em; }
   @media (min-width: 700px) { #menu { left: auto; width: 340px; border-left: 1px solid var(--line); } }
 
@@ -124,6 +132,14 @@
       <div class="podhead">pods <span id="podnote"></span></div>
       <ul id="podlist"></ul>
     </div>
+    <div id="agents">
+      <div class="agenthead">agents <button type="button" id="agentnew">new enrollment token</button> <span id="agentnote"></span></div>
+      <div class="enroll" id="agentenroll" hidden>
+        <input id="agenttoken" readonly aria-label="enrollment token">
+        <button type="button" id="agentcopy">copy</button>
+      </div>
+      <ul id="agentlist"></ul>
+    </div>
     <label>theme <select id="theme" aria-label="theme">
       <option value="system">system</option>
       <option value="light">light</option>
@@ -173,6 +189,10 @@
   var project = document.getElementById("project");
   var podlist = document.getElementById("podlist");
   var podnote = document.getElementById("podnote");
+  var agentlist = document.getElementById("agentlist");
+  var agentnote = document.getElementById("agentnote");
+  var agentenroll = document.getElementById("agentenroll");
+  var agenttoken = document.getElementById("agenttoken");
   var form = document.getElementById("form");
   var text = document.getElementById("text");
   var send = document.getElementById("send");
@@ -502,6 +522,51 @@
       podlist.appendChild(li);
     });
   }
+
+  // the agents of the user: a new enrollment token (shown once, copied to the agent's machine), the
+  // list of the agents enrolled with it, and a revoke for each. The broker answers the page here.
+  function agentsCall(path, body) {
+    var opts = { method: body ? "POST" : "GET", headers: { "Content-Type": "application/json" } };
+    if (body) { opts.body = JSON.stringify(body); }
+    return fetch(path, opts).then(function (r) {
+      return r.json().then(function (j) {
+        if (!r.ok) { throw new Error(j.error || r.statusText); }
+        return j;
+      });
+    });
+  }
+  function agentsLoad() {
+    agentsCall("/agent/list").then(setAgents).catch(function (err) { agentnote.textContent = String(err); });
+  }
+  function setAgents(d) {
+    agentlist.textContent = "";
+    (d.agents || []).forEach(function (a) {
+      var li = document.createElement("li");
+      var label = document.createElement("span");
+      label.textContent = a.name + "  " + (a.tags || []).join(", ");
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = "revoke";
+      btn.addEventListener("click", function () {
+        agentsCall("/agent/revoke", { name: a.name }).then(agentsLoad).catch(function (err) { agentnote.textContent = String(err); });
+      });
+      li.appendChild(label);
+      li.appendChild(btn);
+      agentlist.appendChild(li);
+    });
+  }
+  document.getElementById("agentnew").addEventListener("click", function () {
+    agentsCall("/agent/token", {}).then(function (d) {
+      agenttoken.value = d.token;
+      agentenroll.hidden = false;
+      agentnote.textContent = "shown once: on the agent's machine, ai.pl --agent --enroll TOKEN --broker https://" + location.host + "/agents --name NAME --tags TAGS";
+    }).catch(function (err) { agentnote.textContent = String(err); });
+  });
+  document.getElementById("agentcopy").addEventListener("click", function () {
+    agenttoken.select();
+    if (navigator.clipboard) { navigator.clipboard.writeText(agenttoken.value); } else { document.execCommand("copy"); }
+  });
+  agentsLoad();
 
   // the state names the current model: selected, added first when the list lacks it
   function setCurrent(current) {

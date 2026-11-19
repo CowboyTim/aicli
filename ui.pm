@@ -38,7 +38,7 @@ my %STATUS = (
     200 => 'OK', 202 => 'Accepted', 303 => 'See Other', 400 => 'Bad Request',
     401 => 'Unauthorized', 403 => 'Forbidden', 404 => 'Not Found',
     405 => 'Method Not Allowed', 413 => 'Payload Too Large', 415 => 'Unsupported Media Type',
-    429 => 'Too Many Requests', 500 => 'Internal Server Error',
+    429 => 'Too Many Requests', 500 => 'Internal Server Error', 502 => 'Bad Gateway',
     431 => 'Request Header Fields Too Large', 501 => 'Not Implemented',
 );
 
@@ -1104,6 +1104,30 @@ sub _dispatch {
             if $op ne 'list' and (!defined $project or ref($project) or !length($project));
         if ($op eq 'list') { _refresh_pods() } else { _pod_request($op, $project) }
         return _json($cn, 202, {ok => \1});
+    }
+    # the agents of the user (remote_hub.pm, through the broker): the enrollment token (shown
+    # once), the list, a revocation. The user is the login's (nginx sends it as X-Aicli-User).
+    if($p =~ m{\A/agent/(token|list|revoke)\z} and (($p eq '/agent/token' and $m eq 'POST') or ($p eq '/agent/list' and $m eq 'GET') or ($p eq '/agent/revoke' and $m eq 'POST'))){
+        my $user = $h->{'x-aicli-user'} // '';
+        return _json($cn, 403, {ok => \0, error => 'agents need the login (through nginx)'})
+            unless length $user and $user =~ m/\A[A-Za-z0-9._@-]{1,128}\z/;
+        my $req = {user => $user};
+        if ($p eq '/agent/token') {
+            $req->{op} = 'enroll_token';
+        } elsif ($p eq '/agent/list') {
+            $req->{op} = 'agents';
+        } else {
+            my $d = eval {$::JSON->decode($body // '')};
+            return _json($cn, 400, {ok => \0, error => 'a JSON object with the name of the agent is wanted'})
+                unless ref($d) eq 'HASH' and defined $d->{name} and !ref($d->{name}) and length($d->{name});
+            $req->{op} = 'agent_revoke';
+            $req->{name} = $d->{name};
+        }
+        _broker_ask($req, sub {
+            my ($r) = @_;
+            _json($cn, $r->{ok} ? 200 : 502, $r);
+        });
+        return;
     }
     if($p eq '/project' and $m eq 'POST'){
         my $d = eval {$::JSON->decode($body)};

@@ -262,12 +262,20 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   only the SHA-256 of each agent's token (`agents` in `broker.json`: `tags`, `token_sha256`).
   The transport is HTTPS through nginx with the public certificate (no client certificate);
   `ai.pl --agent --pin sha256//BASE64` adds a pin of the server's key (optional). The broker's
-  listener is `AI_BROKER_AGENT_LISTEN` (host:port). A kind with `tags` in
+  listener is `AI_BROKER_AGENT_LISTEN` (host:port), behind nginx's `/agents/` route (no login
+  there: the agent's token is its login). Enrollment: the web page asks for a user's enrollment
+  token (`POST /agent/token`, through the login: nginx's `X-Aicli-User`), shown once; the broker
+  keeps its hash (`enroll`, in the state file `AI_BROKER_STATE`). `ai.pl --agent --enroll TOKEN
+  --broker URL --name NAME --tags T` posts it to `/agents/enroll`, gets the agent's own token and
+  keeps it in `$AI_DIR/agent.json` (0600); `--agent` reads that file when no token is given.
+  `/agent/list` and `/agent/revoke` are the page's (through the broker's `agents`, `agent_revoke`
+  socket operations). A name or a token of the config and the state can not be the same. A kind with `tags` in
   `broker.json` runs on an agent with all of them: its `exec` waits for the answer (through the
   same Unix socket), its `open` is refused. The agent runs only the programs of its own
-  `--programs`, in `--work/<project>`, with no shell. Not built yet: enrollment (the token from
-  the main page, the agent's own token), the nginx route, deploy wiring, the owner check of a
-  job, the checkout of the project on the agent (it runs in a directory it has, empty by default).
+  `--programs`, in `--work/<project>`, with no shell. Not built yet: the owner check of a job
+  (the agents are the user's, the jobs are not yet checked against the project's owner), the
+  checkout of the project on the agent (it runs in a directory it has, empty by default), and
+  the agents' page is not refreshed by the broker's events.
 - **Pods in the web interface** (`ui.pm`, `_broker_ask`, `_pod_request`, `_refresh_pods`):
   the master asks the broker over `AI_BROKER_SOCKET` (or `/run/aicli-broker/broker.sock`,
   which `aicli.sh --broker` mounts) in a child of the loop, so the page stays live while
@@ -640,6 +648,9 @@ Other APIs are reached through an OpenAI compatible gateway, such as LiteLLM or 
 | `t/122_auth_password.t` | the password rules of auth.pl (length, printable, not the name, AI_AUTH_MINLEN), the SHA-512 crypt hash (rounds, salt, it checks), set_password asked twice (no echo on a terminal, refused when they differ or break the rules), the hash given to chpasswd -e on standard input and not the password |
 | `t/119_pod_devices.t` | a pod kind's devices: the config's rules (privileged, a device outside /dev, a bad usb id, an env name), the device paths that exist at open (globs, usb ids through sysfs), the numbers and owner groups of real character devices (stand-ins behind symlinks), what the container spec gets |
 | `t/124_remote_agents.t` | a remote agent end to end: a broker process (its listener and its Unix socket), an `ai.pl --agent` process, a relay that stands in for nginx (adds the secret header): a job runs on the agent in its project directory, its output and exit code come back, the agent's own program list refuses a program (126), the kind's list refuses a program, `open` refuses a kind on an agent, an unknown kind |
+| `t/128_agent_routes.t` | the web interface's agent routes with a stand-in broker: a token for the login's user (no login: refused, nothing asked), the list, a revocation (a name needed), a refusal of the broker (502 with its reason) |
+| `t/127_enroll_e2e.t` | the enrollment end to end: a broker with its state file, the user's token and list over the socket, `ai.pl --enroll` (a wrong token refused, the right one keeps agent.json 0600, the token not printed), `ai.pl --agent` with that file and no token on its command line runs a job, a revocation stops it |
+| `t/126_enrollment.t` | the enrollment without sockets: a user's token (only its hash kept, a new one replaces it), agents enrolled with it (own token, hash only), the names and tags checked, the list of a user, revocation (owner only, the token stops), the state file over a restart |
 | `t/125_agent_pin.t` | the agent's arguments: a pin of the form sha256//BASE64 (others refused), the token (a short one, none refused) |
 | `t/123_remote_hub.t` | the hub without sockets: the config of the agents (names, tags, token hashes), the bearer tokens that get in (403, a token of no agent, no token, not a bearer token), a held poll and a job for its tags, the answer (from the right agent only, once), busy polls (409), bad answers (400, 404), no agent for the tags, no agent connected, held polls ending (204), a job no agent takes, an agent that does not answer, an output over the cap |
 | `t/118_pod_control.t` | the pod kinds (base, and a second kind in the fixture): the projects and their pods, the cap across kinds, an idle pod closed and one found open after a restart kept, `pods`, `pod_open` (kind, already open, refusals), `pod_close` (the session's base pod noted), a closed base pod opened by a bash call, `pod_run` (node in its pod, a program of the base pod refused), through a real broker process (fake engine with containers and images) |

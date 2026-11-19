@@ -72,7 +72,7 @@ sub new {
         dev_root  => $c{dev_root} // '/dev',                         # where the host's devices are (tests)
         sys_root  => $c{sys_root} // '/sys',                         # where the host's usb devices are (tests)
         last      => {},                                             # "kind/project" => time of its last open or exec
-        hub       => remote_hub->new(agents => $c{agents}),
+        hub       => remote_hub->new(agents => $c{agents}, state_file => $c{state_file}),
         agent_listen => $c{agent_listen},                            # host:port of the agents (nginx passes them on)
     }, $class;
     return $self;
@@ -150,7 +150,19 @@ sub _dispatch {
     return $self->_list() if $op eq 'list';
     return $self->_projects() if $op eq 'projects';
     return $self->_exec($req, $send) if $op eq 'exec';
-    return {ok => JSON::XS::false(), error => "unknown request '$op' (open, close, list or projects)"};
+    # the agents of a user, from the web interface (its user, from the login): an enrollment
+    # token (shown once), the list, and a revocation
+    if ($op eq 'enroll_token' or $op eq 'agents' or $op eq 'agent_revoke') {
+        my $user = $req->{user};
+        return {ok => JSON::XS::false(), error => "a user is wanted"}
+            unless defined $user and !ref($user) and length($user) and length($user) <= 128;
+        return {ok => JSON::XS::true(), token => $self->{hub}->issue_enroll($user)} if $op eq 'enroll_token';
+        return {ok => JSON::XS::true(), agents => $self->{hub}->agents_of($user)} if $op eq 'agents';
+        return {ok => JSON::XS::false(), error => "a name of an agent is wanted"}
+            unless defined $req->{name} and !ref($req->{name});
+        return $self->{hub}->revoke($user, $req->{name});
+    }
+    return {ok => JSON::XS::false(), error => "unknown request '$op' (open, close, list, projects, exec, enroll_token, agents or agent_revoke)"};
 }
 
 # a project's name: a directory directly under the root, not a link
@@ -815,6 +827,7 @@ sub main {
     $cfg->{socket}    = $ENV{AI_BROKER_SOCKET}    if length($ENV{AI_BROKER_SOCKET} // '');
     $cfg->{engine}    = $ENV{AI_BROKER_ENGINE}    if length($ENV{AI_BROKER_ENGINE} // '');
     $cfg->{agent_listen} = $ENV{AI_BROKER_AGENT_LISTEN} if length($ENV{AI_BROKER_AGENT_LISTEN} // '');
+    $cfg->{state_file}   = $ENV{AI_BROKER_STATE}       if length($ENV{AI_BROKER_STATE} // '');
     my $b = broker->new(%$cfg);
     broker::_log(sprintf("starting: root=%s host_root=%s engine=%s pods=%s memory=%s pids=%s",
         $b->{root}, $b->{host_root}, $b->{engine}, join(',', map {"$_=$b->{pods}{$_}{image}"} sort keys %{$b->{pods}}),

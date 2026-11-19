@@ -3,6 +3,14 @@ package remote_hub;
 # in, the jobs for their tags, and the answers. No sockets here: broker.pl takes the requests
 # from its agent listener and gives the hub a send closure per connection.
 #
+# Enrollment: a logged-in user gets an enrollment token from the web interface (issue_enroll: the
+# broker keeps its SHA-256, the token is shown once). An agent enrolls with it:
+#   POST /agents/enroll           {"token": T, "name": N, "tags": [...]} -> 200 {"token": agent token}
+# The token is reusable (every agent of the user enrolls with it) until the user makes a new one.
+# The agent's token is shown to the agent once, and the broker keeps its SHA-256 with the agent's
+# name, tags and user. enroll/revoke/agents_of are the broker's; the state file keeps them
+# (state_file, JSON), and the agents of broker.json stay as they are.
+#
 # The protocol, over HTTPS (nginx passes it on; the agent checks nginx's certificate as any
 # client does):
 #   GET  /agents/poll             the agent asks for a job. 200 with the job (JSON), 204 when no
@@ -31,17 +39,34 @@ our $ONLINE    = 60;        # an agent polled this recently counts as connected
 our $MAX_OUT   = 1024 * 1024;
 our $MAX_BODY  = 64 * 1024;
 
-# agents: name => {tags => [...], token_sha256 => hex} (from the config; enrollment adds them later)
+# agents: name => {tags => [...], token_sha256 => hex} (from the config and the state file)
 sub new {
     my ($class, %c) = @_;
-    my %agents;
+    my (%agents, %enroll);
     my %by_token;
+    my $file = $c{state_file};
+    if (defined $file and -f $file) {
+        open(my $fh, '<', $file) or die "remote agents: cannot read $file: $!\n";
+        my $st = eval { JSON::XS->new->decode(do { local $/; <$fh> }) };
+        close($fh);
+        die "remote agents: $file is not the state of the agents\n" unless ref($st) eq 'HASH';
+        %enroll = %{$st->{enroll} // {}};
+        for my $name (sort keys %{$st->{agents} // {}}) {
+            my $a = $st->{agents}{$name};
+            die "remote agents: $file has a bad agent '$name'\n"
+                unless ref($a) eq 'HASH' and ref($a->{tags}) eq 'ARRAY' and defined $a->{token_sha256};
+            $agents{$name} = {tags => [@{$a->{tags}}], token_sha256 => $a->{token_sha256},
+                user => $a->{user}, enrolled => $a->{enrolled} // 0};
+            $by_token{$a->{token_sha256}}++;
+        }
+    }
     for my $name (sort keys %{$c{agents} // {}}) {
         my $a = $c{agents}{$name};
         die "remote agents: an agent is a name, its tags and the sha256 of its token, '$name'\n"
             unless ref($a) eq 'HASH' and ref($a->{tags}) eq 'ARRAY'
             and defined $a->{token_sha256} and $a->{token_sha256} =~ m/\A[0-9a-f]{64}\z/;
         die "remote agents: two agents have the same token, '$name'\n" if $by_token{$a->{token_sha256}}++;
+        die "remote agents: agent '$name' is in the config and in the state\n" if $agents{$name};
         die "remote agents: an agent's name is letters, digits, '.', '_' or '-': '$name'\n"
             unless $name =~ m/\A[A-Za-z0-9][A-Za-z0-9._-]{0,62}\z/;
         my @tags = @{$a->{tags}};
@@ -49,9 +74,11 @@ sub new {
             die "remote agents: a tag is a short lower-case word, '$t'\n"
                 unless !ref($t) and $t =~ m/\A[a-z][a-z0-9-]{0,31}\z/;
         }
-        $agents{$name} = {tags => [@tags], token_sha256 => $a->{token_sha256}};
+        $agents{$name} = {tags => [@tags], token_sha256 => $a->{token_sha256}, user => undef, enrolled => 0};
     }
     return bless {
+        file    => $file,
+        enroll  => \%enroll,
         agents  => \%agents,
         seen    => {},     # name => last poll time
         busy    => {},     # name => job id
@@ -61,7 +88,83 @@ sub new {
     }, $class;
 }
 
-sub enabled { my ($self) = @_; return %{$self->{agents}} ? 1 : 0 }
+# the listener is for the agents, and their enrollment: always on when the broker has one
+sub enabled { return 1 }
+
+sub _save {
+    my ($self) = @_;
+    return unless defined $self->{file};
+    my $tmp = "$self->{file}.tmp$$";
+    my $ok = open(my $fh, '>', $tmp);
+    if ($ok) {
+        chmod(0600, $tmp);
+        print {$fh} $JSON->encode({enroll => $self->{enroll}, agents => {map {($_ => $self->{agents}{$_})}
+            grep {defined $self->{agents}{$_}{user}} keys %{$self->{agents}}}});
+        $ok = close($fh) && rename($tmp, $self->{file});
+    }
+    die "remote agents: cannot save the state to $self->{file}: $!\n" unless $ok;
+    return;
+}
+
+sub _random_token {
+    my $raw = '';
+    open(my $r, '<:raw', '/dev/urandom') or die "remote agents: no random source: $!\n";
+    read($r, $raw, 32) == 32 or die "remote agents: no random source\n";
+    close($r);
+    (my $t = MIME::Base64::encode_base64($raw, '')) =~ tr{+/=}{-_}d;
+    return $t;
+}
+
+# a new enrollment token for a user (replaces the earlier one of that user): the token, once
+sub issue_enroll {
+    my ($self, $user) = @_;
+    die "remote agents: a user is needed\n" unless defined $user and length $user;
+    my $token = _random_token();
+    $self->{enroll}{$user} = Digest::SHA::sha256_hex($token);
+    $self->_save();
+    return $token;
+}
+
+# enroll an agent with a user's token: {ok, token, name, tags} or {ok => 0, status, error}
+sub enroll {
+    my ($self, $token, $name, $tags, $now) = @_;
+    $now //= time;
+    my $hash = defined $token && length $token ? Digest::SHA::sha256_hex($token) : '';
+    my ($user) = grep {length($self->{enroll}{$_}) && $self->{enroll}{$_} eq $hash} sort keys %{$self->{enroll}};
+    return {ok => 0, status => 403, error => 'the enrollment token is not any user\'s'} unless defined $user;
+    return {ok => 0, status => 400, error => 'a name is letters, digits, "." "_" or "-"'}
+        unless defined $name and !ref($name) and $name =~ m/\A[A-Za-z0-9][A-Za-z0-9._-]{0,62}\z/;
+    return {ok => 0, status => 409, error => "the name '$name' is taken"} if $self->{agents}{$name};
+    return {ok => 0, status => 400, error => 'the tags are a list of short lower-case words'}
+        unless ref($tags) eq 'ARRAY' and @$tags and !grep {ref($_) or !/\A[a-z][a-z0-9-]{0,31}\z/} @$tags;
+    my $agent_token = _random_token();
+    $self->{agents}{$name} = {tags => [@$tags], token_sha256 => Digest::SHA::sha256_hex($agent_token),
+        user => $user, enrolled => $now};
+    $self->_save();
+    return {ok => 1, token => $agent_token, name => $name, tags => [@$tags]};
+}
+
+# the agents a user enrolled: name, tags and when
+sub agents_of {
+    my ($self, $user) = @_;
+    return [map {{name => $_, tags => [@{$self->{agents}{$_}{tags}}], enrolled => $self->{agents}{$_}{enrolled}}}
+        grep {defined $self->{agents}{$_}{user} and $self->{agents}{$_}{user} eq ($user // '')} sort keys %{$self->{agents}}];
+}
+
+# remove an agent of a user: its token stops working, its held poll and its job are ended
+sub revoke {
+    my ($self, $user, $name) = @_;
+    my $a = $self->{agents}{$name};
+    return {ok => 0, error => "no agent '$name' of yours"} unless $a and defined $a->{user} and $a->{user} eq ($user // '');
+    delete $self->{agents}{$name};
+    @{$self->{pollers}} = grep {$_->{name} ne $name ? 1 : do {$_->{send}->(204, ''); 0}} @{$self->{pollers}};
+    my $id = $self->{busy}{$name};
+    $self->_finish($self->{jobs}{$id}, {ok => JSON::XS::false(), error => 'the agent was revoked'})
+        if defined $id and $self->{jobs}{$id};
+    $self->_save();
+    return {ok => 1};
+}
+
 
 # the name of the agent whose token this is, or undef
 sub agent_of_token {
@@ -85,13 +188,20 @@ sub _has_tags {
 sub http {
     my ($self, $req, $send, $now) = @_;
     $now //= time;
+    my $method = $req->{method} // '';
+    my $path = $req->{path} // '';
+    if ($method eq 'POST' and $path eq '/agents/enroll') {
+        my $r = eval {$JSON->decode($req->{body} // '')};
+        return $send->(400, _err('an enrollment is {"token", "name", "tags"}')) unless ref($r) eq 'HASH';
+        my $e = $self->enroll($r->{token}, $r->{name}, $r->{tags}, $now);
+        return $send->($e->{status} // 200, $e->{ok} ? $JSON->encode({ok => JSON::XS::true(), token => $e->{token},
+            name => $e->{name}, tags => $e->{tags}}) : _err($e->{error}));
+    }
     my $h = $req->{headers} // {};
     my ($token) = (($h->{authorization} // '') =~ m/\ABearer ([A-Za-z0-9_-]{16,128})\z/);
     my $name = $self->agent_of_token($token);
     return $send->(403, _err('forbidden')) unless defined $name;
     $self->{seen}{$name} = $now;
-    my $method = $req->{method} // '';
-    my $path = $req->{path} // '';
     if ($method eq 'GET' and $path eq '/agents/poll') {
         return $send->(409, _err('the agent has a job already')) if $self->{busy}{$name};
         # an earlier poll of the same agent is answered as done

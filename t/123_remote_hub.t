@@ -40,8 +40,7 @@ sub result { my ($auth, $id, $body) = @_; return {method => 'POST', path => "/ag
 sub job_of { my ($c) = @_; my $a = $c->{got}[0] or return undef; return $a->[0] == 200 ? $J->decode($a->[1]) : undef }
 
 # nothing configured: disabled
-ok(!remote_hub->new(agents => {})->enabled, "no agents: disabled");
-ok(hub()->enabled, "agents: enabled");
+ok(remote_hub->new(agents => {})->enabled, "no agents: the listener is still on, for an enrollment");
 eval { remote_hub->new(agents => {'pi' => {tags => []}}) };
 like($@, qr/its token/, "an agent without its token hash is refused");
 eval { remote_hub->new(agents => {'bad name' => {tags => [], token_sha256 => hash_of('x')}}) };

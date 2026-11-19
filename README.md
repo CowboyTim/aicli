@@ -683,8 +683,24 @@ answer; `open` and `close` refuse it. The broker listens for agents on `AI_BROKE
 (host:port) when there are agents. Its requests come through nginx over HTTPS, with the public
 certificate; the token is the agent's whole credential.
 
-Not built yet: the enrollment (a token on the main page, which gives an agent its own token), the
-nginx route for `/agents/`, and the checkout of the project on the agent.
+**Enrollment.** On the web page, "new enrollment token" shows a token once. On the agent's machine:
+
+```
+ai.pl --enroll TOKEN --broker https://PUBLIC_DOMAIN/agents --name strix --tags arduino,gfx1151
+```
+
+The broker keeps the agent's name, its tags and the hash of its own token (not the token); the
+agent keeps its token in `$AI_DIR/agent.json` (mode 0600). After that, `ai.pl --agent --programs ...`
+needs no token on its command line. The same enrollment token enrolls any number of agents, and
+a new token (the page) replaces the old one. The page lists the agents of the user, with a revoke
+for each: a revoked agent's token stops working.
+
+The broker's state file (`AI_BROKER_STATE`, in its own volume) keeps the enrollments over a restart.
+nginx sends `/agents/` to the broker without a login: the agent's token is its login, and the
+connection is TLS with the public certificate (`--pin` is optional, on top of that).
+
+Not built yet: the checks of a job against its project's owner, and the checkout of the project on
+the agent.
 
 ## The public address (nginx, TLS)
 

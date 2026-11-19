@@ -8,5 +8,8 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 COPY broker.pl /usr/local/lib/aicli/broker.pl
 COPY remote_hub.pm /usr/local/lib/aicli/remote_hub.pm
+# the state of the agents (enrolled agents, the hashes of their tokens): a volume, writable by the
+# broker's user (the file itself is 0600)
+RUN mkdir -p /var/lib/aicli-broker && chmod 0777 /var/lib/aicli-broker
 ENTRYPOINT ["perl", "/usr/local/lib/aicli/broker.pl"]
 CMD ["serve"]

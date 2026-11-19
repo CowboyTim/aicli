@@ -89,11 +89,11 @@ user's view) and AGENTS.md (the code, and "Status" for the history), not here.
 
 ## Open: remote agents (hardware attached to a project)
 
-Built so far (`remote_hub.pm`, `remote_agent.pm`, `ai.pl --agent`, the broker's agent
-listener, tests t/123, t/124): the polls, the jobs for the tags, the answers, the times, the
-agent's program list, the agent's working directory, the bearer token (the broker keeps its
-SHA-256), the optional public key pin. Tested with a real broker and agent process (t/124, t/125).
-Not built: the parts below.
+Built so far: the polls, the jobs for the tags, the answers, the times, the agent's program list,
+the agent's working directory, the bearer token (the broker keeps its SHA-256), the optional
+public key pin, the enrollment (a user's token from the page, `ai.pl --enroll`, the state file,
+the revocation). Tests t/123 to t/128. Not built: the owner check of a job, and the checkout of
+the project on the agent (see the parts below).
 
 Decided: the hardware is reached through agents that call in. The broker never starts
 an agent (it has no /dev); the user starts it on the machine that has the devices, and it

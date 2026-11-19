@@ -17,7 +17,10 @@ services:
       dockerfile: Dockerfile.broker
     image: local/ai/aicli-broker:latest
     user: "${BROKER_UID:-1000}:${BROKER_GID:-1000}"
-    network_mode: none
+    # on aicli-net only for the listener of the agents (behind nginx's /agents/ route, with the
+    # agent's token as the check); it reaches nothing else from there
+    networks:
+      - aicli
     read_only: true
     tmpfs:
       - /tmp
@@ -30,6 +33,9 @@ services:
       AI_BROKER_HOST_ROOT: ${AI_PROJECTS:?set AI_PROJECTS to the host directory of the projects}
       AI_BROKER_SOCKET: /run/aicli-broker/broker.sock
       AI_BROKER_ENGINE: /run/engine/podman.sock
+      # the agents: the listener (nginx's /agents/ route) and the state (enrolled agents, tokens' hashes)
+      AI_BROKER_AGENT_LISTEN: 0.0.0.0:9100
+      AI_BROKER_STATE: /var/lib/aicli-broker/state.json
       # the registry the pod images are pulled from (broker.json: ${AICLI_POD_REGISTRY}/pod-<kind>)
       AICLI_REGISTRY_HOST: ${AICLI_REGISTRY_HOST:-}
       AICLI_POD_REGISTRY: ${AICLI_POD_REGISTRY:-${AICLI_REGISTRY_HOST:-}/aicli}
@@ -42,6 +48,7 @@ services:
       - ${PODMAN_SOCKET:?set PODMAN_SOCKET to the rootless Podman socket}:/run/engine/podman.sock
       - ${AI_PROJECTS}:/projects:ro
       - aicli-broker:/run/aicli-broker
+      - aicli-broker-state:/var/lib/aicli-broker
     restart: unless-stopped
   # The agent: the web interface (ai.pl --ui) with its projects. It is what
   # `aicli.sh --broker --root $AI_PROJECTS --ui` starts by hand. Its provider settings
@@ -202,6 +209,8 @@ networks:
 volumes:
   aicli-broker:
     name: aicli-broker
+  aicli-broker-state:
+    name: aicli-broker-state
   aicli-agent:
     name: aicli-agent
   aicli-auth:

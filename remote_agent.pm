@@ -154,4 +154,47 @@ sub _result {
     return;
 }
 
+# Enrollment (once per machine): the user's enrollment token and the agent's name and tags go to
+# the broker, which answers the agent's own token. Synchronous: it runs before the agent's loop.
+# Dies with the broker's reason when it refuses.
+sub enroll {
+    my (%a) = @_;
+    my $url = ($a{url} // die "enroll: the broker's URL is needed\n");
+    $url =~ s{/+\z}{};
+    my $body = $JSON->encode({token => $a{token}, name => $a{name}, tags => $a{tags}});
+    my $done = 0;
+    my $req = loop::http(method => 'POST', url => "$url/agents/enroll", data => $body,
+        headers => ["Content-Type: application/json", "Accept: application/json"],
+        timeout => 60, pin => $a{pin}, on_done => sub {$done = 1});
+    loop::run(sub {$done});
+    my $r = eval {$JSON->decode($req->{body} // '')};
+    if (defined $req->{error} and ref($r) ne 'HASH') {
+        die "enroll: the broker did not answer: ".($req->{error})."\n";
+    }
+    die "enroll: ".($r->{error} // "the broker refused (HTTP $req->{code})")."\n" unless ref($r) eq 'HASH' and $r->{ok};
+    return {token => $r->{token}, name => $r->{name}, tags => $r->{tags}};
+}
+
+# the agent's credentials, kept in its own file (mode 0600): the broker's URL, the name, the token
+sub save_credentials {
+    my ($file, %c) = @_;
+    my $tmp = "$file.tmp$$";
+    umask(077);
+    open(my $fh, '>', $tmp) or die "cannot write $tmp: $!\n";
+    print {$fh} $JSON->encode({url => $c{url}, name => $c{name}, token => $c{token}});
+    close($fh) or die "cannot write $tmp: $!\n";
+    rename($tmp, $file) or die "cannot write $file: $!\n";
+    return;
+}
+
+sub load_credentials {
+    my ($file) = @_;
+    return undef unless -f $file;
+    open(my $fh, '<', $file) or die "cannot read $file: $!\n";
+    my $c = eval {$JSON->decode(do { local $/; <$fh> })};
+    close($fh);
+    die "$file is not the credentials of an agent\n" unless ref($c) eq 'HASH';
+    return $c;
+}
+
 1;

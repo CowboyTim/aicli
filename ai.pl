@@ -28,7 +28,7 @@ $::DEBUG = $::ORIG_ENV{DEBUG} || 0;
 {
     no warnings 'once';
     require Getopt::Long;
-    my ($help, $man, $continue, $new, $ui, $ui_bind, $tls_cert, $tls_key, $agent, $broker, $agent_name, $programs, $work, $token, $pin);
+    my ($help, $man, $continue, $new, $ui, $ui_bind, $tls_cert, $tls_key, $agent, $broker, $agent_name, $programs, $work, $token, $pin, $enroll, $tags);
     my $ok = Getopt::Long::GetOptions(
         'help|h|?'    => \$help,
         'man'         => \$man,
@@ -47,6 +47,8 @@ $::DEBUG = $::ORIG_ENV{DEBUG} || 0;
         'work=s'     => \$work,
         'token=s'    => \$token,
         'pin=s'      => \$pin,
+        'enroll=s'   => \$enroll,
+        'tags=s'     => \$tags,
     );
     if(defined $ui){
         $::UI = length($ui) ? $ui : 8080;
@@ -76,17 +78,27 @@ $::DEBUG = $::ORIG_ENV{DEBUG} || 0;
             -output => ($ok ? \*STDOUT : \*STDERR));
         exit($ok ? 0 : 2);
     }
+    if($enroll){
+        # enroll this machine as an agent: the broker gives the agent its token, kept for --agent
+        die "--enroll is a mode of its own: not with --agent, --ui, -p, -c or --new\n"
+            if $agent or defined $ui or defined $::PROMPT or $continue or $new;
+        die "--enroll needs --broker URL, --name NAME and --tags LIST (the enrollment token is its value)\n"
+            unless length($broker // '') and length($agent_name // '') and length($tags // '');
+        $::ENROLL = {url => $broker, name => $agent_name, tags => [split /,/, $tags], token => $enroll, pin => $pin};
+    } elsif(defined $tags) {
+        die "--tags is for --enroll\n";
+    }
     if($agent){
-        # a remote agent: the jobs of a broker, no chat (see remote_agent.pm)
+        # a remote agent: the jobs of a broker, no chat (see remote_agent.pm). The broker, the name
+        # and the token come from the options or from the file of the enrollment (agent.json)
         die "--agent is a mode of its own: not with --ui, -p, -c or --new\n"
             if defined $ui or defined $::PROMPT or $continue or $new;
-        die "--agent needs --broker URL, --name NAME, --programs LIST (what it may run) and its token (--token or AI_AGENT_TOKEN)\n"
-            unless length($broker // '') and length($agent_name // '') and length($programs // '')
-            and length($token // $::ORIG_ENV{AI_AGENT_TOKEN} // '');
+        die "--agent needs --programs LIST (what it may run)\n" unless length($programs // '');
         $::AGENT = {url => $broker, name => $agent_name, programs => [split /,/, $programs], work => $work,
             token => $token // $::ORIG_ENV{AI_AGENT_TOKEN}, pin => $pin};
-    } elsif(defined $broker or defined $agent_name or defined $programs or defined $work or defined $token){
-        die "--broker, --name, --programs, --work, --token and --pin are for --agent\n";
+    } elsif(defined $broker or defined $agent_name or defined $programs or defined $work or defined $token or defined $pin) {
+        die "--broker, --name, --programs, --work, --token and --pin are for --agent or --enroll\n"
+            unless $enroll;
     }
     die "--new and -c do not go together\n" if $new and $continue;
     die "--new is for the web interface: it needs --ui\n" if $new and !defined $ui;
@@ -155,11 +167,34 @@ require ai;
 
 # the key is not readable through /proc by the tools' processes (see sandbox::not_dumpable)
 sandbox::not_dumpable();
+if($::ENROLL){
+    # the enrollment: the user's token, the agent's name and tags; the agent's own token is kept
+    # in agent.json, and this run ends
+    require remote_agent;
+    my $e = $::ENROLL;
+    my $r = eval { remote_agent::enroll(url => $e->{url}, token => $e->{token}, name => $e->{name}, tags => $e->{tags}, pin => $e->{pin}) };
+    if (!$r) {
+        my $why = ($@ // 'unknown error') =~ s/\s+\z//r;
+        print STDERR "$why\n";
+        exit 1;
+    }
+    remote_agent::save_credentials("$BASE_DIR/agent.json", url => $e->{url}, name => $r->{name}, token => $r->{token});
+    print "enrolled $r->{name} (tags: ".join(', ', @{$r->{tags}}).") at $e->{url}; its token is in $BASE_DIR/agent.json\n";
+    exit 0;
+}
 if($::AGENT){
     # a remote agent: it asks the broker for jobs and runs them, until ctrl-C or TERM
     require remote_agent;
-    my $agent = remote_agent->new(url => $::AGENT->{url}, name => $::AGENT->{name},
-        programs => $::AGENT->{programs}, work => $::AGENT->{work} // "$BASE_DIR/work", token => $::AGENT->{token},
+    # the broker, name and token: the options, else the enrollment's file
+    my $saved = remote_agent::load_credentials("$BASE_DIR/agent.json") // {};
+    my $url   = $::AGENT->{url}   // $saved->{url};
+    my $name  = $::AGENT->{name}  // $saved->{name};
+    my $token = $::AGENT->{token} // $saved->{token};
+    die "--agent needs a broker (--broker URL, or an enrollment: --enroll)\n" unless length($url // '');
+    die "--agent needs a name (--name, or an enrollment)\n" unless length($name // '');
+    die "--agent needs its token (an enrollment, --token or AI_AGENT_TOKEN)\n" unless length($token // '');
+    my $agent = remote_agent->new(url => $url, name => $name,
+        programs => $::AGENT->{programs}, work => $::AGENT->{work} // "$BASE_DIR/work", token => $token,
         pin => $::AGENT->{pin});
     local $SIG{INT}  = sub { $::LOOP = 0 };
     local $SIG{TERM} = sub { $::LOOP = 0 };
