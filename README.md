@@ -588,7 +588,8 @@ has not been used for that long, checked once a minute.
 the config, every image must come from one of the listed registries, or the broker refuses to
 start. `registries` names the login of each: the names of two variables (`username_env`,
 `password_env`), never the values. The values are in the broker's environment, from `.env`
-(`AICLI_REGISTRY_USER`, `AICLI_REGISTRY_PASSWORD`). A pull sends the login to its own registry
+(`AICLI_REGISTRY_USER`, `AICLI_REGISTRY_PASSWORD`). They are optional for the stack: compose starts without
+them, and only a pull from the registry (the broker's first pod open) needs them. A pull sends the login to its own registry
 only, as `X-Registry-Auth`.
 
 ### Building and pushing the images

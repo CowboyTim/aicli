@@ -68,10 +68,10 @@ v=$(need CERTBOT_EMAIL)
 set_key "$env_f" CERTBOT_EMAIL "$v"
 v=$(need AI_PROJECTS)
 set_key "$env_f" AI_PROJECTS "$v"
-# the login of the pod registry (the broker pulls with it): in the environment or .env
+# the login of the pod registry: optional here (the broker refuses a pull without it, not the stack)
 for k in AICLI_REGISTRY_HOST AICLI_REGISTRY_USER AICLI_REGISTRY_PASSWORD; do
-    v=$(need $k)
-    set_key "$env_f" "$k" "$v"
+    v=$(pick "$env_f" "$k")
+    [ -n "$v" ] && set_key "$env_f" "$k" "$v"
 done
 # the IPv6 prefix of the containers (the /120 and its gateway): from the environment or .env
 # (kept from the first run on)

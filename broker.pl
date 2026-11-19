@@ -220,6 +220,7 @@ sub _registries_config {
         # the host may name a variable (${AICLI_REGISTRY_HOST}), as the images do
         my $host = $key;
         $host =~ s{\$\{(\w+)\}}{ defined $ENV{$1} ? $ENV{$1} : die "broker: the variable $1 of registry $key is not set\n" }ge;
+        next if $host eq ''; # not set (the pods of this registry cannot be pulled, and nothing else fails)
         die "broker: a registry is a host name, '$host'\n" unless $host =~ m/\A[a-z0-9][a-z0-9.:-]*\z/;
         my $e = $in->{$key};
         die "broker: registry $host needs username_env and password_env\n" unless ref($e) eq 'HASH';
@@ -262,7 +263,7 @@ sub _auth_header {
     my $r = $self->{registries}{$reg} or return (undef, undef);
     my ($user, $pass) = map {$ENV{$r->{$_}}} qw(username_env password_env);
     return (undef, "$r->{username_env} and $r->{password_env} (for $reg)")
-        unless defined $user and defined $pass;
+        unless length($user // '') and length($pass // '');
     return (MIME::Base64::encode_base64($JSON->encode({username => $user, password => $pass, serveraddress => $reg}), ''), undef);
 }
 

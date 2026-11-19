@@ -111,4 +111,16 @@ my @calls;
     ok(!$ok, "and a variable that is not set is refused");
 }
 
+{
+    local $ENV{AICLI_REGISTRY_HOST} = '';
+    my $regs = broker::_registries_config({registries => {'${AICLI_REGISTRY_HOST}' => {username_env => 'A_USER', password_env => 'A_PASS'}}});
+    is_deeply($regs, {}, "an empty registry host is skipped (not set in this stack)");
+}
+{
+    local $ENV{T_USER} = '';
+    local $ENV{T_PASS} = '';
+    my ($auth, $why) = $b->_auth_header('reg.example/aicli/pod-bash:latest');
+    ok(!defined $auth && defined $why, "a login that is empty is no login: the pull is refused with the reason");
+}
+
 done_testing();
