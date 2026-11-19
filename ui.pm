@@ -27,6 +27,12 @@ our %conn;      # fileno => connection
 our @clients;   # connections that read the event stream
 our @queue;     # messages waiting for chat_loop
 our ($active, %worker, %model_of, $models, $OUTBOX, $IDLE, $last_error, $BROKER_SOCKET, $BROKER_ASK); # the master, see below
+
+# a project's name in its account's directory: a letter or digit, then letters, digits, '.', '_' or '-'
+our $PROJECT_RE = qr/[A-Za-z0-9][A-Za-z0-9._-]{0,62}/;
+our $ACCOUNT_RE = qr/[A-Za-z0-9][A-Za-z0-9_]{0,95}/; # an account: a directory of the root and the part of a pod's name before its
+# dash, so no dash in it (an account ID is a UUID without its dashes, see auth.pl)
+
 $IDLE = 900;
 $last_error = '';
 our $MAX_BODY    = 1_000_000; # bytes of a request body
@@ -39,6 +45,7 @@ my %STATUS = (
     401 => 'Unauthorized', 403 => 'Forbidden', 404 => 'Not Found',
     405 => 'Method Not Allowed', 413 => 'Payload Too Large', 415 => 'Unsupported Media Type',
     429 => 'Too Many Requests', 500 => 'Internal Server Error', 502 => 'Bad Gateway',
+    409 => 'Conflict', 503 => 'Service Unavailable',
     431 => 'Request Header Fields Too Large', 501 => 'Not Implemented',
 );
 
@@ -282,11 +289,11 @@ sub _broker_ask {
 
 # the projects, each with the state of its pod, from the broker's list
 sub _pods_data {
-    my ($r) = @_;
+    my ($r, $acct) = @_;
     # the panel shows the base pods (aicli-base-<account>-<project>): the basic tools of a project
     my %pod;
     for my $p (@{$r->{pods} // []}) {
-        next unless ($p->{name} // '') =~ m/\Aaicli-base-([A-Za-z0-9][A-Za-z0-9._]*)-(.+)\z/;
+        next unless ($p->{name} // '') =~ m/\Aaicli-base-([A-Za-z0-9_]+)-(.+)\z/;
         $pod{"$1/$2"} = $p->{status} // '';
     }
     return {
@@ -294,12 +301,15 @@ sub _pods_data {
         error    => $r->{error} // '',
         available => length($BROKER_SOCKET // '') || $BROKER_ASK ? JSON::XS::true() : JSON::XS::false(),
         projects => [map {{name => $_, open => exists $pod{$_} ? JSON::XS::true() : JSON::XS::false(),
-                           status => $pod{$_} // 'not started'}} @{ai::project_dirs()}],
+                           status => $pod{$_} // 'not started'}} grep {_visible($acct, $_)} @{ai::project_dirs()}],
     };
 }
 
 sub _refresh_pods {
-    _broker_ask({op => 'list'}, sub { publish(pods => _pods_data($_[0])) });
+    _broker_ask({op => 'list'}, sub {
+        my ($r) = @_;
+        publish_each(pods => sub { _pods_data($r, $_[0]) });
+    });
     return;
 }
 
@@ -309,7 +319,7 @@ sub _pod_request {
     _broker_ask({op => $op, project => $project}, sub {
         my ($r) = @_;
         publish(broker => {op => $op, project => $project, ok => $r->{ok} ? JSON::XS::true() : JSON::XS::false(),
-                           error => $r->{error} // '', pod => $r->{pod} // ''});
+                           error => $r->{error} // '', pod => $r->{pod} // ''}, project => $project);
         _refresh_pods();
     });
     return;
@@ -332,6 +342,11 @@ sub _frame {
 
 # the state of the page: the active session, and what its worker says
 sub _master_state {
+    my ($acct) = @_;
+    # another account's session is not named to this one
+    if (!_visible($acct, _active_rel())) {
+        return {session => '', model => '', busy => \0, queued => 0, voice => $voice // 'unknown'};
+    }
     my $name = $active // '';
     my $w = $worker{$name};
     return {
@@ -343,7 +358,10 @@ sub _master_state {
     };
 }
 
-sub _busy_list { return [sort grep {$worker{$_}{busy}} keys %worker] }
+sub _busy_list {
+    my ($acct) = @_;
+    return [sort grep {$worker{$_}{busy} and _visible($acct, ai::session_project($_))} keys %worker];
+}
 
 sub _models_out {
     return {current => $model_of{$active // ''} // '', list => $models // []};
@@ -351,12 +369,15 @@ sub _models_out {
 
 # the sessions to choose from: the list, the active one, the busy ones
 sub _sessions_data {
+    my ($acct) = @_;
+    my $seen = _visible($acct, _active_rel());
     return {
-        current  => $active // '',
-        list     => ai::session_choices(),
-        busy     => _busy_list(),
-        project  => defined $active ? ai::session_project($active) : '',
-        projects => ['', @{ai::project_dirs()}], # the root first
+        current  => $seen ? ($active // '') : '',
+        list     => [grep {_visible($acct, $_->{project})} @{ai::session_choices()}],
+        busy     => _busy_list($acct),
+        project  => ($seen && defined $active) ? ai::session_project($active) : '',
+        # the root first, for the local operator only
+        projects => [(defined $acct ? () : ('')), grep {_visible($acct, $_)} @{ai::project_dirs()}],
     };
 }
 
@@ -505,7 +526,7 @@ sub _worker_event {
         my $start = ($data->{state} // '') eq 'start';
         $w->{busy} = $start ? 1 : 0;
         $w->{pending}-- if $start and $w->{pending} > 0;
-        publish(busy => {list => _busy_list()});
+        publish_each(busy => sub { {list => _busy_list($_[0])} });
     } elsif ($type eq 'state') {
         $model_of{$name} = $data->{model} // '';
     } elsif ($type eq 'model') {
@@ -515,7 +536,7 @@ sub _worker_event {
         publish(models => _models_out()) if $is_active;
         return;
     }
-    return publish(failed => $data) if $type eq 'failed'; # any session's failure is shown
+    return publish(failed => $data, session => $name) if $type eq 'failed'; # a session's failure: its account
     return unless $is_active;
     return publish(state => _master_state()) if $type eq 'state';
     return publish($type => $data);
@@ -532,8 +553,8 @@ sub _worker_gone {
     waitpid($w->{pid}, 0) if $w->{pid};
     my $is_active = defined $active && $name eq $active;
     publish(turn => {state => 'end'}) if $w->{busy} and $is_active;
-    publish(failed => {text => "the session '$name' stopped"}) unless $w->{closing};
-    publish(busy => {list => _busy_list()});
+    publish(failed => {text => "the session '$name' stopped"}, session => $name) unless $w->{closing};
+    publish_each(busy => sub { {list => _busy_list($_[0])} });
     return;
 }
 
@@ -604,7 +625,7 @@ sub _activate {
     _send_to($name, {state => 1});
     publish(state => _master_state());
     publish(history => _history_data($name));
-    publish(sessions => _sessions_data());
+    publish_each(sessions => sub { _sessions_data($_[0]) });
     return 1;
 }
 
@@ -614,6 +635,7 @@ sub _activate {
 # session is the active one, a new session is made, as /session {new: true} does.
 sub _delete_session {
     my ($name) = @_;
+    my $rel = ai::session_project($name); # the new session of the page stays in this project
     _stop_worker($name) if $worker{$name};
     delete $model_of{$name};
     require File::Path;
@@ -622,14 +644,71 @@ sub _delete_session {
     return "could not remove the session: ".join('; ', map { (values %$_)[0] } @$err) if @$err;
     if (defined $active and $active eq $name) {
         $active = undef;
-        return ($last_error || 'no session could be made') unless _activate(undef, new => 1);
+        return ($last_error || 'no session could be made') unless _activate(undef, new => 1, project => $rel);
     }
-    publish(sessions => _sessions_data());
+    publish_each(sessions => sub { _sessions_data($_[0]) });
     return undef;
 }
 
 # a session gets another name: its idle worker is stopped first (the directory moves under it),
 # and the active one is opened under the new name. Returns the new name, or an error text.
+# the sessions of a project (their names), from the session directories
+sub _project_sessions {
+    my ($rel) = @_;
+    return [grep {(ai::session_project($_) // '') eq $rel} @{ai::get_sessions()}];
+}
+
+# is there a project of this name (a directory of the root, an account's project)?
+sub _is_project {
+    my ($rel) = @_;
+    return defined $rel && defined $ai::ROOT && $rel =~ m{\A$ACCOUNT_RE/$PROJECT_RE\z} && -d "$ai::ROOT/$rel" && !-l "$ai::ROOT/$rel";
+}
+
+# delete a project: its sessions go with it and its files. Refused while a session of it is busy,
+# or the page is on one of its sessions; with files or sessions in it only when $force (the page
+# asks first). Answers (status, error): 200 and no error when it is gone.
+sub _delete_project {
+    my ($rel, $force) = @_;
+    my $sessions = _project_sessions($rel);
+    for my $s (@$sessions) {
+        return (409, "a session of '$rel' is busy: wait for its answer first") if $worker{$s} and $worker{$s}{busy};
+    }
+    return (409, "the page is on a session of '$rel': switch the page to another project first")
+        if defined $active and (ai::session_project($active) // '') eq $rel;
+    opendir(my $dh, "$ai::ROOT/$rel") or return (500, "cannot read the project: $!");
+    my @files = grep {!m/\A\.\.?\z/} readdir($dh);
+    closedir($dh);
+    if ((@$sessions or @files) and !$force) {
+        return (409, "'$rel' has ".scalar(@$sessions)." sessions and ".scalar(@files)." files in it: it is deleted with them when you confirm");
+    }
+    for my $s (@$sessions) {
+        my $err = _delete_session($s);
+        return (500, $err) if defined $err;
+    }
+    require File::Path;
+    my $err;
+    File::Path::remove_tree("$ai::ROOT/$rel", {error => \$err});
+    return (500, "could not remove '$rel': ".join('; ', map { (values %$_)[0] } @$err)) if @$err;
+    log::info("project $rel deleted");
+    publish_each(sessions => sub { _sessions_data($_[0]) });
+    return (200, undef);
+}
+
+# rename a project in its account: no session may be in it (their prompts name the old path,
+# and the start of a conversation is not rewritten)
+sub _rename_project {
+    my ($old, $new) = @_;
+    return (409, "'$old' has sessions: delete them first (their conversations name the old path)")
+        if @{_project_sessions($old)};
+    return (409, "there is a project '$new' already") if -e "$ai::ROOT/$new";
+    if (!rename("$ai::ROOT/$old", "$ai::ROOT/$new")) {
+        return (500, "could not rename '$old': $!");
+    }
+    log::info("project $old renamed to $new");
+    publish_each(sessions => sub { _sessions_data($_[0]) });
+    return (200, undef);
+}
+
 sub _rename_session {
     my ($old, $new) = @_;
     return "there is no such session" unless -d "$ai::SESSIONS_DIR/$old";
@@ -643,7 +722,7 @@ sub _rename_session {
         $active = undef;
         return ($last_error || 'the session could not be opened under its new name') unless _activate($new);
     }
-    publish(sessions => _sessions_data());
+    publish_each(sessions => sub { _sessions_data($_[0]) });
     return undef;
 }
 
@@ -664,8 +743,52 @@ sub _stop_all {
 # Send one event to all clients that read the stream.
 our $RELAY; # set by a session worker: called as ($type, $data) for each event
 
+# The account of a request: the login's account ID (nginx sends it, with the gate secret). undef is the
+# local operator (the token without nginx, e.g. a local ai.pl --ui): every session and project.
+# A login without a usable name is '': it owns nothing.
+sub _account {
+    my ($h) = @_;
+    return undef unless defined $gate and length($gate) and ($h->{'x-aicli-gate'} // '') eq $gate;
+    # the account ID nginx sends (a UUID without its dashes, from the login's passwd comment)
+    my $a = $h->{'x-aicli-account'} // '';
+    return $a =~ m/\A[0-9a-f]{32}\z/ ? $a : '';
+}
+
+
+# the account of a project (account/project): its first part, or undef for the root and others
+sub _project_account {
+    my ($rel) = @_;
+    return undef unless defined $rel and $rel =~ m{\A([^/]+)/};
+    return $1;
+}
+
+# may an account see a project's events and lists? the local operator may see all; no project
+# (nothing is active) is seen by all
+sub _visible {
+    my ($acct, $rel) = @_;
+    return 1 unless defined $acct;
+    return 1 unless defined $rel;
+    my $owner = _project_account($rel);
+    return defined $owner && $owner eq $acct ? 1 : 0;
+}
+
+# may an account use a project (open its pods, make or switch its sessions)? Nothing is used
+# for the root or for a project that is not there
+sub _owns {
+    my ($acct, $rel) = @_;
+    return 1 unless defined $acct;
+    my $owner = _project_account($rel);
+    return defined $owner && $owner eq $acct ? 1 : 0;
+}
+
+# the name of the active session for an account: '' when it may not see it
+sub _shown_active { my ($acct) = @_; return _visible($acct, _active_rel()) ? $active : undef }
+
+# the project of the active session, or undef when none is active
+sub _active_rel { return defined $active ? ai::session_project($active) : undef }
+
 sub publish {
-    my ($type, $data) = @_;
+    my ($type, $data, %o) = @_;
     if ($type eq 'tool' or $type eq 'failed') {
         my $first = (split /\n/, ($data->{text} // ''))[0] // '';
         ai::web_note(($type eq 'tool' ? "tool: " : "error: ").$first) if length $first;
@@ -677,8 +800,29 @@ sub publish {
     # a session worker (worker.pm) sends its events to the master instead
     return $RELAY->($type, $data // {}) if $RELAY;
     return unless @clients;
+    # what the event is about: a project (broker answers), a session, else the active session.
+    # The models of the provider are for all.
+    my $rel;
+    if (exists $o{project}) { $rel = $o{project} }
+    elsif (exists $o{session}) { $rel = defined $o{session} ? ai::session_project($o{session}) : undef }
+    elsif ($type ne 'models') { $rel = _active_rel() }
     my $msg = "event: $type\ndata: ".$::JSON->encode($data // {})."\n\n";
-    _queue($_, $msg) for @{[@clients]};
+    for my $c (@{[@clients]}) {
+        next unless _visible($c->{account}, $rel);
+        _queue($c, $msg);
+    }
+    return;
+}
+
+# an event whose data is made for each client (the account's sessions, projects, pods)
+sub publish_each {
+    my ($type, $make) = @_;
+    return unless @clients;
+    for my $c (@{[@clients]}) {
+        my $d = $make->($c->{account});
+        next unless defined $d;
+        _queue($c, "event: $type\ndata: ".$::JSON->encode($d)."\n\n");
+    }
     return;
 }
 
@@ -999,6 +1143,8 @@ sub _dispatch {
     }
 
     return _respond($cn, 401, 'text/plain', "not signed in\n") unless _authed($h);
+    $cn->{account} = _account($h); # the login's account (undef: the local operator)
+    my $acct = $cn->{account};
 
     # a page of another site may not post here (the cookie would go with it)
     if($m eq 'POST' and defined $h->{origin}){
@@ -1018,9 +1164,9 @@ sub _dispatch {
             ."X-Accel-Buffering: no\r\n"
             ."Connection: keep-alive\r\n\r\n";
         push @clients, $cn;
-        _queue($cn, _frame(state => _master_state()));
-        _queue($cn, _frame(history => _history_data($active)));
-        _queue($cn, _frame(sessions => _sessions_data()));
+        _queue($cn, _frame(state => _master_state($acct)));
+        _queue($cn, _frame(history => _history_data($active))) if _visible($acct, _active_rel());
+        _queue($cn, _frame(sessions => _sessions_data($acct)));
         _refresh_pods();
         # the models: the list of the last time, or asked for now
         if (defined $models) {
@@ -1031,6 +1177,7 @@ sub _dispatch {
         return;
     }
     if($p eq '/models' and $m eq 'POST'){
+        return _json($cn, 403, {error => 'the session of the page belongs to another account, or there is none'}) unless _owns($acct, _active_rel());
         my $q = _ask_models();
         return _json($cn, 503, {error => "no session to ask"}) unless defined $q;
         return _json($cn, 202, {queued => $q});
@@ -1040,6 +1187,7 @@ sub _dispatch {
         my $id = ref($d) eq 'HASH' ? $d->{id} : undef;
         return _json($cn, 400, {error => 'a JSON object with the id of the model is wanted'})
             unless defined $id and !ref($id) and $id =~ m/\S/ and length($id) <= 300;
+        return _json($cn, 403, {error => 'the session of the page belongs to another account, or there is none'}) unless _owns($acct, _active_rel());
         my $q = _to_active({model => $id});
         return _json($cn, 503, {error => "no session to switch the model of"}) unless defined $q;
         return _json($cn, 202, {queued => $q});
@@ -1051,6 +1199,7 @@ sub _dispatch {
             unless defined $text and !ref($text) and $text =~ m/\S/;
         return _json($cn, 400, {error => "slash commands come with the next step"})
             if $text =~ m{^\s*/};
+        return _json($cn, 403, {error => 'the session of the page belongs to another account, or there is none'}) unless _owns($acct, _active_rel());
         my $q = _to_active({text => $text});
         return _json($cn, 503, {error => "no session to talk to"}) unless defined $q;
         return _json($cn, 429, {error => "too many messages waiting"}) if $q < 0;
@@ -1062,12 +1211,13 @@ sub _dispatch {
         return _json($cn, 400, {error => 'a session name is wanted'})
             unless defined $name and !ref($name) and length($name);
         return _json($cn, 400, {error => 'not a session name'}) unless ai::valid_session_name($name);
-        return _json($cn, 404, {error => 'there is no such session'}) unless -d "$ai::SESSIONS_DIR/$name";
+        return _json($cn, 404, {error => 'there is no such session'})
+            unless -d "$ai::SESSIONS_DIR/$name" and _owns($acct, ai::session_project($name));
         return _json($cn, 409, {error => 'the session is busy: wait for its answer, then delete it'})
             if $worker{$name} and $worker{$name}{busy};
         my $err = _delete_session($name);
         return _json($cn, 500, {error => $err}) if defined $err;
-        return _json($cn, 200, {deleted => $name, session => $active // ''});
+        return _json($cn, 200, {deleted => $name, session => _shown_active($acct) // ''});
     }
     if($p eq '/session/rename' and $m eq 'POST'){
         my $d = eval {$::JSON->decode($body // '')};
@@ -1076,13 +1226,14 @@ sub _dispatch {
             unless defined $old and !ref($old) and length($old) and defined $new and !ref($new) and length($new);
         return _json($cn, 400, {error => 'not a session name'})
             unless ai::valid_session_name($old) and ai::valid_session_name($new);
-        return _json($cn, 404, {error => 'there is no such session'}) unless -d "$ai::SESSIONS_DIR/$old";
+        return _json($cn, 404, {error => 'there is no such session'})
+            unless -d "$ai::SESSIONS_DIR/$old" and _owns($acct, ai::session_project($old));
         return _json($cn, 409, {error => 'the session is busy: wait for its answer, then rename it'})
             if $worker{$old} and $worker{$old}{busy};
         my $err = _rename_session($old, $new);
         return _json($cn, 409, {error => $err}) if defined $err and $err =~ m/exists/;
         return _json($cn, 500, {error => $err}) if defined $err;
-        return _json($cn, 200, {session => $active // ''});
+        return _json($cn, 200, {session => _shown_active($acct) // ''});
     }
     if($p eq '/session' and $m eq 'POST'){
         my $d = eval {$::JSON->decode($body)};
@@ -1094,9 +1245,14 @@ sub _dispatch {
             unless $new or (defined $name and !ref($name) and length($name));
         return _json($cn, 400, {error => 'not a session name'})
             unless $new or ai::valid_session_name($name);
+        # a session of another account, or a new one in a project of another: refused
+        my $rel = $new ? (ref($d->{project}) ? undef : $d->{project}) : ai::session_project($name // '');
+        $rel = _active_rel() if $new and !defined $rel;
+        return _json($cn, 403, {error => "there is no session or project of yours by that name"})
+            unless _owns($acct, $rel);
         return _json($cn, 400, {error => ($last_error || 'the session cannot be used')})
             unless _activate($name, new => $new, project => (ref($d->{project}) ? undef : $d->{project}));
-        return _json($cn, 200, {session => $active});
+        return _json($cn, 200, {session => _shown_active($acct)});
     }
     if($p eq '/pod' and $m eq 'POST'){
         my $d = eval {$::JSON->decode($body)};
@@ -1105,15 +1261,17 @@ sub _dispatch {
             unless defined $op and $op =~ m/\A(?:open|close|list)\z/;
         return _json($cn, 400, {error => 'a project name is wanted'})
             if $op ne 'list' and (!defined $project or ref($project) or !length($project));
+        return _json($cn, 403, {error => "there is no project '$project' of yours"})
+            if $op ne 'list' and !_owns($acct, $project);
         if ($op eq 'list') { _refresh_pods() } else { _pod_request($op, $project) }
         return _json($cn, 202, {ok => \1});
     }
     # the agents of the user (remote_hub.pm, through the broker): the enrollment token (shown
     # once), the list, a revocation. The user is the login's (nginx sends it as X-Aicli-User).
     if($p =~ m{\A/agent/(token|list|revoke)\z} and (($p eq '/agent/token' and $m eq 'POST') or ($p eq '/agent/list' and $m eq 'GET') or ($p eq '/agent/revoke' and $m eq 'POST'))){
-        my $user = $h->{'x-aicli-user'} // '';
+        my $user = $acct // '';
         return _json($cn, 403, {ok => \0, error => 'agents need the login (through nginx), and its name is an account name'})
-            unless length $user and $user =~ m/\A[A-Za-z0-9][A-Za-z0-9._]{0,31}\z/;
+            unless length $user;
         my $req = {user => $user};
         if ($p eq '/agent/token') {
             $req->{op} = 'enroll_token';
@@ -1132,25 +1290,92 @@ sub _dispatch {
         });
         return;
     }
+    # a new project: a directory of the login's account (the local operator names it
+    # account/project), made here and switched to, so its session is the page's
+    if($p eq '/project/new' and $m eq 'POST'){
+        my $d = eval {$::JSON->decode($body // '')};
+        my $name = ref($d) eq 'HASH' ? $d->{name} : undef;
+        return _json($cn, 400, {error => 'a JSON object with the name of the project is wanted'})
+            unless defined $name and !ref($name) and length($name);
+        my $rel;
+        if (!defined $acct) {
+            # the local operator: account/project
+            ($rel) = $name =~ m{\A($ACCOUNT_RE/$PROJECT_RE)\z};
+            return _json($cn, 400, {error => 'the name is account/project (both letters, digits, "." "_" or "-")'})
+                unless defined $rel;
+        } else {
+            return _json($cn, 403, {error => 'the login has no account name: no projects for it'})
+                unless length $acct;
+            return _json($cn, 400, {error => 'a project name is letters, digits, "." "_" or "-" (it starts with a letter or digit)'})
+                unless $name =~ m/\A$PROJECT_RE\z/;
+            $rel = "$acct/$name";
+        }
+        return _json($cn, 503, {error => 'no root for the projects'}) unless defined $ai::ROOT and -d $ai::ROOT;
+        return _json($cn, 409, {error => "there is a project '$rel' already"}) if -e "$ai::ROOT/$rel";
+        my ($account) = $rel =~ m{\A([^/]+)/};
+        if (!-d "$ai::ROOT/$account" and !mkdir("$ai::ROOT/$account")) {
+            return _json($cn, 500, {error => "cannot make the account's directory: $!"});
+        }
+        if (!mkdir("$ai::ROOT/$rel")) {
+            return _json($cn, 500, {error => "cannot make the project: $!"});
+        }
+        log::info("project $rel made");
+        _project($rel); # the page switches to it: a session of its own (or the newest one)
+        return _json($cn, 200, {project => $rel, session => _shown_active($acct) // ''});
+    }
+    if($p eq '/project/delete' and $m eq 'POST'){
+        my $d = eval {$::JSON->decode($body // '')};
+        my $rel = ref($d) eq 'HASH' ? $d->{name} : undef;
+        return _json($cn, 400, {error => 'a project name is wanted'}) unless defined $rel and !ref($rel) and length $rel;
+        return _json($cn, 404, {error => 'there is no such project of yours'})
+            unless _owns($acct, $rel) and _is_project($rel);
+        my ($code, $err) = _delete_project($rel, ref($d) eq 'HASH' && $d->{force} ? 1 : 0);
+        return _json($cn, $code, $code == 200 ? {deleted => $rel} : {error => $err});
+    }
+    if($p eq '/project/rename' and $m eq 'POST'){
+        my $d = eval {$::JSON->decode($body // '')};
+        my ($old, $to) = ref($d) eq 'HASH' ? ($d->{name}, $d->{to}) : ();
+        return _json($cn, 400, {error => 'a project name and the new name are wanted'})
+            unless defined $old and !ref($old) and length $old and defined $to and !ref($to) and length $to;
+        return _json($cn, 404, {error => 'there is no such project of yours'})
+            unless _owns($acct, $old) and _is_project($old);
+        my ($account) = $old =~ m{\A([^/]+)/};
+        my $new;
+        if (!defined $acct) {
+            ($new) = $to =~ m{\A($ACCOUNT_RE/$PROJECT_RE)\z};
+            return _json($cn, 400, {error => 'the new name is account/project'}) unless defined $new;
+        } else {
+            return _json($cn, 400, {error => 'a project name is letters, digits, "." "_" or "-"'})
+                unless $to =~ m/\A$PROJECT_RE\z/;
+            $new = "$account/$to";
+        }
+        return _json($cn, 400, {error => 'a project keeps its account'})
+            unless $new =~ m{\A\Q$account\E/};
+        my ($code, $err) = _rename_project($old, $new);
+        return _json($cn, $code, $code == 200 ? {project => $new} : {error => $err});
+    }
     if($p eq '/project' and $m eq 'POST'){
         my $d = eval {$::JSON->decode($body)};
         my $rel = ref($d) eq 'HASH' ? $d->{name} : undef;
         return _json($cn, 400, {error => 'a JSON object with the name of a project is wanted (empty for the root)'})
             unless defined $rel and !ref($rel);
+        return _json($cn, 403, {error => "there is no project '$rel' of yours"}) unless _owns($acct, $rel);
         return _json($cn, 400, {error => ($last_error || 'the project cannot be used')}) unless _project($rel);
-        return _json($cn, 200, {session => $active});
+        return _json($cn, 200, {session => _shown_active($acct)});
     }
     if($p eq '/voice' and $m eq 'POST'){
         my $type = $h->{'content-type'} // '';
         return _json($cn, 415, {error => "a recording (audio/wav) is wanted"})
             unless $type =~ m{^audio/(?:wav|x-wav|wave)\b}i;
         return _json($cn, 400, {error => "an empty recording"}) unless length $body;
+        return _json($cn, 403, {error => 'the session of the page belongs to another account, or there is none'}) unless _owns($acct, _active_rel());
         my $q = _to_active({audio => MIME::Base64::encode_base64($body, '')});
         return _json($cn, 503, {error => "no session to talk to"}) unless defined $q;
         return _json($cn, 429, {error => "too many messages waiting"}) if $q < 0;
         return _json($cn, 202, {queued => $q});
     }
     if($p eq '/abort' and $m eq 'POST'){
+        return _json($cn, 403, {error => 'the session of the page belongs to another account, or there is none'}) unless _owns($acct, _active_rel());
         _send_to($active, {abort => 1}) if defined $active;
         return _json($cn, 200, {ok => \1});
     }
@@ -1161,11 +1386,12 @@ sub _dispatch {
         return _json($cn, 400, {error => "n: the number of exchanges, 1 to 999"})
             unless defined $n and "$n" =~ m/\A[1-9]\d{0,2}\z/;
         return _json($cn, 503, {error => "no session"}) unless defined $active;
+        return _json($cn, 403, {error => 'the session of the page belongs to another account, or there is none'}) unless _owns($acct, _active_rel());
         _send_to($active, {rewind => 0 + $n});
         return _json($cn, 202, {ok => \1});
     }
     if($p eq '/state' and $m eq 'GET'){
-        return _json($cn, 200, _master_state());
+        return _json($cn, 200, _master_state($acct));
     }
     return _respond($cn, 405, 'text/plain', "method not allowed\n") if $p =~ m{^/(events|message|session|session/delete|session/rename|project|pod|voice|abort|state|rewind)$};
     return _respond($cn, 404, 'text/plain', "not found\n");

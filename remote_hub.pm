@@ -76,7 +76,7 @@ sub new {
         }
         my $user = $a->{user};
         die "remote agents: agent '$name' has an account of a bad name\n"
-            if defined $user and $user !~ m/\A[A-Za-z0-9][A-Za-z0-9._]{0,31}\z/;
+            if defined $user and $user !~ m/\A[A-Za-z0-9][A-Za-z0-9_]{0,95}\z/;
         $agents{$name} = {tags => [@tags], token_sha256 => $a->{token_sha256}, user => $user, enrolled => 0};
     }
     return bless {

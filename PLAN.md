@@ -175,8 +175,10 @@ as any client does; no client certificate). The agent's credential is its token.
 ## Open: accounts and ownership (one broker, a subtree per account)
 
 Decided: one broker. The projects live in subdirectories per account:
-`AI_PROJECTS/<account>/<project>`. An account is the login name (X-Aicli-User from nginx);
-a project belongs to the account in its path.
+`AI_PROJECTS/<account>/<project>`. An account is the login's account ID: a UUID (without its
+dashes) kept in the passwd comment (GECOS), in its fifth subfield as `aicli=<uuid>`; auth.pl makes
+it with the user, and the token and nginx's X-Aicli-Account carry it. A project belongs to the
+account in its path. Renaming a login does not move its projects.
 
 - **The broker's requests** carry the account and the project; the broker resolves the host
   path as `<root>/<account>/<project>` and refuses links and paths outside it.
@@ -190,10 +192,20 @@ a project belongs to the account in its path.
   account, the hub gives a job only to an agent of the job's account, `project_dirs()` and the
   pods panel list account/project. The tools need no account setting: a project's path holds it.
   Tests updated to the new layout (t/104 to t/128); the full suite passes.
-- **Open:** moving the existing flat projects of the host into `AI_PROJECTS/<account>/` (a host
-  step, with the login name of the account); the page lists the projects of every account, not
-  only the login's; the session start does not yet check the account of a project against the
-  login (a multi-user step).
+- **Built, the page:** the account of a request is the login's name (nginx's gate); the local
+  operator (no nginx) sees all. The lists (sessions, projects, pods, busy) are made per account,
+  events go only to the accounts they are about, every route that switches, messages, deletes,
+  renames or opens checks the project's account (403, or 404 where a session must not be shown).
+  One active session is shared by the page: an account that switches takes it over, the other
+  account's page sees no session until it switches back.
+- **Built, projects on the page:** create (in the login's account), rename (without sessions),
+  delete (with its sessions and files on confirmation). The page has the controls next to the
+  project select. Rename with sessions is refused on purpose: their conversations name the old
+  path, and a conversation's start is not rewritten. Renaming those would need the sessions
+  to be moved or ended first, which is a choice for later.
+- **Open:** several active sessions at once (one per account) would need the active session per
+  page connection instead of one for the master; moving the existing flat projects of the host
+  into `AI_PROJECTS/<account>/` (a host step, done by the user).
 
 ## Open: devel and hardware
 

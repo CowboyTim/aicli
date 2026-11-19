@@ -47,31 +47,31 @@ sub call {
     return ($code, eval {$J->decode($json // '')} // {});
 }
 
-my $user = {'x-aicli-user' => 'alice'};
+my $user = {'x-aicli-account' => 'cccccccccccccccccccccccccccccccc'};
 
 $answer = {ok => JSON::XS::true(), token => 'enroll-token-0123456789abcdef'};
 my ($code, $d) = call('POST', '/agent/token', $user, '{}');
 is($code, 200, "a token: 200");
 is($d->{token}, 'enroll-token-0123456789abcdef', "the token, from the broker");
-is_deeply($asked[0], {op => 'enroll_token', user => 'alice'}, "asked for alice's token");
+is_deeply($asked[0], {op => 'enroll_token', user => 'cccccccccccccccccccccccccccccccc'}, "asked for cccccccccccccccccccccccccccccccc's token");
 
 ($code) = call('POST', '/agent/token', {'x-aicli-gate' => 'gate-secret'}, '{}');
 is($code, 403, "no login name (no nginx): 403");
 is(scalar @asked, 0, "and the broker is not asked");
 
-($code) = call('POST', '/agent/token', {'x-aicli-user' => "al ice"}, '{}');
+($code) = call('POST', '/agent/token', {'x-aicli-account' => "al ice"}, '{}');
 is($code, 403, "a login name with a space: 403");
 
 $answer = {ok => JSON::XS::true(), agents => [{name => 'strix', tags => ['arduino'], enrolled => 1}]};
 ($code, $d) = call('GET', '/agent/list', $user, '');
 is($code, 200, "the list: 200");
 is($d->{agents}[0]{name}, 'strix', "its agents");
-is_deeply($asked[0], {op => 'agents', user => 'alice'}, "asked for alice's agents");
+is_deeply($asked[0], {op => 'agents', user => 'cccccccccccccccccccccccccccccccc'}, "asked for cccccccccccccccccccccccccccccccc's agents");
 
 $answer = {ok => JSON::XS::true()};
 ($code) = call('POST', '/agent/revoke', $user, '{"name":"strix"}');
 is($code, 200, "a revocation: 200");
-is_deeply($asked[0], {op => 'agent_revoke', user => 'alice', name => 'strix'}, "asked to revoke it, for alice");
+is_deeply($asked[0], {op => 'agent_revoke', user => 'cccccccccccccccccccccccccccccccc', name => 'strix'}, "asked to revoke it, for cccccccccccccccccccccccccccccccc");
 
 ($code) = call('POST', '/agent/revoke', $user, '{}');
 is($code, 400, "a revocation without a name: 400");

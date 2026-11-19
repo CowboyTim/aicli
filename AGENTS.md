@@ -268,6 +268,16 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   keeps its hash (`enroll`, in the state file `AI_BROKER_STATE`). `ai.pl --agent --enroll TOKEN
   --broker URL --name NAME --tags T` posts it to `/agents/enroll`, gets the agent's own token and
   keeps it in `$AI_DIR/agent.json` (0600); `--agent` reads that file when no token is given.
+  The page's accounts (ui.pm, `_account`, `_visible`, `_owns`, `publish_each`): a request's account
+  is the account ID nginx sends (X-Aicli-Account, 32 hex digits: the login's UUID without its dashes),
+  behind the gate; undef for the local operator; the lists are made per account,
+  an event goes to the clients that may see its project (publish's `session`/`project` options, the
+  active session by default), and each route that uses a session or project checks `_owns`.
+  Projects on the page: `POST /project/new` (made in the login's account, then switched to; the
+  local operator names account/project), `/project/rename` (refused while the project has sessions:
+  their prompts name the old path, and a conversation's start is not rewritten), `/project/delete`
+  (its sessions and files only with `force`, which the page asks for; never the page's own project,
+  never a busy one). `_delete_session` keeps the replacement session in the same project.
   `/agent/list` and `/agent/revoke` are the page's (through the broker's `agents`, `agent_revoke`
   socket operations). A name or a token of the config and the state can not be the same. A kind with `tags` in
   `broker.json` runs on an agent with all of them: its `exec` waits for the answer (through the
@@ -348,7 +358,9 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   Passwords are set by auth.pl itself (`set_password`, asked twice on the terminal): its rules
   (AI_AUTH_MINLEN, default 10; printable; not the account name), a SHA-512 crypt hash with
   AI_AUTH_ROUNDS rounds (default 100000), stored with `chpasswd -e` (the hash on its standard input). The system passwd command is
-  not used, so its rules do not apply.   The accounts: `auth.pl user add|passwd|del|list`, `role add|remove`. PAM reads `/etc`, so the
+  not used, so its rules do not apply.   The accounts: `auth.pl user add|passwd|del|list`, `role add|remove`. Each has an account ID: a UUID
+  in the passwd comment's fifth subfield (`aicli=<uuid>`, made by `user add` or at the first login by
+  `ensure_account_id`, kept with `usermod -c`), in the token as `acct` and sent to nginx as X-Account. PAM reads `/etc`, so the
   four account files are copied to the volume after a change and back at a start (a bind mount
   over them fails: useradd renames over them).
 - **t/** – tests, **PLAN.md** – open work and ideas.
@@ -651,6 +663,9 @@ Other APIs are reached through an OpenAI compatible gateway, such as LiteLLM or 
 | `t/128_agent_routes.t` | the web interface's agent routes with a stand-in broker: a token for the login's user (no login: refused, nothing asked), the list, a revocation (a name needed), a refusal of the broker (502 with its reason) |
 | `t/127_enroll_e2e.t` | the enrollment end to end: a broker with its state file, the user's token and list over the socket, `ai.pl --enroll` (a wrong token refused, the right one keeps agent.json 0600, the token not printed), `ai.pl --agent` with that file and no token on its command line runs a job, a revocation stops it |
 | `t/126_enrollment.t` | the enrollment without sockets: a user's token (only its hash kept, a new one replaces it), agents enrolled with it (own token, hash only), the names and tags checked, the list of a user, revocation (owner only, the token stops), the state file over a restart |
+| `t/132_account_id.t` | the account ID of a login in the passwd comment: the fifth subfield, the other subfields kept, made once, read back without the dashes, the UUID's form and version, a login not in the passwd refused |
+| `t/129_page_accounts.t` | the page's accounts: the login's name (none, a bad one, the local operator), what an account sees (its sessions, projects, busy list, the page's state), the events (each to its account, the models to all, a failure of a session to its account), the routes an account may not use (message, switch, delete, rename, pod, a session in another's project) |
+| `t/130_project_admin.t` | the page's projects: created in the login's account and switched to (names checked, a taken name, a login with no account), renamed only without sessions (same account), deleted with its sessions and files only on force, never the page's own project, nothing of another account touched; the local operator's account/project |
 | `t/125_agent_pin.t` | the agent's arguments: a pin of the form sha256//BASE64 (others refused), the token (a short one, none refused) |
 | `t/123_remote_hub.t` | the hub without sockets: the config of the agents (names, tags, token hashes), the bearer tokens that get in (403, a token of no agent, no token, not a bearer token), a held poll and a job for its tags, the answer (from the right agent only, once), busy polls (409), bad answers (400, 404), no agent for the tags, no agent connected, held polls ending (204), a job no agent takes, an agent that does not answer, an output over the cap |
 | `t/118_pod_control.t` | the pod kinds (base, and a second kind in the fixture): the projects and their pods, the cap across kinds, an idle pod closed and one found open after a restart kept, `pods`, `pod_open` (kind, already open, refusals), `pod_close` (the session's base pod noted), a closed base pod opened by a bash call, `pod_run` (node in its pod, a program of the base pod refused), through a real broker process (fake engine with containers and images) |

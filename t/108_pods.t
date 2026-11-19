@@ -93,6 +93,8 @@ my @got;
 {
     no warnings 'redefine';
     local *ui::publish = sub { push @got, [@_] };
+    # the lists are made for each account: the local operator's view is recorded
+    local *ui::publish_each = sub { my ($type, $make) = @_; push @got, [$type, $make->(undef)] };
     ui::_pod_request('open', 'acme/alpha');
     loop::run(sub { grep {$_->[0] eq 'pods'} @got });
 }
@@ -109,6 +111,8 @@ ok($alpha && $alpha->{open}, "and alpha has its pod");
 {
     no warnings 'redefine';
     local *ui::publish = sub { push @got, [@_] };
+    # the lists are made for each account: the local operator's view is recorded
+    local *ui::publish_each = sub { my ($type, $make) = @_; push @got, [$type, $make->(undef)] };
     ui::_pod_request('close', 'acme/alpha');
     loop::run(sub { grep {$_->[0] eq 'pods'} @got });
 }
@@ -123,6 +127,8 @@ $ui::BROKER_SOCKET = "$base/nobody.sock";
 {
     no warnings 'redefine';
     local *ui::publish = sub { push @got, [@_] };
+    # the lists are made for each account: the local operator's view is recorded
+    local *ui::publish_each = sub { my ($type, $make) = @_; push @got, [$type, $make->(undef)] };
     ui::_pod_request('list', undef);
     loop::run(sub { grep {$_->[0] eq 'pods'} @got });
 }

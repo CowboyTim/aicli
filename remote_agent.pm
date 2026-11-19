@@ -119,7 +119,7 @@ sub _run {
             .join(', ', sort keys %{$self->{programs}}).")\n");
     }
     # account/project: the broker's names (its accounts have no dash, see broker.pl)
-    if ($project !~ m{\A[A-Za-z0-9][A-Za-z0-9._]{0,31}/[A-Za-z0-9][A-Za-z0-9._-]{0,62}\z}) {
+    if ($project !~ m{\A[A-Za-z0-9][A-Za-z0-9_]{0,95}/[A-Za-z0-9][A-Za-z0-9._-]{0,62}\z}) {
         return $self->_result($id, 2, "no such project\n");
     }
     my $dir = "$self->{work}/$project";

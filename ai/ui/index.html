@@ -32,6 +32,8 @@
   #menu label { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 13px; }
   #menu select { flex: 1; min-width: 0; max-width: 70%; font-size: 15px; }
   #model, #session, #project { max-width: 100% !important; }
+  .projadmin { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+  .projadmin input { min-width: 0; width: 9em; }
   #pods { flex: 1 1 100%; font-size: 13px; color: var(--muted); }
   #pods .podhead { margin-bottom: 4px; }
   #pods ul { list-style: none; margin: 0; padding: 0; }
@@ -123,6 +125,12 @@
   <div id="menu">
     <label>model <select id="model" aria-label="model" title="model"></select></label>
     <label>project <select id="project" aria-label="project" title="project"></select></label>
+    <div class="projadmin">
+      <label>new project <input id="newproject" aria-label="new project name" placeholder="name" maxlength="63" autocomplete="off"></label>
+      <button type="button" id="projcreate">create</button>
+      <button type="button" id="projrename">rename</button>
+      <button type="button" id="projdelete">delete</button>
+    </div>
     <label>session <select id="session" aria-label="session" title="session"></select></label>
     <label>look <select id="look" aria-label="look">
       <option value="simple">simple</option>
@@ -480,6 +488,51 @@
       body: JSON.stringify({ name: project.value })
     }).then(function (r) {
       if (!r.ok) { return r.json().then(function (j) { add("error", j.error || r.statusText); }); }
+    }).catch(function (err) { add("error", String(err)); });
+  });
+
+  // the projects: create one (in the login's account), rename or delete the selected one. The
+  // list of projects comes back with the sessions event. A delete of a project with sessions or
+  // files asks again before it removes them.
+  function projAsk(path, body) {
+    return fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    }).then(function (r) {
+      return r.json().then(function (j) { return { ok: r.ok, status: r.status, data: j }; });
+    });
+  }
+  function projFail(res) { add("error", (res.data && res.data.error) || "the project request failed"); }
+  document.getElementById("projcreate").addEventListener("click", function () {
+    var name = document.getElementById("newproject").value.trim();
+    if (!name) { add("error", "a project name is wanted"); return; }
+    projAsk("/project/new", { name: name }).then(function (res) {
+      if (res.ok) { document.getElementById("newproject").value = ""; add("usage", "project " + res.data.project + " made"); }
+      else { projFail(res); }
+    }).catch(function (err) { add("error", String(err)); });
+  });
+  document.getElementById("projrename").addEventListener("click", function () {
+    if (!project.value) { add("error", "the root is no project: select one"); return; }
+    var to = window.prompt("new name for " + project.value, "");
+    if (!to) { return; }
+    projAsk("/project/rename", { name: project.value, to: to.trim() }).then(function (res) {
+      if (res.ok) { add("usage", "project renamed to " + res.data.project); } else { projFail(res); }
+    }).catch(function (err) { add("error", String(err)); });
+  });
+  document.getElementById("projdelete").addEventListener("click", function () {
+    var name = project.value;
+    if (!name) { add("error", "the root is no project: select one"); return; }
+    if (!window.confirm("delete the project " + name + "?")) { return; }
+    projAsk("/project/delete", { name: name }).then(function (res) {
+      if (res.ok) { add("usage", "project " + name + " deleted"); return; }
+      if (res.status === 409 && /sessions and/.test(res.data.error || "")) {
+        if (!window.confirm(res.data.error + ". Delete all of it?")) { return; }
+        return projAsk("/project/delete", { name: name, force: true }).then(function (r2) {
+          if (r2.ok) { add("usage", "project " + name + " deleted"); } else { projFail(r2); }
+        });
+      }
+      projFail(res);
     }).catch(function (err) { add("error", String(err)); });
   });
 

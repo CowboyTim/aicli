@@ -42,7 +42,8 @@ my $JSON = JSON::XS->new->canonical(1)->utf8;
 
 # an account: the name of a login, a directory under the root (no dash: a pod's name is split at
 # its dashes, see _pod_name)
-our $ACCOUNT_RE = qr/[A-Za-z0-9][A-Za-z0-9._]{0,31}/;
+our $ACCOUNT_RE = qr/[A-Za-z0-9][A-Za-z0-9_]{0,95}/; # an account: a directory of the root and the part of a pod's name before its
+# dash, so no dash in it (an account ID is a UUID without its dashes, see auth.pl)
 
 # the log: one line per event on stderr, which `docker logs` shows. Never a request's
 # whole body, and nothing of the engine's answers but the status code.

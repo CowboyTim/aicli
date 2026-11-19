@@ -278,13 +278,14 @@ sub user_command {
         die "auth: $name exists\n" if getpwnam($name);
         for my $r (@roles) { die "auth: $r is no role (aicli-...)\n" unless valid_role($r) }
         $RUN->('useradd', '-M', '-s', '/usr/sbin/nologin', '-U', $name) or die "auth: useradd failed\n";
+        my $acct = ensure_account_id($name);
         for my $r (@roles) {
             $RUN->('groupadd', '-f', $r) or die "auth: groupadd $r failed\n";
             $RUN->('gpasswd', '-a', $name, $r) or die "auth: gpasswd failed\n";
         }
         set_password($name);
         save_accounts();
-        print "auth: $name added (roles: @roles)\n";
+        print "auth: $name added (roles: @roles), account $acct\n";
     } elsif ($cmd eq 'passwd') {
         my ($name) = @args;
         die "auth: no account ".($name // '')."\n" unless $name and getpwnam($name);
@@ -356,8 +357,53 @@ sub _sign_rs256 {
 # a token for the user; the claims are the given ones, plus iss, iat and exp
 # a token: sid is the login (kept by every renewal, revoked by logout), ses the time of the
 # login (the session ends session_max seconds after it), iat and exp the token's own life
+# The account ID of a login: a UUID in the passwd comment (GECOS), in its "other" subfield (the
+# fifth, after full name, room, work phone and home phone), as aicli=<uuid>. Several key=value
+# entries of that subfield are separated by ';'. The account of the projects is the UUID without
+# its dashes (32 hex digits), see the broker's names.
+sub gecos_of { my ($name) = @_; my @pw = getpwnam($name); return @pw ? ($pw[6] // '') : undef }
+
+sub account_id {
+    my ($name) = @_;
+    my $g = gecos_of($name) // return undef;
+    my ($other) = (split /,/, $g, -1)[4] // '';
+    my ($uuid) = $other =~ m/(?:\A|;)aicli=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:;|\z)/;
+    return undef unless defined $uuid;
+    (my $id = $uuid) =~ tr/-//d;
+    return $id;
+}
+
+# a new UUID (version 4, from the system's random source)
+sub new_uuid {
+    open(my $r, '<:raw', '/dev/urandom') or die "auth: no random source: $!\n";
+    read($r, my $raw, 16) == 16 or die "auth: no random source\n";
+    close($r);
+    my @b = unpack('C16', $raw);
+    $b[6] = ($b[6] & 0x0f) | 0x40;   # version 4
+    $b[8] = ($b[8] & 0x3f) | 0x80;   # RFC 4122 variant
+    my $h = join('', map {sprintf('%02x', $_)} @b);
+    return join('-', substr($h, 0, 8), substr($h, 8, 4), substr($h, 12, 4), substr($h, 16, 4), substr($h, 20, 12));
+}
+
+# the account ID of a login, made (and kept in the passwd comment) when it has none yet
+sub ensure_account_id {
+    my ($name) = @_;
+    my $id = account_id($name);
+    return $id if defined $id;
+    my $g = gecos_of($name) // die "auth: no account $name\n";
+    my @f = split /,/, $g, -1;
+    push @f, '' while @f < 5;
+    my $other = $f[4] // '';
+    $f[4] = length($other) ? "$other;aicli=".new_uuid() : 'aicli='.new_uuid();
+    my $new = join(',', @f);
+    $RUN->('usermod', '-c', $new, $name) or die "auth: usermod -c for $name failed\n";
+    save_accounts();
+    return account_id($name) // die "auth: the account ID of $name is not kept\n";
+}
+
 sub jwt_create {
     my ($rsa, $user, $roles, $lifetime, $now, $ses, $sid) = @_;
+    my $acct_of = account_id($user); # undef for a login that is not in the passwd (tests)
     $now //= time();
     $ses //= $now;
     $sid //= new_sid();
@@ -365,6 +411,7 @@ sub jwt_create {
     my $payload = MIME::Base64::encode_base64url($JSON->encode({
         iss => $ISSUER, sub => $user, roles => [ @$roles ], sid => $sid, ses => $ses,
         iat => $now, exp => $now + $lifetime,
+        ($acct_of ? (acct => $acct_of) : ()),
     }));
     my $signed = "$header.$payload";
     my $sig = _sign_rs256($rsa, $signed);
@@ -628,6 +675,7 @@ sub handle {
         my ($user, $password) = ($f->{user} // '', $f->{password} // '');
         if (valid_user($user) and pam_ok($user, $password)) {
             my @roles = roles_of($user);
+            eval { ensure_account_id($user); 1 } or print STDERR "auth: no account ID for $user: $@";
             my $token = jwt_create($rsa, $user, \@roles, token_lifetime(), $now, $now, new_sid());
             print STDERR "auth: login $user, roles @roles\n";
             return _response(200, '', headers => [
@@ -662,6 +710,7 @@ sub handle {
         my $user = qr_redeem($t, $now);
         return _response(401, 'unauthorized') unless defined $user and getpwnam($user);
         my @roles = roles_of($user);
+        eval { ensure_account_id($user); 1 } or print STDERR "auth: no account ID for $user: $@";
         my $token = jwt_create($rsa, $user, \@roles, token_lifetime(), $now, $now, new_sid());
         print STDERR "auth: login of $user from another device, roles @roles\n";
         return _response(200, '', headers => [
@@ -697,9 +746,10 @@ sub handle {
                 return _response(401, 'unauthorized');
             }
             my @roles = roles_of($name);
+            eval { ensure_account_id($name); 1 };
             my $token = jwt_create($rsa, $name, \@roles, token_lifetime(), $now, $ses, $claims->{sid});
             @set_cookie = (['Set-Cookie', _cookie($token, session_max())]);
-            $claims = { sub => $name, roles => \@roles };
+            $claims = { sub => $name, roles => \@roles, acct => account_id($name) };
         }
         my $need = $req->{query}{role};
         if (defined $need and length $need) {
@@ -710,7 +760,8 @@ sub handle {
             }
         }
         return _response(200, 'ok', headers => [
-            ['X-User', $claims->{sub}], ['X-Roles', join(',', @{ $claims->{roles} // [] })], @set_cookie,
+            ['X-User', $claims->{sub}], ['X-Roles', join(',', @{ $claims->{roles} // [] })],
+            ['X-Account', $claims->{acct} // ''], @set_cookie,
         ]);
     }
     return _response(404, 'not found');

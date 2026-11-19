@@ -132,6 +132,8 @@ http {
             # the login first: no valid JWT goes to the login page
             auth_request /_gate;
             auth_request_set $aicli_user $upstream_http_x_user;
+            # the login's account ID (a UUID kept in the passwd comment, see auth.pl): the agent's directory
+            auth_request_set $aicli_account $upstream_http_x_account;
             # a renewed login (the auth service renews it in its second half): its cookie goes on
             auth_request_set $aicli_cookie $upstream_http_set_cookie;
             add_header Set-Cookie $aicli_cookie always;
@@ -148,6 +150,7 @@ http {
             # the agent trusts this secret (it is not published): nginx has checked the login
             proxy_set_header X-Aicli-Gate ${AICLI_GATE_SECRET};
             proxy_set_header X-Aicli-User $aicli_user;
+            proxy_set_header X-Aicli-Account $aicli_account;
             proxy_buffering off;   # server-sent events: each event goes out at once
             proxy_cache off;
             proxy_read_timeout 1h;
