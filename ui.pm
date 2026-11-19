@@ -392,25 +392,56 @@ sub _history_data {
     my $file = "$dir/chat";
     my @all = (defined $name and -f $file) ? eval {ai::load_messages($file)} : ();
     my %meta = (defined $name and @all) ? ai::meta_of($dir, \@all) : ();
-    # the messages shown, by their index in the chat (the meta is by index)
-    my @shown = grep {
-        ai::is_user_input($all[$_]) or ((($all[$_]{role} // '') eq 'assistant') and length($all[$_]{content} // ''))
-    } 0 .. $#all;
-    my $more = @shown > $HISTORY_MAX ? 1 : 0;
-    splice(@shown, 0, @shown - $HISTORY_MAX) if $more;
+    # the results of the server's tool calls, by the call's id (their messages come after the call)
+    my %result_of;
+    for my $m (@all) {
+        next unless ($m->{role} // '') eq 'tool' and defined $m->{tool_call_id};
+        $result_of{$m->{tool_call_id}} = $m->{content} // '';
+    }
+    # what the page shows, in order: what the user said, the answers, and the tool calls with
+    # their results (drawn as the live page draws them: a tool line, then its result)
+    my @items;
+    for my $i (0 .. $#all) {
+        my $m = $all[$i];
+        if (ai::is_user_input($m)) {
+            push @items, {role => 'user', text => $m->{content}};
+            next;
+        }
+        next unless ($m->{role} // '') eq 'assistant';
+        if (length($m->{content} // '')) {
+            my $out = {role => 'assistant', text => $m->{content}};
+            if ($meta{$i}) {
+                $out->{thinking} = $meta{$i}{thinking} if length $meta{$i}{thinking};
+                $out->{usage} = $meta{$i}{usage} if length $meta{$i}{usage};
+            }
+            push @items, $out;
+        }
+        for my $tc (@{$m->{tool_calls} // []}) {
+            push @items, _tool_item($tc, $result_of{$tc->{id} // ''});
+        }
+    }
+    my $more = @items > $HISTORY_MAX ? 1 : 0;
+    splice(@items, 0, @items - $HISTORY_MAX) if $more;
     return {
         session  => $name // '',
         more     => $more ? \1 : \0,
-        messages => [map {
-            my $m = $all[$_];
-            my $out = {role => ($m->{role} eq 'user' ? 'user' : 'assistant'), text => $m->{content}};
-            if ($meta{$_}) {
-                $out->{thinking} = $meta{$_}{thinking} if length $meta{$_}{thinking};
-                $out->{usage} = $meta{$_}{usage} if length $meta{$_}{usage};
-            }
-            $out;
-        } @shown],
+        messages => \@items,
     };
+}
+
+# a tool call of the chat as the page shows it: its line (the name and the first line of its
+# arguments, as the live line), and its result (clipped as the live one is), when there is one
+sub _tool_item {
+    my ($tc, $result) = @_;
+    my $fn = $tc->{function} // {};
+    my $c = eval { ai::native_call({id => $tc->{id}, name => $fn->{name} // '', arguments => $fn->{arguments}}) } // {};
+    my $line = ai::web_text("\x{e2}\x{97}\x{8f} ".($c->{k} // $fn->{name} // '?')." ".(eval { ai::tool_summary($c) } // ''));
+    my $item = {role => 'tool', text => $line};
+    if (defined $result) {
+        my $max = $::ORIG_ENV{AI_TOOL_LINES} // 8;
+        $item->{result} = ai::web_text(ai::clip_lines(ai::to_bytes($result), $max, "  "));
+    }
+    return $item;
 }
 
 # the worker of a session: started when it has none (a fork; the child is a

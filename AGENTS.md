@@ -114,8 +114,9 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   the directory (`--new` for a fresh one); the page has a session select
   (`POST /session`, a switch goes through the chat's queue like a model
   switch) and gets the conversation on connect and after a switch (`history`
-  event, the messages of `load_messages()` that were said, not tool calls or
-  summaries). Tested with the socket pairs, `ai.pl --ui` as a child, and
+  event: what was said (`load_messages()`), the answers, and the tool calls of the chat with their
+  results, drawn as the live lines are (`_history_data`, `_tool_item`: a tool call's line from its
+  arguments, its result clipped; a summary is not shown)). Tested with the socket pairs, `ai.pl --ui` as a child, and
   curl; not yet in a browser (no Chromium here this time).
   Not yet tested in a browser: both looks and themes, the microphone, the
   thinking block, the TLS trust prompt. Not built yet: file downloads and
@@ -666,6 +667,8 @@ Other APIs are reached through an OpenAI compatible gateway, such as LiteLLM or 
 | `t/128_agent_routes.t` | the web interface's agent routes with a stand-in broker: a token for the login's user (no login: refused, nothing asked), the list, a revocation (a name needed), a refusal of the broker (502 with its reason) |
 | `t/127_enroll_e2e.t` | the enrollment end to end: a broker with its state file, the user's token and list over the socket, `ai.pl --enroll` (a wrong token refused, the right one keeps agent.json 0600, the token not printed), `ai.pl --agent` with that file and no token on its command line runs a job, a revocation stops it |
 | `t/126_enrollment.t` | the enrollment without sockets: a user's token (only its hash kept, a new one replaces it), agents enrolled with it (own token, hash only), the names and tags checked, the list of a user, revocation (owner only, the token stops), the state file over a restart |
+| `t/135_error_display.t` | the errors of a tool read whole on the page (a line is not cut at the terminal width there; an error has up to 40 lines, a result 8); the broker keeps the engine's own text of a failure (a refused pull says why) |
+| `t/134_history_tools.t` | the history of a session on the page: the tool calls of the chat with their results, in their place between what was said and the answers, a call without a result yet has none |
 | `t/133_favicon.t` | the icon of the pages: favicon.ico (16, 32, 48, 64, 256 pixels) and favicon.svg, a strawberry drawn for aicli (not emoji artwork); both pages link it; nginx serves it publicly; the local interface answers it without a login |
 | `t/132_account_id.t` | the account ID of a login in the passwd comment: the fifth subfield, the other subfields kept, made once, read back without the dashes, the UUID's form and version, a login not in the passwd refused |
 | `t/129_page_accounts.t` | the page's accounts: the login's name (none, a bad one, the local operator), what an account sees (its sessions, projects, busy list, the page's state), the events (each to its account, the models to all, a failure of a session to its account), the routes an account may not use (message, switch, delete, rename, pod, a session in another's project) |

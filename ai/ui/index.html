@@ -683,6 +683,13 @@
     if (d.more) { add("usage", "earlier messages of this session are not shown"); }
     (d.messages || []).forEach(function (m) {
       if (m.role === "user") { add("user", m.text); return; }
+      // a tool call of the chat: its line and its result, drawn as the live ones are
+      if (m.role === "tool") {
+        add("tool", m.text);
+        if (m.result !== undefined && m.result !== null) { add("result", m.result); }
+        current = null;
+        return;
+      }
       // the thinking of the answer (kept in the session's meta file), its usage as the tag
       if (m.thinking) { thinkStart(); thinkAdd(m.thinking); thinkDone("thought"); }
       var node = add("answer", "");

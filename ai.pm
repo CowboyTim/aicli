@@ -741,7 +741,8 @@ sub handle_llm_response {
             &{$printer_sub}("${colors::green_color}$tool_response${colors::reset_color}\n");
         } elsif($had_error){
             my $e = $had_error =~ s/^\[ERROR\] (?:problem running tool '\w+': )?//r;
-            $say_tool->($colors::red_color.clip_lines($e, $::ORIG_ENV{AI_TOOL_LINES} // 8, "  ").$colors::reset_color, 'result');
+            # an error is read whole: the web page shows more lines of it than of a result
+            $say_tool->($colors::red_color.clip_lines($e, $EVENT_SINK ? 40 : ($::ORIG_ENV{AI_TOOL_LINES} // 8), "  ").$colors::reset_color, 'result');
         } elsif(!$changed or !($::ORIG_ENV{AI_SHOW_DIFF} // 1)){
             # (a file change shows its diff instead)
             $say_tool->($colors::green_color.clip_lines($result, $::ORIG_ENV{AI_TOOL_LINES} // 8, "  ").$colors::reset_color, 'result');
@@ -1219,14 +1220,15 @@ sub term_width {
 sub clip_lines {
     my ($text, $max, $prefix) = @_;
     $prefix //= '';
-    my $width = term_width() - length($prefix) - 1;
-    $width = 20 if $width < 20;
+    # the web page wraps its own lines: nothing is cut across, only the count of lines
+    my $width = $EVENT_SINK ? 0 : term_width() - length($prefix) - 1;
+    $width = 20 if $width and $width < 20;
     my @lines = split m/\n/, $text // '';
     my $more = ($max and @lines > $max) ? @lines - $max : 0;
     splice(@lines, $max) if $more;
     my $r = join('', map {
         my $l = to_text($_) =~ s/\t/    /gr =~ s/[^\P{Cc}]//gr;
-        $l = substr($l, 0, $width - 1)."\x{2026}" if length($l) > $width;
+        $l = substr($l, 0, $width - 1)."\x{2026}" if $width and length($l) > $width;
         $prefix.to_bytes($l)."\n";
     } @lines);
     $r .= $prefix."... +$more more line".($more == 1 ? "" : "s")."\n" if $more;

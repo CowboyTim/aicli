@@ -627,7 +627,9 @@ sub _failed {
     # libpod: "cause" or "message"; a pod start that fails lists "Errs" (one per container)
     my $msg = ref($why) eq 'HASH'
         ? join('; ', grep {length} ($why->{cause} // (), $why->{message} // (), ref($why->{Errs}) eq 'ARRAY' ? @{$why->{Errs}} : ()))
-        : substr($body // '', 0, 200); # the broker's own reasons (not reachable, no answer) are plain text
+        : substr($body // '', 0, 2000); # the broker's own reasons (not reachable, no answer) are plain text
+    # an answer with no known field: the engine's text as it is (up to 2000 bytes), not an empty reason
+    $msg = substr($body // '', 0, 2000) if !length($msg) and ref($why) eq 'HASH';
     return {ok => JSON::XS::false(), error => "$what (engine answered $code".(length($msg) ? ": $msg" : '').")"};
 }
 
