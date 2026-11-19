@@ -30,7 +30,9 @@ sub value { my ($f, $k) = @_; my ($v) = slurp($f) =~ m/^\Q$k\E=(.*)$/m; return $
 my %in = (
     PUBLIC_DOMAIN => 'ai.example.org', CERTBOT_EMAIL => 'me@example.org',
     AI_PROJECTS => '/home/me/projects',
-    IPV6_PREFIX => '2001:db8:1:2:c::8', MODEL_IPV6 => '2001:db8:1:2::20',
+    IPV6_PREFIX => '2001:db8:1:2:c::8',
+    AI_LOCAL_SERVER => 'http://[2001:db8:1:2::20]:8000/rocm/v1',
+    AI_ASR_URL => 'http://[2001:db8:1:2::21]:52625/v1/audio/transcriptions',
 );
 
 is(run_setup(%in), 0, "the first run with what it needs");
@@ -42,7 +44,8 @@ like(value($env_f, 'SEARXNG_API_TOKEN'), qr/\A[0-9a-f]{64}\z/, "and the token of
 is(value($env_f, 'IPV6_SUBNET'), '2001:db8:1:2:c::8:0/120', "the subnet of the default prefix");
 is(value($env_f, 'IPV6_GATEWAY'), '2001:db8:1:2:c::8:1', "and its gateway");
 ok(value($env_f, 'BROKER_UID') =~ m/^\d+$/, "the id of the user");
-is(value($agent_f, 'AI_LOCAL_SERVER'), 'http://[2001:db8:1:2::20]:8000/rocm/v1', "agent: the model server");
+is(value($agent_f, 'AI_LOCAL_SERVER'), 'http://[2001:db8:1:2::20]:8000/rocm/v1', "agent: the model server, as given");
+is(value($agent_f, 'AI_ASR_URL'), 'http://[2001:db8:1:2::21]:52625/v1/audio/transcriptions', "agent: the speech recognizer, as given (its own address)");
 ok(length value($agent_f, 'AI_MODEL'), "agent: a model");
 
 my $secret = value($env_f, 'SEARXNG_SECRET');
