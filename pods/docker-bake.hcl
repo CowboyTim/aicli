@@ -8,7 +8,7 @@
 #
 # Each image also gets the tag ${REGISTRY}/pod-<name>:latest, which is what the
 # broker pulls (broker.json). To make them available to it, push them, e.g.
-#   for p in bash rocm arduino android node; do docker push localhost:5000/aicli/pod-$p:latest; done
+#   for p in bash rocm arduino android node; do docker push $REGISTRY/pod-$p:latest; done
 # README.md, "The pods", has the registry setup.
 #
 # Every variable can be overridden from the environment, e.g.
@@ -21,8 +21,9 @@ variable "IMAGE_REPO" {
 }
 
 variable "REGISTRY" {
-  # the registry and path the broker pulls from (localhost:5000 on the host)
-  default = "localhost:5000/aicli"
+  # the registry the broker pulls from and pushes go to: the stack's public name and the
+  # registry port (nginx-local, see docker-compose.yaml). Set PUBLIC_DOMAIN in the environment.
+  default = "${getenv("PUBLIC_DOMAIN")}:5443/aicli"
 }
 
 variable "ROCM_IMAGE" {

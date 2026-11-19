@@ -30,6 +30,8 @@ services:
       AI_BROKER_HOST_ROOT: ${AI_PROJECTS:?set AI_PROJECTS to the host directory of the projects}
       AI_BROKER_SOCKET: /run/aicli-broker/broker.sock
       AI_BROKER_ENGINE: /run/engine/podman.sock
+      # the registry the pod images are pulled from (broker.json: ${AICLI_POD_REGISTRY}/pod-<kind>)
+      AICLI_POD_REGISTRY: ${PUBLIC_DOMAIN:?set PUBLIC_DOMAIN}:${REGISTRY_PORT:-5443}/aicli
       CONTAINER_HOST: unix:///run/engine/podman.sock
     volumes:
       - ./broker.json:/etc/aicli/broker.json:ro
@@ -101,8 +103,11 @@ services:
       # a token lasts an hour and is renewed while in use; a session lasts a month (then a login)
       AI_AUTH_LIFETIME: ${AI_AUTH_LIFETIME:-86400}
       AI_AUTH_SESSION_MAX: ${AI_AUTH_SESSION_MAX:-2592000}
+      # the public half of the key, as a certificate, for the registry (its own volume, read-only there)
+      AI_AUTH_REGISTRY_CERT: /var/lib/aicli-registry-auth/token.crt
     volumes:
       - aicli-auth:/var/lib/aicli-auth
+      - aicli-registry-auth:/var/lib/aicli-registry-auth
     # all capabilities dropped, but the three the account tools need to rewrite /etc/passwd and
     # /etc/shadow (the owner and group of the new files, and writing files of root)
     cap_drop:
@@ -172,6 +177,59 @@ services:
       - ./nginx/security-headers.conf:/etc/nginx/security-headers.conf:ro
     restart: unless-stopped
 
+  # registry: the images of the pods (pods/, docker-bake.hcl). Its port is not published:
+  # nginx-local is the only way in, for pushes from the LAN and for pulls. It checks the
+  # tokens of the auth service (role aicli-registry to push), with the certificate of their
+  # key (its volume aicli-registry-auth, which only the public half is in).
+  registry:
+    image: registry:2
+    networks:
+      - aicli
+    environment:
+      REGISTRY_HTTP_ADDR: 0.0.0.0:5000
+      REGISTRY_STORAGE_DELETE_ENABLED: "false"
+      REGISTRY_AUTH: token
+      REGISTRY_AUTH_TOKEN_REALM: https://${PUBLIC_DOMAIN:?set PUBLIC_DOMAIN}:${REGISTRY_PORT:-5443}/auth/registry/token
+      REGISTRY_AUTH_TOKEN_SERVICE: aicli-registry
+      REGISTRY_AUTH_TOKEN_ISSUER: aicli-auth
+      REGISTRY_AUTH_TOKEN_ROOTCERTBUNDLE: /etc/registry-auth/token.crt
+    volumes:
+      - aicli-registry-data:/var/lib/registry
+      - aicli-registry-auth:/etc/registry-auth:ro
+    depends_on:
+      - auth
+    restart: unless-stopped
+
+  # nginx-local: the registry on the LAN, TLS with the certificate of the public name. Not on
+  # the public network: its port is published on REGISTRY_LAN_ADDR only. The default
+  # 127.0.0.1 is what the host's own broker pulls from (the name points there in the host's
+  # hosts file); set REGISTRY_LAN_ADDR to the host's LAN address for pushes from other
+  # machines (their hosts file or DNS points the name there). Only /v2/ and the token route.
+  nginx-local:
+    image: nginx:stable
+    networks:
+      - aicli
+    ports:
+      - "${REGISTRY_LAN_ADDR:-127.0.0.1}:${REGISTRY_PORT:-5443}:443"
+    depends_on:
+      - registry
+      - auth
+    environment:
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?set PUBLIC_DOMAIN to the public name}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        until [ -d /etc/nginx/certs/live/$$PUBLIC_DOMAIN ]; do
+          echo "no certificate for $$PUBLIC_DOMAIN yet (run deploy.sh with DO_CERTBOT=1)"; sleep 30
+        done
+        envsubst '$$PUBLIC_DOMAIN' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
+        exec nginx -g 'daemon off;'
+    volumes:
+      - ./nginx/registry.conf.template:/etc/nginx/nginx.conf.template:ro
+      - letsencrypt:/etc/nginx/certs:ro
+    restart: unless-stopped
+
+
 networks:
   # the public IPv6 network (deploy.sh creates it): only nginx is on it
   dmz:
@@ -199,5 +257,9 @@ volumes:
     name: aicli-agent
   aicli-auth:
     name: aicli-auth
+  aicli-registry-auth:
+    name: aicli-registry-auth
+  aicli-registry-data:
+    name: aicli-registry-data
   letsencrypt:
     name: aicli-letsencrypt

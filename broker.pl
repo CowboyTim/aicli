@@ -80,7 +80,7 @@ sub _pods_config {
             die "broker: pod $kind needs an image\n" unless ref($p) eq 'HASH' and length($p->{image} // '');
             my @programs = ref($p->{programs}) eq 'ARRAY' ? @{$p->{programs}} : ();
             die "broker: pod $kind needs its programs\n" unless @programs;
-            $pods{$kind} = {image => $p->{image}, list => [@programs], programs => {map {($_ => 1)} @programs},
+            $pods{$kind} = {image => _expand_image($kind, $p->{image}), list => [@programs], programs => {map {($_ => 1)} @programs},
                 note => $p->{note} // '', _pod_extras($kind, $p)};
         }
     } elsif (ref($c->{images}) eq 'ARRAY' and @{$c->{images}}) {
@@ -203,6 +203,16 @@ sub _image {
     return $self->_failed("the image $ref could not be pulled", $c, $body)
         unless $c == 200 and ($body // '') !~ m/"error"/;
     return undef;
+}
+
+# an image reference of the config, with ${NAME} taken from the environment (the registry of the
+# pods is the domain of the stack, AICLI_POD_REGISTRY); a variable that is not set is refused
+sub _expand_image {
+    my ($kind, $ref) = @_;
+    my $missing;
+    $ref =~ s{\$\{(\w+)\}}{ defined $ENV{$1} ? $ENV{$1} : do { $missing //= $1;  } }ge;
+    die "broker: pod $kind: the variable \${$missing} of its image is not set\n" if defined $missing;
+    return $ref;
 }
 
 # what a kind adds to its container, from its config: devices (paths under /dev, globs,
