@@ -33,6 +33,35 @@ user's view) and AGENTS.md (the code, and "Status" for the history), not here.
 - **Terminals other than tmux 3.4** for the footer (kitty and others). Emoji
   and wide-character widths may differ.
 
+## Open: the stack (pods, registry, auth, deploy)
+
+- **First real run on the host.** Not tested here (no Docker, Podman or PAM in
+  the sandbox): the auth login through the page, `user add` and `user passwd`
+  with the terminal prompts, the `chpasswd -e` step inside the auth container,
+  and the broker's first pull from `AICLI_REGISTRY_HOST` with its login.
+- **Podman's field names.** The broker's create request uses libpod's
+  `devices`, `groups`, `seccomp_profile_path` and `ipc`. Check them against the
+  running Podman: `podman container inspect` of a `-dev` container after its
+  first open.
+- **Devices for rootless Podman.** Serial, USB and the ROCm GPU nodes are owned
+  by groups (`dialout`, `render`, `video`) that a rootless container with
+  `keep-id` cannot use. Undecided: a udev rule on the host that gives the user
+  access (`TAG+="uaccess"` or a mode), or a rootful Podman for the broker's pods.
+- **Pod images.** Built by `pods/docker-bake.hcl` (bash, arduino, rocm, android,
+  node), not yet built or pushed. The `rocm` kind's `seccomp` and `ipc` settings
+  are copied from `run.sh`; not checked on a GPU.
+- **Brute-force protection for logins.** `auth/aicli-auth.pam` has only
+  `pam_unix`. A `pam_faillock` sketch needs a test in the auth container before
+  it is committed. The `metrics_api` PAM file (a copy kept out of the repo) was
+  compared: its `pam_selinux`, `pam_permit` fall-through and listfile rules do
+  not fit.
+- **The pods panel** in the web page shows the base pods only, and it is not
+  refreshed by the model's own pod calls.
+- **Git history** still has the domain and the public IPv6 prefix in older
+  commits (removed from the tree). Rewriting `main` is undecided.
+- **Flaky test:** `t/100_ui.t` ("the slow turn starts") failed once in a full
+  run and passed on its own and on the next run. Not investigated.
+
 ## Open: web interface
 
 - **Projects and `--root`** are built and tested with a fake docker and the
@@ -87,6 +116,14 @@ user's view) and AGENTS.md (the code, and "Status" for the history), not here.
 
 ## Decided against
 
+- **Pods chosen by the model by image.** The model names a pod kind; the image,
+  programs and devices come from `broker.json`, and a registry must be listed there.
+- **A registry run by the stack**, or a LAN nginx for it. The images are on
+  `registry.aardbeiplantje.link`; the stack only pulls from it.
+- **Passwords through the system `passwd`.** `auth.pl` sets them (its rules, its
+  hash) and stores the hash with `chpasswd -e`.
+- **A domain or a public address in the repo.** They are settings in `.env`.
+- **Pods with bluetooth or host networking.** Not offered to pods.
 - **Tool confirmation or an allow-list.** The container is the sandbox.
 - **Sub-agents on FastFlowLM.** The NPU is kept for voice; the `agent` tool is
   not offered with `AI_PROVIDER=flm`.
