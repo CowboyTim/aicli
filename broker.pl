@@ -61,6 +61,8 @@ sub new {
         max_pods  => $c{max_pods} // 4,                              # open pods at once, all kinds
         idle      => ($c{idle_minutes} // 30) * 60,                  # seconds unused before a close
         tls_verify => $c{tls_verify} // 1,                           # the registry's certificate is checked
+        dev_root  => $c{dev_root} // '/dev',                         # where the host's devices are (tests)
+        sys_root  => $c{sys_root} // '/sys',                         # where the host's usb devices are (tests)
         last      => {},                                             # "kind/project" => time of its last open or exec
     }, $class;
     return $self;
@@ -79,7 +81,7 @@ sub _pods_config {
             my @programs = ref($p->{programs}) eq 'ARRAY' ? @{$p->{programs}} : ();
             die "broker: pod $kind needs its programs\n" unless @programs;
             $pods{$kind} = {image => $p->{image}, list => [@programs], programs => {map {($_ => 1)} @programs},
-                note => $p->{note} // ''};
+                note => $p->{note} // '', _pod_extras($kind, $p)};
         }
     } elsif (ref($c->{images}) eq 'ARRAY' and @{$c->{images}}) {
         my @basic = qw(bash perl grep);
@@ -172,7 +174,12 @@ sub _open {
         $made = 1 if $c1 == 201;
     }
     # the container is asked for every time: a pod can be there without it (a failed open)
-    my ($code2, $body2) = $self->_engine('POST', '/libpod/containers/create', $self->_container_spec($name, $pod, $image));
+    # the devices the kind passes (the ones that exist now) and the groups: the config's and the owners'
+    my ($devs, $dgids) = $self->_device_specs($spec);
+    my %seen;
+    my @groups = grep {!$seen{$_}++} (@{$spec->{groups}}, @$dgids);
+    my $x = {devices => $devs, groups => \@groups, env => $spec->{env}, seccomp => $spec->{seccomp}, ipc => $spec->{ipc}};
+    my ($code2, $body2) = $self->_engine('POST', '/libpod/containers/create', $self->_container_spec($name, $pod, $image, $x));
     # a name in use is the container of an earlier open: the engine says so with 409, or 500 (storage)
     my $exists = $code2 == 409 || ($code2 == 500 && ($body2 // '') =~ m/already in use/);
     return $self->_failed("the dev container could not be made", $code2, $body2) unless $code2 == 201 or $exists;
@@ -181,7 +188,8 @@ sub _open {
     return $self->_failed("the pod could not be started", $c2, $b2) unless $c2 == 200 or $c2 == 304;
     $self->{last}{$key} = time;
     return {ok => JSON::XS::true(), project => $name, kind => $kind, pod => $pod,
-        created => $made ? JSON::XS::true() : JSON::XS::false()};
+        created => $made ? JSON::XS::true() : JSON::XS::false(),
+        devices => [map {$_->{path}} @$devs]};
 }
 
 # the image of a pod: pulled from its registry when the engine does not have it yet
@@ -197,15 +205,115 @@ sub _image {
     return undef;
 }
 
+# what a kind adds to its container, from its config: devices (paths under /dev, globs,
+# passed when they exist at open), usb_ids (vid:pid, resolved to /dev/bus/usb nodes at
+# open), groups (numeric gids), env (names in capitals), seccomp ('unconfined') and ipc
+# ('host'). Anything else in a kind is refused: privileged, mounts, sockets, networks.
+my %POD_KEYS = map {($_ => 1)} qw(image programs note devices usb_ids groups env seccomp ipc);
+sub _pod_extras {
+    my ($kind, $p) = @_;
+    for my $k (sort keys %$p) {
+        die "broker: pod $kind: '$k' is not a setting of a pod (image, programs, note, devices, usb_ids, groups, env, seccomp, ipc)\n"
+            unless $POD_KEYS{$k};
+    }
+    my %x = (devices => [], usb_ids => [], groups => [], env => {}, seccomp => undef, ipc => undef);
+    for my $d (ref($p->{devices}) eq 'ARRAY' ? @{$p->{devices}} : ()) {
+        die "broker: pod $kind: a device is a path under /dev, '$d'\n"
+            unless !ref($d) and $d =~ m{\A/dev/[A-Za-z0-9_./*-]+\z} and $d !~ m{\.\.};
+        push @{$x{devices}}, $d;
+    }
+    for my $id (ref($p->{usb_ids}) eq 'ARRAY' ? @{$p->{usb_ids}} : ()) {
+        die "broker: pod $kind: a usb id is vid:pid in hex, '$id'\n"
+            unless !ref($id) and $id =~ m/\A[0-9a-fA-F]{4}:[0-9a-fA-F]{4}\z/;
+        push @{$x{usb_ids}}, lc($id);
+    }
+    for my $g (ref($p->{groups}) eq 'ARRAY' ? @{$p->{groups}} : ()) {
+        die "broker: pod $kind: a group is a gid (a number)\n" unless !ref($g) and $g =~ m/\A\d+\z/;
+        push @{$x{groups}}, $g + 0;
+    }
+    if (ref($p->{env}) eq 'HASH') {
+        for my $k (sort keys %{$p->{env}}) {
+            my $v = $p->{env}{$k};
+            die "broker: pod $kind: env '$k' must be a name in capitals with a plain value\n"
+                unless $k =~ m/\A[A-Z_][A-Z0-9_]*\z/ and !ref($v) and defined($v) and $v !~ m/[\n\0]/;
+            $x{env}{$k} = $v;
+        }
+    } elsif (defined $p->{env}) {
+        die "broker: pod $kind: env is a hash of names and values\n";
+    }
+    if (defined $p->{seccomp}) {
+        die "broker: pod $kind: seccomp is 'unconfined' or nothing\n" unless $p->{seccomp} eq 'unconfined';
+        $x{seccomp} = 'unconfined';
+    }
+    if (defined $p->{ipc}) {
+        die "broker: pod $kind: ipc is 'host' or nothing\n" unless $p->{ipc} eq 'host';
+        $x{ipc} = 'host';
+    }
+    return %x;
+}
+
+# the file's first line in a sysfs (or other) directory, or undef
+sub _file {
+    my ($dir, $name) = @_;
+    open(my $fh, '<', "$dir/$name") or return undef;
+    my $line = <$fh>;
+    close($fh);
+    return undef unless defined $line;
+    $line =~ s/\s+\z//;
+    return $line;
+}
+
+# the devices a kind passes at open: its device paths that exist now (globs, so a
+# board plugged in later is found by the next open), the usb nodes of its usb ids
+# (from sysfs: a meter replugged gets a new number, found the same way), and the gids
+# that own them, which the container gets as groups (run.sh does the same with stat).
+# Returns (the devices as libpod's LinuxDevice, the gids).
+sub _device_specs {
+    my ($self, $spec) = @_;
+    my $dev_root = $self->{dev_root};
+    my @found;   # [path in the container, path on the host]
+    for my $pat (@{$spec->{devices}}) {
+        for my $h (sort glob($dev_root.substr($pat, length('/dev')))) {
+            push @found, ['/dev'.substr($h, length($dev_root)), $h];
+        }
+    }
+    for my $id (@{$spec->{usb_ids}}) {
+        my ($vid, $pid) = split /:/, $id;
+        for my $dir (sort glob("$self->{sys_root}/bus/usb/devices/*")) {
+            next unless lc(_file($dir, 'idVendor') // '') eq $vid and lc(_file($dir, 'idProduct') // '') eq $pid;
+            my ($bus, $num) = (_file($dir, 'busnum'), _file($dir, 'devnum'));
+            next unless defined $bus and defined $num;
+            my $node = sprintf('/bus/usb/%03d/%03d', $bus, $num);
+            push @found, ["/dev$node", "$dev_root$node"];
+        }
+    }
+    my (@devices, %gids);
+    for my $f (@found) {
+        my ($cpath, $host) = @$f;
+        next unless -c $host;
+        my @st = stat($host);
+        my $rdev = $st[6];
+        push @devices, {path => $cpath, type => 'c',
+            major => ($rdev >> 8) & 0xfff,
+            minor => ($rdev & 0xff) | (($rdev >> 12) & 0xfff00),
+            fileMode => $st[2] & 07777};
+        $gids{$st[5]} = 1 if $st[5] != 0;
+    }
+    return (\@devices, [sort {$a <=> $b} keys %gids]);
+}
+
 # the container of a project: its directory is the only host path it gets, and
-# nothing is privileged; the limits are the config's
+# nothing is privileged; the limits are the config's. $x: what the kind adds (_pod_extras,
+# _device_specs), see below
 sub _container_spec {
-    my ($self, $name, $pod, $image) = @_;
-    return {
+    my ($self, $name, $pod, $image, $x) = @_;
+    $x //= {};
+    my $c = {
         name           => "$pod-dev",
         pod            => $pod,
         image          => $image,
-        command        => ['sleep', 'infinity'], # the agent's worker is started in it later
+        # the pod runs nothing but waits: the broker's exec runs the programs in it
+        command        => ['sleep', 'infinity'],
         work_dir       => '/work',
         mounts         => [{type => 'bind', source => "$self->{host_root}/$name",
                             destination => '/work', options => ['rw', 'rbind']}],
@@ -216,6 +324,14 @@ sub _container_spec {
         # numbers, not text: a value used as text (in a log line) would be encoded as a string
         resource_limits => {memory => {limit => 0 + $self->{memory}}, pids => {limit => 0 + $self->{pids}}},
     };
+    # what the kind adds: the devices (LinuxDevice), the groups that own them and the
+    # config's, the variables, seccomp and ipc. Never privileged, never a cgroup rule.
+    $c->{devices} = $x->{devices} if @{$x->{devices} // []};
+    $c->{groups} = [map {"$_"} @{$x->{groups} // []}] if @{$x->{groups} // []};
+    $c->{env} = $x->{env} if %{$x->{env} // {}};
+    $c->{seccomp_profile_path} = 'unconfined' if $x->{seccomp};
+    $c->{ipc} = {nsmode => 'host'} if $x->{ipc};
+    return $c;
 }
 
 sub _close {

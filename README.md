@@ -105,8 +105,7 @@ on the host; the groups that own them are added to the container:
 | `--nrf-sniffer` | nRF52840 dongles (implies `--usb`), with `nrfutil` in the image |
 | `--bluetooth` | Bluetooth HCI access: `NET_ADMIN` and `NET_RAW` (the container has `--network=host`) |
 
-The container makes the device nodes itself when it starts (`aicli-devices.sh`,
-as claude-agent does): `ttyUSB0..7` and `ttyACM0..7` for the boards (`SERIAL_MAX`
+The container makes the device nodes itself when it starts (`aicli-devices.sh`): `ttyUSB0..7` and `ttyACM0..7` for the boards (`SERIAL_MAX`
 changes how many), and the USB nodes of the meters and dongles that are plugged in.
 So a board plugged in later works without a restart. A USB device replugged later
 gets a new device number, so that needs a new start. The chat needs none of these:
@@ -565,29 +564,42 @@ podman.socket`), and set `AI_PROJECTS`, `PODMAN_SOCKET`, `BROKER_UID`, `BROKER_G
 ## The pods
 
 A pod is a container with a project's files at `/work`, where a few programs run for
-the agent. There are kinds of pod, each one defined in `broker.json` (`pods`): the image
-(a registry reference), the programs it may run, and a note the model sees.
+the agent. Each kind of pod is defined in `broker.json` (`pods`): the image (a registry
+reference), the programs it may run, a note the model sees, and the devices it needs.
+The images are plain dev images, built from `pods/` (see `pods/docker-bake.hcl`):
 
-- `base`: `bash`, `perl`, `grep`. The basic tools of every session, opened by the first
-  basic call. Built from `pods/base.Dockerfile` (Debian slim, no agent in it).
-- `node`: `node`, `npm`, `npx`, for nodejs projects only. Built from `pods/node.Dockerfile`.
+| kind | image | programs | devices |
+|------|-------|----------|---------|
+| `base` | `pod-bash` (general dev tools) | `bash`, `perl`, `grep` | none; opened by the first basic call |
+| `node` | `pod-node` (`node:22-bookworm-slim`) | `node`, `npm`, `npx` | none |
+| `arduino` | `pod-arduino` (arduino-cli, ESP32 core, usb_logger) | `arduino-cli`, `python3` | `/dev/ttyACM*`, `/dev/ttyUSB*`, and the USB meters by `usb_ids` |
+| `rocm` | `pod-rocm` (ROCm, torch, rust) | `python3`, `hipcc`, `rocminfo`, `rocm-smi`, `cargo` | `/dev/kfd`, `/dev/dri/card*`, `/dev/dri/renderD*`; `seccomp` unconfined, `ipc` host |
+| `android` | `pod-android` (JDK, Android SDK, Gradle) | `java`, `javac`, `gradle`, `sdkmanager` | none |
 
-Other toolchains (ROCm, for example) are more kinds with their own image and programs,
-added to `broker.json`. A kind is a short lower-case name with no dash. A pod runs only
-the programs its kind lists: `pod_run node "npm test"` is allowed in the node pod, and
-`bash` in the node pod is refused. A call opens its pod when it is closed (the cap still
-applies). `max_pods` (4 by default) limits the open pods of all kinds, `idle_minutes`
-(30) closes a pod that has not been used for that long, checked once a minute.
+A kind is a short lower-case name with no dash. A pod runs only the programs its kind
+lists: `pod_run node "npm test"` runs in the node pod, and `bash` in the node pod is
+refused. A call opens its pod when it is closed (the cap still applies). `max_pods`
+(4 by default) limits the open pods of all kinds, `idle_minutes` (30) closes a pod that
+has not been used for that long, checked once a minute.
 
-The images come from a registry the broker pulls from, so the build and the broker must
-share one. On the host, run a local registry and point the pod targets at it:
+### Building and pushing the images
+
+```
+cd pods
+docker buildx bake                    # the five images, into the local Docker image store
+for p in bash node arduino rocm android; do docker push localhost:5000/aicli/pod-$p:latest; done
+```
+
+The bake file tags each image twice: `aicli-pod:<kind>` for local use (`run.sh`) and
+`localhost:5000/aicli/pod-<kind>:latest`, the name the broker pulls. The broker uses
+Podman's image store, which the Docker daemon does not share, so the pushed registry is
+what makes an image visible to it. The registry on the host:
 
 ```
 docker run -d --restart always -p 127.0.0.1:5000:5000 --name registry registry:2
-docker buildx bake pods          # pushes local/ai pod images to localhost:5000
 ```
 
-Podman pulls from a plain-http registry only when it is listed as insecure: add to
+Podman pulls from a plain-http registry only when it is listed as insecure, in
 `~/.config/containers/registries.conf`:
 
 ```
@@ -596,10 +608,51 @@ location = "localhost:5000"
 insecure = true
 ```
 
-A remote registry works the same way: set the image reference in `broker.json` (with
-`tls_verify` true, the default). Podman's own image store is what the broker uses, so
-an image built only with the Docker daemon is not visible to it until it is pushed to
-the registry.
+A remote registry works the same way: set its image reference in `broker.json` (with
+`tls_verify` true, the default).
+
+### Devices and groups
+
+`run.sh` passes devices by name and adds the groups that own them. The broker does the
+same for a kind, at open time, from its config:
+
+- `devices`: paths under `/dev`, globs allowed. A path that exists when the pod opens is
+  passed (`/dev/ttyACM*`, `/dev/kfd`); one that does not exist is left out, so a board
+  plugged in later is found by the next open.
+- `usb_ids`: `vid:pid`. The broker finds the device in sysfs and passes its
+  `/dev/bus/usb/<bus>/<dev>` node, so a meter replugged gets found by the next open.
+- `groups`: extra gids. The gids of the devices passed are added by the broker itself.
+- `env`: variables for the container, names in capitals.
+- `seccomp: "unconfined"` and `ipc: "host"`: what the ROCm flavour of `run.sh` uses.
+
+Never privileged, never a mount of `/dev`, never a cgroup rule: the config refuses
+anything else, and the model cannot name a device.
+
+What rootless Podman can and cannot do (the broker's Podman runs rootless, with
+`userns: keep-id`):
+
+- Passing an existing device node works: Podman bind-mounts it.
+- Device cgroup rules (`--device-cgroup-rule`, which `run.sh` uses for serial and USB) need
+  cgroup write access, which a rootless user does not have. So serial and USB are passed
+  node by node, which is what the `devices` and `usb_ids` settings do.
+- The entrypoint's `mknod` of the nodes (run.sh's approach) does not work rootless, and the
+  pods here don't set `SERIAL_NODES` or `USB_METERS`, so the entrypoint does nothing.
+- Groups: a device owned by `dialout`, `render` or `video` is only usable if that group is
+  mapped into the container. With `keep-id` only your own UID and GID are mapped, so the
+  owner group of a device is usually not mapped, and the device's `0660` permissions then
+  deny access. Two ways out, to choose on the host: a udev rule that gives your user access
+  to the device (`TAG+="uaccess"` or a `MODE`), or a rootful Podman for the broker's pods.
+  `getent group dialout video render` and `ls -l /dev/ttyACM0 /dev/kfd /dev/dri/*` show
+  which groups own them on this host.
+
+The Podman field names for devices and groups in the create request are not checked
+against a running Podman here: after the first pod opens, `podman container inspect`
+of its `-dev` container shows what was passed.
+
+### The host
+
+Host setup: install Podman, enable the user socket (`systemctl --user enable --now
+podman.socket`), and set `AI_PROJECTS`, `PODMAN_SOCKET`, `BROKER_UID`, `BROKER_GID`.
 
 ## The public address (nginx, TLS)
 

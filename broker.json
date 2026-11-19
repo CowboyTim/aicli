@@ -4,14 +4,34 @@
   "socket": "/run/aicli-broker/broker.sock",
   "pods": {
     "base": {
-      "image": "localhost:5000/aicli/pod-base:latest",
+      "image": "localhost:5000/aicli/pod-bash:latest",
       "programs": ["bash", "perl", "grep"],
-      "note": "the basic tools of every session: bash, perl and grep (Debian slim)"
+      "note": "the basic tools of every session: bash, perl and grep (general dev image)"
     },
     "node": {
       "image": "localhost:5000/aicli/pod-node:latest",
       "programs": ["node", "npm", "npx"],
       "note": "nodejs and npm, for nodejs projects only"
+    },
+    "arduino": {
+      "image": "localhost:5000/aicli/pod-arduino:latest",
+      "programs": ["arduino-cli", "python3"],
+      "devices": ["/dev/ttyACM*", "/dev/ttyUSB*"],
+      "usb_ids": ["0483:003a", "0483:003b", "2e3c:0049", "2e3c:5558"],
+      "note": "arduino-cli and ESP32 boards, and the USB power meters (usb_logger); boards plugged in when the pod opens"
+    },
+    "rocm": {
+      "image": "localhost:5000/aicli/pod-rocm:latest",
+      "programs": ["python3", "hipcc", "rocminfo", "rocm-smi", "cargo"],
+      "devices": ["/dev/kfd", "/dev/dri/card*", "/dev/dri/renderD*"],
+      "seccomp": "unconfined",
+      "ipc": "host",
+      "note": "ROCm and the AMD GPU: python with torch, hipcc, rocminfo, rust"
+    },
+    "android": {
+      "image": "localhost:5000/aicli/pod-android:latest",
+      "programs": ["java", "javac", "gradle", "sdkmanager"],
+      "note": "Android SDK and Gradle, for Android projects"
     }
   },
   "max_pods": 4,
