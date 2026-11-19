@@ -74,6 +74,9 @@ my $local_view = ui::_sessions_data(undef);
 is_deeply([sort map {$_->{name}} @{$local_view->{list}}], [sort ($acme_session, $bob_session)], "the local operator's list: all");
 is_deeply($local_view->{projects}, ['', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/alpha', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/beta'], "and all the projects, the root first");
 
+is(ui::_master_state(undef)->{project}, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/beta", "the local operator's state names the project of the session");
+is(ui::_master_state('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')->{project}, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/beta", "bob's state names its project");
+is(ui::_master_state('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')->{project}, '', "acme's state names no project of bob's");
 my $bob_view = ui::_sessions_data('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
 is($bob_view->{current}, $bob_session, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb is told the active session, which is his");
 

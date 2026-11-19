@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>aicli</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon.ico" sizes="any">
 <style>
   /*theme.css*/
 
@@ -636,7 +638,8 @@
 
   function setState(s) {
     setCurrent(s.model);
-    status.textContent = s.session ? "session " + s.session : "";
+    // the session, with its project in front: account/project/session (the root has no account)
+    status.textContent = s.session ? "session " + (s.project ? s.project + "/" : "") + s.session : "";
     setVoice(s.voice);
   }
 

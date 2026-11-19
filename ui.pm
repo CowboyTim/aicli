@@ -345,12 +345,13 @@ sub _master_state {
     my ($acct) = @_;
     # another account's session is not named to this one
     if (!_visible($acct, _active_rel())) {
-        return {session => '', model => '', busy => \0, queued => 0, voice => $voice // 'unknown'};
+        return {session => '', project => '', model => '', busy => \0, queued => 0, voice => $voice // 'unknown'};
     }
     my $name = $active // '';
     my $w = $worker{$name};
     return {
         session => $name,
+        project => (length($name) ? (ai::session_project($name) // '') : ''), # account/project, for the page's line
         model   => $model_of{$name} // '',
         busy    => ($w && $w->{busy}) ? \1 : \0,
         queued  => $w ? $w->{pending} : 0,
@@ -1118,6 +1119,15 @@ sub _dispatch {
     $q //= '';
     $cn->{req} = "$m $p";
 
+    # the icon (behind nginx it is served there, public; this is the local interface's copy)
+    if($m eq 'GET' and ($p eq '/favicon.ico' or $p eq '/favicon.svg')){
+        my $file = File::Basename::dirname($html_file)."/$p";
+        open(my $ifh, '<:raw', $file) or return _respond($cn, 404, 'text/plain', "no icon\n");
+        local $/;
+        my $bytes = <$ifh>;
+        close($ifh);
+        return _respond($cn, 200, $p =~ /\.svg\z/ ? 'image/svg+xml' : 'image/x-icon', $bytes);
+    }
     if($p eq '/' and $m eq 'GET'){
         my ($given) = $q =~ m/(?:^|&)token=([0-9a-f]+)/;
         if(defined $given and $given eq $token){

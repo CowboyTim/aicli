@@ -278,6 +278,9 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   their prompts name the old path, and a conversation's start is not rewritten), `/project/delete`
   (its sessions and files only with `force`, which the page asks for; never the page's own project,
   never a busy one). `_delete_session` keeps the replacement session in the same project.
+  The icon: `ai/ui/favicon.svg` is the drawing (plain shapes, made for aicli: no emoji artwork, which
+  belongs to its makers), `ai/ui/favicon.ico` is the same at 16, 32, 48, 64 and 256 pixels (rendered with
+  rsvg-convert, packed with PIL). nginx serves both publicly; the local interface serves them too.
   `/agent/list` and `/agent/revoke` are the page's (through the broker's `agents`, `agent_revoke`
   socket operations). A name or a token of the config and the state can not be the same. A kind with `tags` in
   `broker.json` runs on an agent with all of them: its `exec` waits for the answer (through the
@@ -663,6 +666,7 @@ Other APIs are reached through an OpenAI compatible gateway, such as LiteLLM or 
 | `t/128_agent_routes.t` | the web interface's agent routes with a stand-in broker: a token for the login's user (no login: refused, nothing asked), the list, a revocation (a name needed), a refusal of the broker (502 with its reason) |
 | `t/127_enroll_e2e.t` | the enrollment end to end: a broker with its state file, the user's token and list over the socket, `ai.pl --enroll` (a wrong token refused, the right one keeps agent.json 0600, the token not printed), `ai.pl --agent` with that file and no token on its command line runs a job, a revocation stops it |
 | `t/126_enrollment.t` | the enrollment without sockets: a user's token (only its hash kept, a new one replaces it), agents enrolled with it (own token, hash only), the names and tags checked, the list of a user, revocation (owner only, the token stops), the state file over a restart |
+| `t/133_favicon.t` | the icon of the pages: favicon.ico (16, 32, 48, 64, 256 pixels) and favicon.svg, a strawberry drawn for aicli (not emoji artwork); both pages link it; nginx serves it publicly; the local interface answers it without a login |
 | `t/132_account_id.t` | the account ID of a login in the passwd comment: the fifth subfield, the other subfields kept, made once, read back without the dashes, the UUID's form and version, a login not in the passwd refused |
 | `t/129_page_accounts.t` | the page's accounts: the login's name (none, a bad one, the local operator), what an account sees (its sessions, projects, busy list, the page's state), the events (each to its account, the models to all, a failure of a session to its account), the routes an account may not use (message, switch, delete, rename, pod, a session in another's project) |
 | `t/130_project_admin.t` | the page's projects: created in the login's account and switched to (names checked, a taken name, a login with no account), renamed only without sessions (same account), deleted with its sessions and files only on force, never the page's own project, nothing of another account touched; the local operator's account/project |

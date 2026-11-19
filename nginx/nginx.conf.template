@@ -65,6 +65,15 @@ http {
         location = /theme.css {
             alias /etc/nginx/ui/theme.css;
         }
+        # the icon of the pages (a strawberry, drawn for aicli): public, the login page shows it too
+        location = /favicon.ico {
+            alias /etc/nginx/ui/favicon.ico;
+            add_header Cache-Control "public, max-age=86400";
+        }
+        location = /favicon.svg {
+            alias /etc/nginx/ui/favicon.svg;
+            add_header Cache-Control "public, max-age=86400";
+        }
         location = /auth/login {
             limit_req zone=login burst=5 nodelay;
             set $auth http://auth:9000;

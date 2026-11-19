@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A strawberry, drawn for aicli from plain shapes: no emoji artwork (those belong to their makers). -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- the stem -->
+  <path d="M32 17 Q 34 9 40 4" fill="none" stroke="#2f7d32" stroke-width="3" stroke-linecap="round"/>
+  <!-- the body -->
+  <path d="M32 61 C 15 48 6 36 7 25 C 8 14 19 10 32 17 C 45 10 56 14 57 25 C 58 36 49 48 32 61 Z" fill="#d7263d"/>
+  <!-- the highlight -->
+  <ellipse cx="20" cy="27" rx="3" ry="5" fill="#ffffff" fill-opacity="0.45" transform="rotate(-20 20 27)"/>
+  <!-- the seeds -->
+  <g fill="#ffe27a">
+    <ellipse cx="22" cy="24" rx="1.3" ry="2"/>
+    <ellipse cx="32" cy="22" rx="1.3" ry="2"/>
+    <ellipse cx="42" cy="24" rx="1.3" ry="2"/>
+    <ellipse cx="17" cy="35" rx="1.3" ry="2"/>
+    <ellipse cx="27" cy="34" rx="1.3" ry="2"/>
+    <ellipse cx="37" cy="34" rx="1.3" ry="2"/>
+    <ellipse cx="47" cy="35" rx="1.3" ry="2"/>
+    <ellipse cx="22" cy="45" rx="1.3" ry="2"/>
+    <ellipse cx="32" cy="45" rx="1.3" ry="2"/>
+    <ellipse cx="42" cy="45" rx="1.3" ry="2"/>
+    <ellipse cx="32" cy="55" rx="1.2" ry="1.8"/>
+  </g>
+  <!-- the leaves (the calyx) -->
+  <path d="M32 19 L23 13 L26 20 L14 18 L25 25 L32 22 L39 25 L50 18 L38 20 L41 13 Z" fill="#2f9e44" stroke="#2f7d32" stroke-width="1" stroke-linejoin="round"/>
+</svg>
