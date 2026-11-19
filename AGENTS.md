@@ -280,7 +280,8 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   (pushed to the registry, pulled by the broker through Podman). `broker.json` has the kinds, their
   programs and devices; `run.sh` and `entrypoint.sh` are the docker-run side (serial, USB).
 - **The registry**: the pod images are pushed to and pulled from `registry.aardbeiplantje.link`
-  (`AICLI_POD_REGISTRY`, outside this stack). `auth.pl` `registry_token_answer` implements the Docker
+  (`AICLI_POD_REGISTRY`, outside this stack). With `registries` in `broker.json` the images must come from a listed registry, and the login
+  (two variable names there, the values in the broker environment) goes only to that registry. `auth.pl` `registry_token_answer` implements the Docker
   token protocol (`/auth/registry/token`: Basic credentials or none; anonymous gets pull for `aicli/`,
   the role `aicli-registry` push too), for a registry that is set up to ask this service. The public
   nginx refuses `/v2/` and that route.

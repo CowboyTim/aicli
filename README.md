@@ -582,6 +582,15 @@ refused. A call opens its pod when it is closed (the cap still applies). `max_po
 (4 by default) limits the open pods of all kinds, `idle_minutes` (30) closes a pod that
 has not been used for that long, checked once a minute.
 
+### Which images the broker pulls
+
+`broker.json` has two lists. `pods` names each kind and its image; with `registries` in
+the config, every image must come from one of the listed registries, or the broker refuses to
+start. `registries` names the login of each: the names of two variables (`username_env`,
+`password_env`), never the values. The values are in the broker's environment, from `.env`
+(`AICLI_REGISTRY_USER`, `AICLI_REGISTRY_PASSWORD`). A pull sends the login to its own registry
+only, as `X-Registry-Auth`.
+
 ### Building and pushing the images
 
 The pod images go to the registry `registry.aardbeiplantje.link`, outside this stack. The

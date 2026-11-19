@@ -47,12 +47,14 @@ sub _log {
 
 sub new {
     my ($class, %c) = @_;
+    my $regs = _registries_config(\%c);
     die "broker: host_root (the host path of the projects) is needed\n" unless length($c{host_root} // '');
     my $self = bless {
         root      => $c{root} // '/projects',
         host_root => $c{host_root},
         engine    => $c{engine} // '/run/engine/podman.sock',
-        pods      => _pods_config(\%c),
+        pods      => _pods_config(\%c, $regs),
+        registries => $regs,
         memory    => _bytes($c{memory} // '2g'),
         pids      => $c{pids} // 512,
         userns    => $c{userns} // 'keep-id',
@@ -71,7 +73,7 @@ sub new {
 # the pod kinds of the config: kind => {image, programs, list, note}. Without "pods"
 # the one kind is base, with the first image and the basic programs (older configs).
 sub _pods_config {
-    my ($c) = @_;
+    my ($c, $regs) = @_;
     my %pods;
     if (ref($c->{pods}) eq 'HASH') {
         for my $kind (sort keys %{$c->{pods}}) {
@@ -80,7 +82,7 @@ sub _pods_config {
             die "broker: pod $kind needs an image\n" unless ref($p) eq 'HASH' and length($p->{image} // '');
             my @programs = ref($p->{programs}) eq 'ARRAY' ? @{$p->{programs}} : ();
             die "broker: pod $kind needs its programs\n" unless @programs;
-            $pods{$kind} = {image => _expand_image($kind, $p->{image}), list => [@programs], programs => {map {($_ => 1)} @programs},
+            $pods{$kind} = {image => _checked_image($kind, $p->{image}, $regs), list => [@programs], programs => {map {($_ => 1)} @programs},
                 note => $p->{note} // '', _pod_extras($kind, $p)};
         }
     } elsif (ref($c->{images}) eq 'ARRAY' and @{$c->{images}}) {
@@ -199,10 +201,66 @@ sub _image {
     my ($code) = $self->_engine('GET', '/libpod/images/'._escape($ref).'/json');
     return undef if $code == 200;
     my $tls = $self->{tls_verify} ? 'true' : 'false';
-    my ($c, $body) = $self->_engine('POST', '/libpod/images/pull?reference='._escape($ref)."&tlsVerify=$tls");
+    my ($auth, $why) = $self->_auth_header($ref);
+    return {ok => JSON::XS::false(), error => "the login of the registry of $ref is not set: $why"} if defined $why;
+    my @headers = defined $auth ? (['X-Registry-Auth', $auth]) : ();
+    my ($c, $body) = $self->_engine('POST', '/libpod/images/pull?reference='._escape($ref)."&tlsVerify=$tls", undef, \@headers);
     return $self->_failed("the image $ref could not be pulled", $c, $body)
         unless $c == 200 and ($body // '') !~ m/"error"/;
     return undef;
+}
+
+# the registries of the config: host => {username_env, password_env}. The login is not in
+# the config, only the names of the variables that hold it (the broker's environment).
+sub _registries_config {
+    my ($c) = @_;
+    my $in = ref($c->{registries}) eq 'HASH' ? $c->{registries} : {};
+    my %r;
+    for my $host (sort keys %$in) {
+        die "broker: a registry is a host name, '$host'\n" unless $host =~ m/\A[a-z0-9][a-z0-9.:-]*\z/;
+        my $e = $in->{$host};
+        die "broker: registry $host needs username_env and password_env\n" unless ref($e) eq 'HASH';
+        for my $k (qw(username_env password_env)) {
+            die "broker: registry $host: $k is the name of a variable (capitals)\n"
+                unless defined $e->{$k} and !ref($e->{$k}) and $e->{$k} =~ m/\A[A-Z_][A-Z0-9_]*\z/;
+        }
+        $r{$host} = {username_env => $e->{username_env}, password_env => $e->{password_env}};
+    }
+    return \%r;
+}
+
+# the registry host of an image reference: the first part when it looks like a host, else docker.io
+sub _registry_of {
+    my ($ref) = @_;
+    return 'docker.io' unless $ref =~ m{/};
+    my ($first) = split m{/}, $ref, 2;
+    return ($first =~ m{[.:]} or $first eq 'localhost') ? $first : 'docker.io';
+}
+
+# an image of the config, with its ${NAME}s from the environment; when the config lists
+# registries, the image must be from one of them
+sub _checked_image {
+    my ($kind, $ref, $regs) = @_;
+    my $image = _expand_image($kind, $ref);
+    if (ref($regs) eq 'HASH' and %$regs) {
+        my $reg = _registry_of($image);
+        die "broker: pod $kind: the image $image is from $reg, which is not a registry of the config\n"
+            unless $regs->{$reg};
+    }
+    return $image;
+}
+
+# the login for the registry of an image, as the engine takes it (X-Registry-Auth, base64 of
+# the JSON). Sent to that registry only. (undef, undef): no login for it; (undef, why): its
+# variables are not set
+sub _auth_header {
+    my ($self, $ref) = @_;
+    my $reg = _registry_of($ref);
+    my $r = $self->{registries}{$reg} or return (undef, undef);
+    my ($user, $pass) = map {$ENV{$r->{$_}}} qw(username_env password_env);
+    return (undef, "$r->{username_env} and $r->{password_env} (for $reg)")
+        unless defined $user and defined $pass;
+    return (MIME::Base64::encode_base64($JSON->encode({username => $user, password => $pass, serveraddress => $reg}), ''), undef);
 }
 
 # an image reference of the config, with ${NAME} taken from the environment (the registry of the
@@ -512,13 +570,14 @@ sub _container_state {
 
 # One request to the engine, HTTP/1.1 over its Unix socket. Returns (code, body).
 sub _engine {
-    my ($self, $method, $path, $data) = @_;
+    my ($self, $method, $path, $data, $headers) = @_;
     # Podman serves the libpod API under a version; the unversioned paths answer 404
     $path = "/v4.0.0$path" if $path =~ m{\A/libpod/};
     my $sock = IO::Socket::UNIX->new(Peer => $self->{engine}, Type => Socket::SOCK_STREAM())
         or return (503, "the engine is not reachable: $!");
     my $json = defined $data ? $JSON->encode($data) : '';
-    print {$sock} "$method $path HTTP/1.1\r\nHost: engine\r\nContent-Type: application/json\r\n"
+    my $extra = join('', map {"$_->[0]: $_->[1]\r\n"} @{$headers // []}); # e.g. X-Registry-Auth, never logged
+    print {$sock} "$method $path HTTP/1.1\r\nHost: engine\r\nContent-Type: application/json\r\n$extra"
         ."Content-Length: ".length($json)."\r\nConnection: close\r\n\r\n$json";
     my $raw = do { local $/; <$sock> } // '';
     close($sock);
