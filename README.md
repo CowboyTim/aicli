@@ -584,34 +584,25 @@ has not been used for that long, checked once a minute.
 
 ### Building and pushing the images
 
-The registry runs in the stack (`docker-compose.yaml`, `registry` behind `nginx-local`):
-pushes come from the LAN, pulls are internal. The name is the stack's public name and
-port 5443 (`PUBLIC_DOMAIN`, `REGISTRY_PORT`), the same certificate as the site.
+The pod images go to the registry `registry.aardbeiplantje.link`, outside this stack. The
+broker pulls from it, and it is named by `AICLI_POD_REGISTRY` (in `.env`, default
+`registry.aardbeiplantje.link/aicli`).
 
 ```
 cd pods
 docker buildx bake                    # the five images, into the local Docker image store
-docker login purhie.aardbeiplantje.link:5443     # an account in the role aicli-registry
-for p in bash node arduino rocm android; do docker push purhie.aardbeiplantje.link:5443/aicli/pod-$p:latest; done
+docker login registry.aardbeiplantje.link
+for p in bash node arduino rocm android; do docker push registry.aardbeiplantje.link/aicli/pod-$p:latest; done
 ```
 
-Use the account's password, which is its system password; `docker compose exec auth perl /usr/local/lib/aicli/auth.pl role add NAME aicli-registry` gives an account the push right. The bake file tags each image twice:
-`aicli-pod:<kind>` for local use (`run.sh`) and `<REGISTRY>/pod-<kind>:latest`, where
-REGISTRY is `$PUBLIC_DOMAIN:5443/aicli` by default.
+The bake file tags each image twice: `aicli-pod:<kind>` for local use (`run.sh`) and
+`<REGISTRY>/pod-<kind>:latest`, where REGISTRY defaults to `registry.aardbeiplantje.link/aicli`
+(override it in the environment). The broker uses Podman's image store, which the Docker
+daemon does not share, so the pull from the registry is what makes an image visible to it.
 
-The host's broker pulls from the same name. The name must resolve to the registry's
-address on the host: add `127.0.0.1 purhie.aardbeiplantje.link` to the host's
-`/etc/hosts` (with `REGISTRY_LAN_ADDR` at its default, `127.0.0.1`). A LAN machine that
-pushes resolves the name to the host's LAN address (its hosts file or the LAN DNS), and
-the host's `REGISTRY_LAN_ADDR` is set to that address, so the registry is published there.
-Nothing is published to the internet: the public nginx answers `/v2/` and the token route
-with 404.
-
-The token protocol: a push or a pull asks `/auth/registry/token` (Basic credentials, or
-none). Anonymous gets pull for the `aicli/` repositories, the role `aicli-registry` gets
-push as well. The token is signed with the auth service's key, and the registry checks it
-with a certificate of that key's public half (`aicli-registry-auth`, made at the auth
-service's start).
+The token route in `auth.pl` (`/auth/registry/token`) implements the Docker registry's
+token protocol with this stack's accounts. It is not used by the registry above unless that
+registry is set up to ask it; the public nginx refuses the route and `/v2/`.
 
 ### Devices and groups
 

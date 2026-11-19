@@ -21,9 +21,9 @@ variable "IMAGE_REPO" {
 }
 
 variable "REGISTRY" {
-  # the registry the broker pulls from and pushes go to: the stack's public name and the
-  # registry port (nginx-local, see docker-compose.yaml). Set PUBLIC_DOMAIN in the environment.
-  default = "${getenv("PUBLIC_DOMAIN")}:5443/aicli"
+  # the registry the pod images are pushed to and pulled from (an external registry, set with
+  # REGISTRY in the environment; the broker takes AICLI_POD_REGISTRY from its compose settings).
+  default = "registry.aardbeiplantje.link/aicli"
 }
 
 variable "ROCM_IMAGE" {

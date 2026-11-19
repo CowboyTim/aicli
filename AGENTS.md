@@ -279,15 +279,11 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   `node.Dockerfile`; `docker-bake.hcl`, run from `pods/`): plain dev images, no agent, no Claude Code. Each is tagged `<REGISTRY>/pod-<kind>:latest` for the broker
   (pushed to the registry, pulled by the broker through Podman). `broker.json` has the kinds, their
   programs and devices; `run.sh` and `entrypoint.sh` are the docker-run side (serial, USB).
-- **The registry** (compose services `registry` and `nginx-local`, `nginx/registry.conf.template`,
-  `auth.pl` `registry_token_answer`): the images of the pods. `registry:2` is on `aicli-net`
-  only, with no port. `nginx-local` serves it on the LAN address (`REGISTRY_LAN_ADDR`, loopback by
-  default) at `PUBLIC_DOMAIN:REGISTRY_PORT` (5443), with the certificate of the domain. The
-  public `nginx` refuses `/v2/` and the token route. Auth is the docker token protocol:
-  `/auth/registry/token` takes Basic credentials (PAM) or none; anonymous gets pull for
-  `aicli/`, the role `aicli-registry` gets push too. Tokens are RS256 with the auth key, five
-  minutes, and the registry checks them with `token.crt` (the certificate of the key, made by
-  auth at start, in its own volume `aicli-registry-auth`).
+- **The registry**: the pod images are pushed to and pulled from `registry.aardbeiplantje.link`
+  (`AICLI_POD_REGISTRY`, outside this stack). `auth.pl` `registry_token_answer` implements the Docker
+  token protocol (`/auth/registry/token`: Basic credentials or none; anonymous gets pull for `aicli/`,
+  the role `aicli-registry` push too), for a registry that is set up to ask this service. The public
+  nginx refuses `/v2/` and that route.
 - **The broker's `exec`** (`broker.pl`, `_exec`, `_capture`): only bash, perl and grep,
   in the dev container of an open project (`/work`), through `podman-remote` (the
   config's `remote`, `CONTAINER_HOST` in compose) with its output cut at 1 MB and a
@@ -619,7 +615,7 @@ Other APIs are reached through an OpenAI compatible gateway, such as LiteLLM or 
 | `t/89_context_thinking.t` | the reasoning setting, what the request says, the first request through compactions, `/context` |
 | `t/97_live.t` | a real model, only when `AI_LIVE_SERVER` is set (`AI_LIVE_MODEL`, optional `AI_LIVE_SEARXNG`): one answer, a native tool call, the thinking setting, search. Skipped otherwise |
 | `t/100_ui.t` | the web interface: routes, the token, origin check, body limits, the input queue, the event stream on socket pairs; the listen addresses (IPv4, IPv6, `::`), stop and start on the same port, TLS with a generated certificate (a https request, the Secure cookie), the state of the speech recognizer; then `ai.pl --ui` as a child, a message in and the streamed answer out, Ctrl-C |
-| `t/120_registry.t` | the registry token protocol: the access a scope gets (pull for anyone under aicli/, push for the role, nothing else), anonymous, a login, a wrong password, the token's signature and claims, the certificate of the key, the public nginx refusing the registry, nginx-local, the broker's image names from the environment |
+| `t/120_registry.t` | the registry token protocol: the access a scope gets (pull for anyone under aicli/, push for the role, nothing else), anonymous, a login, a wrong password, the token's signature and claims, the certificate of the key, the public nginx refusing the registry, the broker's image names from the environment |
 | `t/119_pod_devices.t` | a pod kind's devices: the config's rules (privileged, a device outside /dev, a bad usb id, an env name), the device paths that exist at open (globs, usb ids through sysfs), the numbers and owner groups of real character devices (stand-ins behind symlinks), what the container spec gets |
 | `t/118_pod_control.t` | the pod kinds (base, node): the projects and their pods, the cap across kinds, an idle pod closed and one found open after a restart kept, `pods`, `pod_open` (kind, already open, refusals), `pod_close` (the session's base pod noted), a closed base pod opened by a bash call, `pod_run` (node in its pod, a program of the base pod refused), through a real broker process (fake engine with containers and images) |
 | `t/109_pod_tools.t` | the tools of a project in its pod: bash, perl and grep through a real broker (fake engine, stand-in client): the program and its argv, the exit code, the pod's paths, a workspace that is no project or has no open pod refused, a path outside the project refused, AI_POD_TOOLS=0 runs them here |

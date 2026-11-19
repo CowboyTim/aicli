@@ -1,7 +1,7 @@
 #!/usr/bin/perl
 # the registry's token protocol in auth.pl (what pull and push get, the credentials, the
 # token's signature and claims), the certificate the registry checks tokens with, and the
-# config texts: the registry only on the LAN (nginx-local), the public nginx refusing it.
+# config texts: the public nginx refusing the registry, the broker's image names from the environment.
 use strict; use warnings;
 no warnings "once";
 
@@ -128,26 +128,14 @@ SKIP: {
 
 sub slurp { my ($f) = @_; open(my $fh, '<', "$FindBin::Bin/../$f") or die "$f: $!"; local $/; return <$fh> }
 
+my $compose = slurp('docker-compose.yaml');
+ok($compose !~ m{\n  registry:\n}, "no registry service: the pod images are on the external registry");
+ok($compose !~ m{\n  nginx-local:\n}, "and no LAN nginx for it");
+like($compose, qr{AICLI_POD_REGISTRY: \$\{AICLI_POD_REGISTRY:-registry\.aardbeiplantje\.link/aicli\}}, "the broker takes the registry name, with its default");
+
 my $public = slurp('nginx/nginx.conf.template');
 like($public, qr{location = /auth/registry/token \{\s*return 404;}, "the public nginx refuses the token route");
 like($public, qr{location /v2/ \{\s*return 404;}, "and the registry's /v2/");
-unlike($public, qr{listen 80}, "no plain port here");
-
-my $lan = slurp('nginx/registry.conf.template');
-like($lan, qr{location /v2/ \{.*proxy_pass \$registry_upstream;}s, "nginx-local passes /v2/ to the registry");
-like($lan, qr{location = /auth/registry/token \{.*proxy_pass \$auth_upstream;}s, "and the token route to the auth service");
-like($lan, qr{client_max_body_size 0;}, "no size limit for image layers");
-like($lan, qr{ssl_certificate /etc/nginx/certs/live/\$\{PUBLIC_DOMAIN\}/fullchain\.pem}, "TLS with the certificate of the public name");
-unlike($lan, qr{location /searxng|location /auth/login|login\.html}, "nothing else is served on the LAN side");
-
-my $compose = slurp('docker-compose.yaml');
-my ($registry_svc) = $compose =~ m/\n  registry:\n(.*?)\n  \S/s;
-ok(defined $registry_svc, "the registry service is in the compose file");
-unlike($registry_svc // '', qr/^\s+ports:/m, "the registry publishes no port");
-like($registry_svc // '', qr{REGISTRY_AUTH_TOKEN_ROOTCERTBUNDLE: /etc/registry-auth/token\.crt}, "it checks the tokens with the certificate");
-my ($lan_svc) = $compose =~ m/\n  nginx-local:\n(.*?)\n  \S/s;
-like($lan_svc // '', qr{"\$\{REGISTRY_LAN_ADDR:-127\.0\.0\.1\}:\$\{REGISTRY_PORT:-5443\}:443"}, "nginx-local is published on the LAN address, loopback by default");
-like($compose, qr{AICLI_POD_REGISTRY: \$\{PUBLIC_DOMAIN:\?}, "the broker gets the registry name");
 
 my $broker = slurp('broker.json');
 like($broker, qr{"image": "\$\{AICLI_POD_REGISTRY\}/pod-bash:latest"}, "the pod images are named by the registry");
