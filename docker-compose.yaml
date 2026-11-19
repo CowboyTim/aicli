@@ -31,7 +31,8 @@ services:
       AI_BROKER_SOCKET: /run/aicli-broker/broker.sock
       AI_BROKER_ENGINE: /run/engine/podman.sock
       # the registry the pod images are pulled from (broker.json: ${AICLI_POD_REGISTRY}/pod-<kind>)
-      AICLI_POD_REGISTRY: ${AICLI_POD_REGISTRY:-registry.aardbeiplantje.link/aicli}
+      AICLI_REGISTRY_HOST: ${AICLI_REGISTRY_HOST:?set AICLI_REGISTRY_HOST (the host of the pod registry, in .env)}
+      AICLI_POD_REGISTRY: ${AICLI_POD_REGISTRY:-${AICLI_REGISTRY_HOST}/aicli}
       # the login of the registry the pods come from (broker.json "registries"; the password is never in a file)
       AICLI_REGISTRY_USER: ${AICLI_REGISTRY_USER:?set AICLI_REGISTRY_USER (the account of the pod registry)}
       AICLI_REGISTRY_PASSWORD: ${AICLI_REGISTRY_PASSWORD:?set AICLI_REGISTRY_PASSWORD (in .env)}

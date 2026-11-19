@@ -216,9 +216,12 @@ sub _registries_config {
     my ($c) = @_;
     my $in = ref($c->{registries}) eq 'HASH' ? $c->{registries} : {};
     my %r;
-    for my $host (sort keys %$in) {
+    for my $key (sort keys %$in) {
+        # the host may name a variable (${AICLI_REGISTRY_HOST}), as the images do
+        my $host = $key;
+        $host =~ s{\$\{(\w+)\}}{ defined $ENV{$1} ? $ENV{$1} : die "broker: the variable $1 of registry $key is not set\n" }ge;
         die "broker: a registry is a host name, '$host'\n" unless $host =~ m/\A[a-z0-9][a-z0-9.:-]*\z/;
-        my $e = $in->{$host};
+        my $e = $in->{$key};
         die "broker: registry $host needs username_env and password_env\n" unless ref($e) eq 'HASH';
         for my $k (qw(username_env password_env)) {
             die "broker: registry $host: $k is the name of a variable (capitals)\n"

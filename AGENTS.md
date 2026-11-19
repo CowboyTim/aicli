@@ -279,7 +279,7 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   `node.Dockerfile`; `docker-bake.hcl`, run from `pods/`): plain dev images, no agent, no Claude Code. Each is tagged `<REGISTRY>/pod-<kind>:latest` for the broker
   (pushed to the registry, pulled by the broker through Podman). `broker.json` has the kinds, their
   programs and devices; `run.sh` and `entrypoint.sh` are the docker-run side (serial, USB).
-- **The registry**: the pod images are pushed to and pulled from `registry.aardbeiplantje.link`
+- **The registry**: the pod images are pushed to and pulled from `$AICLI_REGISTRY_HOST`
   (`AICLI_POD_REGISTRY`), outside this stack. Nothing of it runs here or is proxied by nginx. With
   `registries` in `broker.json` the images must come from a listed registry, and the login (two
   variable names there, the values in the broker environment) goes only to that registry.

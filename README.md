@@ -593,19 +593,19 @@ only, as `X-Registry-Auth`.
 
 ### Building and pushing the images
 
-The pod images go to the registry `registry.aardbeiplantje.link`, outside this stack. The
+The pod images go to the registry `$AICLI_REGISTRY_HOST`, outside this stack. The
 broker pulls from it, and it is named by `AICLI_POD_REGISTRY` (in `.env`, default
-`registry.aardbeiplantje.link/aicli`).
+`$AICLI_REGISTRY_HOST/aicli`).
 
 ```
 cd pods
 docker buildx bake                    # the five images, into the local Docker image store
-docker login registry.aardbeiplantje.link
-for p in bash node arduino rocm android; do docker push registry.aardbeiplantje.link/aicli/pod-$p:latest; done
+docker login $AICLI_REGISTRY_HOST
+for p in bash node arduino rocm android; do docker push $AICLI_REGISTRY_HOST/aicli/pod-$p:latest; done
 ```
 
 The bake file tags each image twice: `aicli-pod:<kind>` for local use (`run.sh`) and
-`<REGISTRY>/pod-<kind>:latest`, where REGISTRY defaults to `registry.aardbeiplantje.link/aicli`
+`<REGISTRY>/pod-<kind>:latest`, where REGISTRY defaults to `$AICLI_REGISTRY_HOST/aicli`
 (override it in the environment). The broker uses Podman's image store, which the Docker
 daemon does not share, so the pull from the registry is what makes an image visible to it.
 

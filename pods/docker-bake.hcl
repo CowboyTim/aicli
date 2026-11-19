@@ -23,7 +23,7 @@ variable "IMAGE_REPO" {
 variable "REGISTRY" {
   # the registry the pod images are pushed to and pulled from (an external registry, set with
   # REGISTRY in the environment; the broker takes AICLI_POD_REGISTRY from its compose settings).
-  default = "registry.aardbeiplantje.link/aicli"
+  default = "${getenv("AICLI_REGISTRY_HOST")}/aicli"
 }
 
 variable "ROCM_IMAGE" {

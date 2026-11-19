@@ -30,6 +30,7 @@ sub value { my ($f, $k) = @_; my ($v) = slurp($f) =~ m/^\Q$k\E=(.*)$/m; return $
 my %in = (
     PUBLIC_DOMAIN => 'ai.example.org', CERTBOT_EMAIL => 'me@example.org',
     AI_PROJECTS => '/home/me/projects',
+    IPV6_PREFIX => '2001:db8:1:2:c::8', MODEL_IPV6 => '2001:db8:1:2::20',
 );
 
 is(run_setup(%in), 0, "the first run with what it needs");
@@ -38,10 +39,10 @@ my $agent_f = "$dir/.agent.env";
 is(value($env_f, 'PUBLIC_DOMAIN'), 'ai.example.org', "the domain is written");
 like(value($env_f, 'SEARXNG_SECRET'), qr/\A[0-9a-f]{64}\z/, "a secret is made");
 like(value($env_f, 'SEARXNG_API_TOKEN'), qr/\A[0-9a-f]{64}\z/, "and the token of searxng");
-is(value($env_f, 'IPV6_SUBNET'), '2a02:a03f:8789:e700:c::8:0/120', "the subnet of the default prefix");
-is(value($env_f, 'IPV6_GATEWAY'), '2a02:a03f:8789:e700:c::8:1', "and its gateway");
+is(value($env_f, 'IPV6_SUBNET'), '2001:db8:1:2:c::8:0/120', "the subnet of the default prefix");
+is(value($env_f, 'IPV6_GATEWAY'), '2001:db8:1:2:c::8:1', "and its gateway");
 ok(value($env_f, 'BROKER_UID') =~ m/^\d+$/, "the id of the user");
-is(value($agent_f, 'AI_LOCAL_SERVER'), 'http://[2a02:a03f:8789:e700::20]:8000/rocm/v1', "agent: the model server");
+is(value($agent_f, 'AI_LOCAL_SERVER'), 'http://[2001:db8:1:2::20]:8000/rocm/v1', "agent: the model server");
 ok(length value($agent_f, 'AI_MODEL'), "agent: a model");
 
 my $secret = value($env_f, 'SEARXNG_SECRET');

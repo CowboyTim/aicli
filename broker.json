@@ -3,7 +3,7 @@
   "engine": "/run/engine/podman.sock",
   "socket": "/run/aicli-broker/broker.sock",
   "registries": {
-    "registry.aardbeiplantje.link": {"username_env": "AICLI_REGISTRY_USER", "password_env": "AICLI_REGISTRY_PASSWORD"}
+    "${AICLI_REGISTRY_HOST}": {"username_env": "AICLI_REGISTRY_USER", "password_env": "AICLI_REGISTRY_PASSWORD"}
   },
   "pods": {
     "base": {

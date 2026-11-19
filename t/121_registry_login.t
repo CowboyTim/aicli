@@ -99,4 +99,16 @@ my @calls;
     is(scalar(@{ $pull2->{headers} // [] }), 0, "a pull from a registry without a login sends no header");
 }
 
+{
+    local $ENV{AICLI_REGISTRY_HOST} = "reg.example";
+    my $regs = broker::_registries_config({registries => {'${AICLI_REGISTRY_HOST}' => {username_env => 'A_USER', password_env => 'A_PASS'}}});
+    is_deeply([keys %$regs], ['reg.example'], "a registry host can name a variable of the environment");
+}
+{
+    local $ENV{AICLI_REGISTRY_HOST};
+    delete $ENV{AICLI_REGISTRY_HOST};
+    my $ok = eval { broker::_registries_config({registries => {'${AICLI_REGISTRY_HOST}' => {username_env => 'A_USER', password_env => 'A_PASS'}}}); 1 };
+    ok(!$ok, "and a variable that is not set is refused");
+}
+
 done_testing();

@@ -62,15 +62,19 @@ need() {
     printf '%s' "$v"
 }
 
-# the IPv6 prefix of the containers (the /120 and its gateway)
-ipv6_prefix=${IPV6_PREFIX:-2a02:a03f:8789:e700:c::8}
-
 v=$(need PUBLIC_DOMAIN)
 set_key "$env_f" PUBLIC_DOMAIN "$v"
 v=$(need CERTBOT_EMAIL)
 set_key "$env_f" CERTBOT_EMAIL "$v"
 v=$(need AI_PROJECTS)
 set_key "$env_f" AI_PROJECTS "$v"
+# the IPv6 prefix of the containers (the /120 and its gateway) and the address of the model server:
+# from the environment or .env (kept from the first run on)
+v=$(need IPV6_PREFIX)
+set_key "$env_f" IPV6_PREFIX "$v"
+ipv6_prefix=$v
+v=$(need MODEL_IPV6)
+set_key "$env_f" MODEL_IPV6 "$v"
 set_key "$env_f" IPV6_SUBNET "$(pick "$env_f" IPV6_SUBNET "$ipv6_prefix:0/120")"
 set_key "$env_f" IPV6_GATEWAY "$(pick "$env_f" IPV6_GATEWAY "$ipv6_prefix:1")"
 set_key "$env_f" PODMAN_SOCKET "/run/user/$(id -u)/podman/podman.sock"
@@ -83,8 +87,8 @@ for k in SEARXNG_SECRET SEARXNG_API_TOKEN AICLI_GATE_SECRET; do
     set_key "$env_f" "$k" "$v"
 done
 
-set_key "$agent_f" AI_LOCAL_SERVER "$(pick "$agent_f" AI_LOCAL_SERVER "http://[2a02:a03f:8789:e700::20]:8000/rocm/v1")"
-set_key "$agent_f" AI_ASR_URL "$(pick "$agent_f" AI_ASR_URL "http://[2a02:a03f:8789:e700::20]:52625/v1/audio/transcriptions")"
+set_key "$agent_f" AI_LOCAL_SERVER "$(pick "$agent_f" AI_LOCAL_SERVER "http://[$(get "$env_f" MODEL_IPV6)]:8000/rocm/v1")"
+set_key "$agent_f" AI_ASR_URL "$(pick "$agent_f" AI_ASR_URL "http://[$(get "$env_f" MODEL_IPV6)]:52625/v1/audio/transcriptions")"
 set_key "$agent_f" AI_MODEL "$(pick "$agent_f" AI_MODEL "Qwen3.5-4B-ROCMFP4")"
 
 if [ "${AICLI_ENV_ONLY:-0}" = 1 ]; then
