@@ -566,18 +566,14 @@ podman.socket`), and set `AI_PROJECTS`, `PODMAN_SOCKET`, `BROKER_UID`, `BROKER_G
 A pod is a container with a project's files at `/work`, where a few programs run for
 the agent. Each kind of pod is defined in `broker.json` (`pods`): the image (a registry
 reference), the programs it may run, a note the model sees, and the devices it needs.
-The images are plain dev images, built from `pods/` (see `pods/docker-bake.hcl`):
+The pod image is built from `pods/` (see `pods/docker-bake.hcl`):
 
 | kind | image | programs | devices |
 |------|-------|----------|---------|
-| `base` | `pod-bash` (general dev tools) | `bash`, `perl`, `grep` | none; opened by the first basic call |
-| `node` | `pod-node` (`node:22-bookworm-slim`) | `node`, `npm`, `npx` | none |
-| `arduino` | `pod-arduino` (arduino-cli, ESP32 core, usb_logger) | `arduino-cli`, `python3` | `/dev/ttyACM*`, `/dev/ttyUSB*`, and the USB meters by `usb_ids` |
-| `rocm` | `pod-rocm` (ROCm, torch, rust) | `python3`, `hipcc`, `rocminfo`, `rocm-smi`, `cargo` | `/dev/kfd`, `/dev/dri/card*`, `/dev/dri/renderD*`; `seccomp` unconfined, `ipc` host |
-| `android` | `pod-android` (JDK, Android SDK, Gradle) | `java`, `javac`, `gradle`, `sdkmanager` | none |
+| `base` | `pod-base` (general dev tools, Rust, nodejs, go) | `bash`, `perl`, `grep` | none; opened by the first basic call |
 
 A kind is a short lower-case name with no dash. A pod runs only the programs its kind
-lists: `pod_run node "npm test"` runs in the node pod, and `bash` in the node pod is
+lists: `pod_run base "perl -v"` runs in the base pod, and `arduino-cli` in the base pod is
 refused. A call opens its pod when it is closed (the cap still applies). `max_pods`
 (4 by default) limits the open pods of all kinds, `idle_minutes` (30) closes a pod that
 has not been used for that long, checked once a minute.
@@ -600,20 +596,20 @@ broker pulls from it, and it is named by `AICLI_POD_REGISTRY` (in `.env`, defaul
 
 ```
 cd pods
-docker buildx bake                    # the five images, into the local Docker image store
+docker buildx bake                    # the four images, into the local Docker image store
 docker login $AICLI_REGISTRY_HOST
-for p in bash node arduino rocm android; do docker push $AICLI_REGISTRY_HOST/aicli/pod-$p:latest; done
+docker push $AICLI_REGISTRY_HOST/aicli/pod-base:latest
 ```
 
-The bake file tags each image twice: `aicli-pod:<kind>` for local use (`run.sh`) and
+The bake file tags each image twice: `aicli-pod:<target>` for local use (`docker run`) and
 `<REGISTRY>/pod-<kind>:latest`, where REGISTRY defaults to `$AICLI_REGISTRY_HOST/aicli`
 (override it in the environment). The broker uses Podman's image store, which the Docker
 daemon does not share, so the pull from the registry is what makes an image visible to it.
 
 ### Devices and groups
 
-`run.sh` passes devices by name and adds the groups that own them. The broker does the
-same for a kind, at open time, from its config:
+The broker passes a kind's devices by name and adds the groups that own them, at open time,
+from its config:
 
 - `devices`: paths under `/dev`, globs allowed. A path that exists when the pod opens is
   passed (`/dev/ttyACM*`, `/dev/kfd`); one that does not exist is left out, so a board
@@ -622,7 +618,7 @@ same for a kind, at open time, from its config:
   `/dev/bus/usb/<bus>/<dev>` node, so a meter replugged gets found by the next open.
 - `groups`: extra gids. The gids of the devices passed are added by the broker itself.
 - `env`: variables for the container, names in capitals.
-- `seccomp: "unconfined"` and `ipc: "host"`: what the ROCm flavour of `run.sh` uses.
+- `seccomp: "unconfined"` and `ipc: "host"`: for a kind that needs them (none of the pods here).
 
 Never privileged, never a mount of `/dev`, never a cgroup rule: the config refuses
 anything else, and the model cannot name a device.
@@ -631,11 +627,11 @@ What rootless Podman can and cannot do (the broker's Podman runs rootless, with
 `userns: keep-id`):
 
 - Passing an existing device node works: Podman bind-mounts it.
-- Device cgroup rules (`--device-cgroup-rule`, which `run.sh` uses for serial and USB) need
-  cgroup write access, which a rootless user does not have. So serial and USB are passed
+- Device cgroup rules (`--device-cgroup-rule`, which rootful Docker uses for serial and USB)
+  need cgroup write access, which a rootless user does not have. So serial and USB are passed
   node by node, which is what the `devices` and `usb_ids` settings do.
-- The entrypoint's `mknod` of the nodes (run.sh's approach) does not work rootless, and the
-  pods here don't set `SERIAL_NODES` or `USB_METERS`, so the entrypoint does nothing.
+- Creating the device nodes inside the container (`mknod`) does not work rootless either. The
+  nodes must exist on the host, and the pod gets them passed in.
 - Groups: a device owned by `dialout`, `render` or `video` is only usable if that group is
   mapped into the container. With `keep-id` only your own UID and GID are mapped, so the
   owner group of a device is usually not mapped, and the device's `0660` permissions then
@@ -652,6 +648,43 @@ of its `-dev` container shows what was passed.
 
 Host setup: install Podman, enable the user socket (`systemctl --user enable --now
 podman.socket`), and set `AI_PROJECTS`, `PODMAN_SOCKET`, `BROKER_UID`, `BROKER_GID`.
+
+## Remote agents
+
+A remote agent is a machine with devices (a Raspberry Pi with a Zigbee stick, an
+Arduino bench, a GPU box) that runs `ai.pl --agent` and calls the broker for jobs. The
+broker never starts an agent: it has no devices, so the agent is started on its machine,
+with the devices it needs, and it connects back.
+
+```
+ai.pl --agent --broker https://PUBLIC_DOMAIN/agents --name strix --programs arduino-cli,python3 \
+      --work ~/aicli-work --token TOKEN        # or AI_AGENT_TOKEN in the environment
+```
+
+- `--name`: the name the broker knows the agent by (`agents` in `broker.json`).
+- `--programs`: the only programs this agent runs, whatever the broker sends.
+- `--work`: the directory of the projects on the agent (`--work/<project>`). The agent runs
+  the job's program there, with no shell. Nothing is checked out for it yet: the directory
+  must hold the project.
+- `--token`: the agent's own credential (`AI_AGENT_TOKEN`), sent with each request as
+  `Authorization: Bearer`. The broker keeps only its SHA-256 (`token_sha256`).
+- `--pin sha256//BASE64` (optional): the broker's public key must be this one, on top of the
+  normal check of the certificate. A renewal with a new key then needs a new pin.
+
+The broker side is in `broker.json` (`token_sha256` is `sha256sum` of the token):
+
+```json
+"agents": {"strix": {"tags": ["arduino", "gfx1151"], "token_sha256": "..."}},
+"pods": {"arduino": {"tags": ["arduino"], "programs": ["arduino-cli", "python3"], "note": "boards"}}
+```
+
+A kind with `tags` runs on an agent that has all of them. Its `exec` waits for the agent's
+answer; `open` and `close` refuse it. The broker listens for agents on `AI_BROKER_AGENT_LISTEN`
+(host:port) when there are agents. Its requests come through nginx over HTTPS, with the public
+certificate; the token is the agent's whole credential.
+
+Not built yet: the enrollment (a token on the main page, which gives an agent its own token), the
+nginx route for `/agents/`, and the checkout of the project on the agent.
 
 ## The public address (nginx, TLS)
 

@@ -7,5 +7,6 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends perl libjson-xs-perl podman-remote \
  && rm -rf /var/lib/apt/lists/*
 COPY broker.pl /usr/local/lib/aicli/broker.pl
+COPY remote_hub.pm /usr/local/lib/aicli/remote_hub.pm
 ENTRYPOINT ["perl", "/usr/local/lib/aicli/broker.pl"]
 CMD ["serve"]

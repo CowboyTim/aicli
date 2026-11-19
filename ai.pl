@@ -28,7 +28,7 @@ $::DEBUG = $::ORIG_ENV{DEBUG} || 0;
 {
     no warnings 'once';
     require Getopt::Long;
-    my ($help, $man, $continue, $new, $ui, $ui_bind, $tls_cert, $tls_key);
+    my ($help, $man, $continue, $new, $ui, $ui_bind, $tls_cert, $tls_key, $agent, $broker, $agent_name, $programs, $work, $token, $pin);
     my $ok = Getopt::Long::GetOptions(
         'help|h|?'    => \$help,
         'man'         => \$man,
@@ -40,6 +40,13 @@ $::DEBUG = $::ORIG_ENV{DEBUG} || 0;
         'ui-bind=s'  => \$ui_bind,
         'tls-cert=s' => \$tls_cert,
         'tls-key=s'  => \$tls_key,
+        'agent'      => \$agent,
+        'broker=s'   => \$broker,
+        'name=s'     => \$agent_name,
+        'programs=s' => \$programs,
+        'work=s'     => \$work,
+        'token=s'    => \$token,
+        'pin=s'      => \$pin,
     );
     if(defined $ui){
         $::UI = length($ui) ? $ui : 8080;
@@ -68,6 +75,18 @@ $::DEBUG = $::ORIG_ENV{DEBUG} || 0;
         Pod::Usage::pod2usage(-input => $input, -verbose => 1, -exitval => 'NOEXIT',
             -output => ($ok ? \*STDOUT : \*STDERR));
         exit($ok ? 0 : 2);
+    }
+    if($agent){
+        # a remote agent: the jobs of a broker, no chat (see remote_agent.pm)
+        die "--agent is a mode of its own: not with --ui, -p, -c or --new\n"
+            if defined $ui or defined $::PROMPT or $continue or $new;
+        die "--agent needs --broker URL, --name NAME, --programs LIST (what it may run) and its token (--token or AI_AGENT_TOKEN)\n"
+            unless length($broker // '') and length($agent_name // '') and length($programs // '')
+            and length($token // $::ORIG_ENV{AI_AGENT_TOKEN} // '');
+        $::AGENT = {url => $broker, name => $agent_name, programs => [split /,/, $programs], work => $work,
+            token => $token // $::ORIG_ENV{AI_AGENT_TOKEN}, pin => $pin};
+    } elsif(defined $broker or defined $agent_name or defined $programs or defined $work or defined $token){
+        die "--broker, --name, --programs, --work, --token and --pin are for --agent\n";
     }
     die "--new and -c do not go together\n" if $new and $continue;
     die "--new is for the web interface: it needs --ui\n" if $new and !defined $ui;
@@ -136,6 +155,19 @@ require ai;
 
 # the key is not readable through /proc by the tools' processes (see sandbox::not_dumpable)
 sandbox::not_dumpable();
+if($::AGENT){
+    # a remote agent: it asks the broker for jobs and runs them, until ctrl-C or TERM
+    require remote_agent;
+    my $agent = remote_agent->new(url => $::AGENT->{url}, name => $::AGENT->{name},
+        programs => $::AGENT->{programs}, work => $::AGENT->{work} // "$BASE_DIR/work", token => $::AGENT->{token},
+        pin => $::AGENT->{pin});
+    local $SIG{INT}  = sub { $::LOOP = 0 };
+    local $SIG{TERM} = sub { $::LOOP = 0 };
+    $::LOOP = 1;
+    $agent->start();
+    loop::run(sub { !$::LOOP });
+    exit 0;
+}
 ai::chat_setup($BASE_DIR);
 ai::setup_commands();
 if(defined $::UI){
@@ -273,6 +305,18 @@ address works too: C<::1> for the loopback, C<::> for any address (in the URL it
 is in brackets). Any other address than the loopback reaches the chat (its tools
 included) from the network: only with a token that is hard to guess, and with
 the network you trust.
+
+=item B<--agent>
+
+Run as a remote agent, for the jobs of a broker, instead of the chat. The agent
+asks the broker (C<--broker>) for a job, runs its program in its working
+directory (C<--work>, C<$AI_DIR/work> by default, one directory per project) and
+posts the output and the exit code. It needs C<--name> (the name the broker knows
+it by) and C<--programs> (a comma list: the only programs it runs, whatever the
+broker sends). C<--token> (or C<AI_AGENT_TOKEN>) is the agent's credential, from
+its enrollment; it is sent with every request, over HTTPS. C<--pin> (optional) is
+C<sha256//BASE64> of the broker's public key: the request fails for another key, on top
+of the normal check of the certificate. No model and no key: only the broker is talked to.
 
 =back
 

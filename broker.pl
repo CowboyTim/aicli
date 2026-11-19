@@ -4,13 +4,15 @@
 # socket of the host mounted; the agent talks to it over a Unix socket in a volume
 # that only the agent and the broker share. A request is one JSON line, the answer
 # one JSON line:
-#   {"op":"open","project":"alpha","pod":"node"}   start the pod of a kind (base by default)
-#   {"op":"close","project":"alpha","pod":"node"}  stop and remove it
+#   {"op":"open","project":"alpha","pod":"arduino"}   start the pod of a kind (base by default)
+#   {"op":"close","project":"alpha","pod":"arduino"}  stop and remove it
 #   {"op":"list"}                                  the pods the engine has
 #   {"op":"projects"}                              the projects, their pods, the kinds
 #   {"op":"exec","project":"alpha","pod":"base","argv":["grep","-rn","x","."]}
 # A pod kind is a name of the config ("pods": image, programs, note): base for the
-# basic tools (bash, perl, grep), and others for a toolchain (node: node, npm, npx).
+# basic tools (bash, perl, grep), and others for a toolchain. A kind with "tags" runs on an
+# agent that has them (remote_hub.pm): the agent calls in, the broker never starts it (it has
+# no devices). Its exec waits for the agent's answer; open and close refuse it.
 # An exec runs only a program its kind lists, and opens the pod first when it is
 # closed. Nothing else is done. What a request names reaches the engine only as the
 # project's name (a directory directly under the root), its pod kind (of the config),
@@ -24,11 +26,15 @@
 
 use strict; use warnings;
 use IO::Socket::UNIX ();
+use IO::Socket::IP ();
 use IO::Select ();
 use Socket ();
 use JSON::XS ();
 use POSIX ();
 use MIME::Base64 ();
+use FindBin ();
+use lib $FindBin::Bin;
+use remote_hub ();
 
 package broker;
 
@@ -66,6 +72,8 @@ sub new {
         dev_root  => $c{dev_root} // '/dev',                         # where the host's devices are (tests)
         sys_root  => $c{sys_root} // '/sys',                         # where the host's usb devices are (tests)
         last      => {},                                             # "kind/project" => time of its last open or exec
+        hub       => remote_hub->new(agents => $c{agents}),
+        agent_listen => $c{agent_listen},                            # host:port of the agents (nginx passes them on)
     }, $class;
     return $self;
 }
@@ -79,11 +87,16 @@ sub _pods_config {
         for my $kind (sort keys %{$c->{pods}}) {
             die "broker: a pod kind is a short lower-case name, not '$kind'\n" unless $kind =~ m/\A[a-z][a-z0-9]{0,15}\z/;
             my $p = $c->{pods}{$kind};
-            die "broker: pod $kind needs an image\n" unless ref($p) eq 'HASH' and length($p->{image} // '');
+            die "broker: pod $kind needs an image or tags (an agent)\n"
+                unless ref($p) eq 'HASH' and (length($p->{image} // '') or ref($p->{tags}) eq 'ARRAY');
             my @programs = ref($p->{programs}) eq 'ARRAY' ? @{$p->{programs}} : ();
             die "broker: pod $kind needs its programs\n" unless @programs;
-            $pods{$kind} = {image => _checked_image($kind, $p->{image}, $regs), list => [@programs], programs => {map {($_ => 1)} @programs},
-                note => $p->{note} // '', _pod_extras($kind, $p)};
+            my %x = _pod_extras($kind, $p);
+            my $image = length($p->{image} // '') ? _checked_image($kind, $p->{image}, $regs) : undef;
+            die "broker: pod $kind runs on an agent (tags): it has no image, and no devices here\n"
+                if $x{tags} and (defined $image or @{$x{devices}} or @{$x{usb_ids}});
+            $pods{$kind} = {image => $image, list => [@programs], programs => {map {($_ => 1)} @programs},
+                note => $p->{note} // '', %x};
         }
     } elsif (ref($c->{images}) eq 'ARRAY' and @{$c->{images}}) {
         my @basic = qw(bash perl grep);
@@ -114,9 +127,11 @@ sub _escape {
 }
 
 # the answer to one request (a JSON text), as a hash; every request is logged
+# $send (optional) gets the answer when it is not there yet (a job on an agent)
 sub handle {
-    my ($self, $line) = @_;
-    my $res = $self->_dispatch($line);
+    my ($self, $line, $send) = @_;
+    my $res = $self->_dispatch($line, $send);
+    return undef unless defined $res; # answered later, through $send
     my $req = eval {$JSON->decode($line)};
     my $what = ref($req) eq 'HASH'
         ? sprintf("op=%s project=%s", $req->{op} // '-', substr($req->{project} // '-', 0, 80))
@@ -126,7 +141,7 @@ sub handle {
 }
 
 sub _dispatch {
-    my ($self, $line) = @_;
+    my ($self, $line, $send) = @_;
     my $req = eval {$JSON->decode($line)};
     return {ok => JSON::XS::false(), error => "a JSON object is wanted"} unless ref($req) eq 'HASH';
     my $op = $req->{op} // '';
@@ -134,7 +149,7 @@ sub _dispatch {
     return $self->_close($req) if $op eq 'close';
     return $self->_list() if $op eq 'list';
     return $self->_projects() if $op eq 'projects';
-    return $self->_exec($req) if $op eq 'exec';
+    return $self->_exec($req, $send) if $op eq 'exec';
     return {ok => JSON::XS::false(), error => "unknown request '$op' (open, close, list or projects)"};
 }
 
@@ -158,6 +173,8 @@ sub _open {
     my $kind = $req->{pod} // 'base';
     my $spec = $self->{pods}{$kind}
         or return {ok => JSON::XS::false(), error => "no such pod: '$kind' (pods lists them)"};
+    return {ok => JSON::XS::false(), error => "the $kind kind runs on an agent (tags: @{$spec->{tags}}): there is no pod to open"}
+        if $spec->{tags};
     my $key = "$kind/$name";
     my $image = $spec->{image};
     my $pod = _pod_name($kind, $name);
@@ -281,14 +298,22 @@ sub _expand_image {
 # passed when they exist at open), usb_ids (vid:pid, resolved to /dev/bus/usb nodes at
 # open), groups (numeric gids), env (names in capitals), seccomp ('unconfined') and ipc
 # ('host'). Anything else in a kind is refused: privileged, mounts, sockets, networks.
-my %POD_KEYS = map {($_ => 1)} qw(image programs note devices usb_ids groups env seccomp ipc);
+my %POD_KEYS = map {($_ => 1)} qw(image programs note tags devices usb_ids groups env seccomp ipc);
 sub _pod_extras {
     my ($kind, $p) = @_;
     for my $k (sort keys %$p) {
-        die "broker: pod $kind: '$k' is not a setting of a pod (image, programs, note, devices, usb_ids, groups, env, seccomp, ipc)\n"
+        die "broker: pod $kind: '$k' is not a setting of a pod (image, programs, note, tags, devices, usb_ids, groups, env, seccomp, ipc)\n"
             unless $POD_KEYS{$k};
     }
-    my %x = (devices => [], usb_ids => [], groups => [], env => {}, seccomp => undef, ipc => undef);
+    my %x = (devices => [], usb_ids => [], groups => [], env => {}, seccomp => undef, ipc => undef, tags => undef);
+    if (defined $p->{tags}) {
+        die "broker: pod $kind: tags are a list of short lower-case words\n" unless ref($p->{tags}) eq 'ARRAY' and @{$p->{tags}};
+        for my $t (@{$p->{tags}}) {
+            die "broker: pod $kind: a tag is a short lower-case word, '$t'\n"
+                unless !ref($t) and $t =~ m/\A[a-z][a-z0-9-]{0,31}\z/;
+        }
+        $x{tags} = [@{$p->{tags}}];
+    }
     for my $d (ref($p->{devices}) eq 'ARRAY' ? @{$p->{devices}} : ()) {
         die "broker: pod $kind: a device is a path under /dev, '$d'\n"
             unless !ref($d) and $d =~ m{\A/dev/[A-Za-z0-9_./*-]+\z} and $d !~ m{\.\.};
@@ -338,7 +363,7 @@ sub _file {
 # the devices a kind passes at open: its device paths that exist now (globs, so a
 # board plugged in later is found by the next open), the usb nodes of its usb ids
 # (from sysfs: a meter replugged gets a new number, found the same way), and the gids
-# that own them, which the container gets as groups (run.sh does the same with stat).
+# that own them, which the container gets as groups.
 # Returns (the devices as libpod's LinuxDevice, the gids).
 sub _device_specs {
     my ($self, $spec) = @_;
@@ -486,8 +511,11 @@ sub _list {
 # program and its arguments (no shell), its working directory is /work (the
 # project). The engine's own client (podman-remote, the config's remote) runs it.
 # Answers the output (base64, as the bytes were) and the exit code.
+# the time an agent has to run a program (the same as a pod's exec)
+our $AGENT_EXEC_TIMEOUT = 120;
+
 sub _exec {
-    my ($self, $req) = @_;
+    my ($self, $req, $send) = @_;
     my $name = $self->project_name($req->{project})
         or return {ok => JSON::XS::false(), error => "no such project"};
     my $kind = $req->{pod} // 'base';
@@ -501,6 +529,20 @@ sub _exec {
     my $size = 0;
     $size += length($_) for @$argv;
     return {ok => JSON::XS::false(), error => "the command is too long"} if $size > 256 * 1024;
+    if ($spec->{tags}) {
+        # a kind on an agent: the answer comes when the agent has run it (or it is refused now)
+        return {ok => JSON::XS::false(), error => "the $kind kind runs on an agent, and this call cannot wait for one"}
+            unless $send;
+        $self->{hub}->submit(project => $name, tags => $spec->{tags}, argv => $argv, timeout => $AGENT_EXEC_TIMEOUT,
+            done => sub {
+                my ($r) = @_;
+                _log("exec project=$name pod=$kind program=$argv->[0] on an agent -> "
+                    .($r->{ok} ? "exit $r->{exit}" : "refused: $r->{error}"));
+                $r->{output} = MIME::Base64::encode_base64($r->{output} // '', '') if $r->{ok};
+                $send->($r);
+            });
+        return undef; # answered through $send
+    }
     my $ctr = _pod_name($kind, $name).'-dev';
     my $state = $self->_container_state($ctr);
     if (!$state or !$state->{State}{Running}) {
@@ -608,7 +650,98 @@ sub _dechunk {
     return $out;
 }
 
-# the broker's socket: one request per connection
+# the reasons of the statuses of the agent listener
+our %HTTP_REASON = (200 => 'OK', 204 => 'No Content', 400 => 'Bad Request', 403 => 'Forbidden',
+    404 => 'Not Found', 409 => 'Conflict', 413 => 'Payload Too Large');
+
+# the listener of the agents (TCP, behind nginx), or undef when there are none
+sub _agent_listener {
+    my ($self) = @_;
+    return undef unless $self->{hub}->enabled and length($self->{agent_listen} // '');
+    my ($host, $port) = $self->{agent_listen} =~ m/\A(.*):(\d+)\z/
+        or die "broker: agent_listen is host:port, '$self->{agent_listen}'\n";
+    my $srv = IO::Socket::IP->new(LocalAddr => $host, LocalPort => $port, Listen => 16, ReuseAddr => 1, V6Only => 0)
+        or die "broker: cannot listen for agents on $self->{agent_listen}: $!\n";
+    _log("listening for agents on $self->{agent_listen}");
+    return $srv;
+}
+
+# one request of an agent: HTTP/1.1, the body by Content-Length; the hub answers it (later,
+# for a held poll). The connection is closed after the answer.
+sub _agent_request {
+    my ($self, $c) = @_;
+    my $send = sub {
+        my ($status, $body) = @_;
+        $body //= '';
+        my $head = "HTTP/1.1 $status ".($HTTP_REASON{$status} // 'Unknown')."\r\n"
+            ."Content-Type: application/json\r\nContent-Length: ".length($body)."\r\nConnection: close\r\n\r\n";
+        print {$c} $head.$body;
+        close($c);
+        return;
+    };
+    my $req = eval {
+        local $SIG{ALRM} = sub { die "timeout\n" };
+        alarm 10;
+        my $line = <$c>;
+        die "no request\n" unless defined $line;
+        my ($method, $path) = $line =~ m{\A([A-Z]+) (\S+) HTTP/1\.[01]\r?\n\z} or die "bad request line\n";
+        my %h;
+        my $n = 0;
+        while (defined(my $l = <$c>)) {
+            $l =~ s/\r?\n\z//;
+            last if $l eq '';
+            die "too many headers\n" if ++$n > 100;
+            my ($k, $v) = $l =~ m/\A([A-Za-z0-9-]+):\s*(.*)\z/ or die "bad header\n";
+            $h{lc $k} = $v;
+        }
+        my $len = $h{'content-length'} // 0;
+        die "body too big\n" if $len !~ m/\A\d+\z/ or $len > 64 * 1024;
+        my $body = '';
+        read($c, $body, $len) if $len;
+        alarm 0;
+        {method => $method, path => $path, headers => \%h, body => $body};
+    };
+    alarm 0;
+    unless ($req) {
+        my $why = $@ =~ s/\s+\z//r;
+        _log("agent request refused: $why");
+        return $send->(400, '{"ok":false,"error":"a request is wanted"}');
+    }
+    $self->{hub}->http($req, $send);
+    return;
+}
+
+# one request of a client (the agent's tools, the web interface): one JSON line. A job on an
+# agent is answered later, when the agent has run it; the connection stays open until then.
+sub _client_request {
+    my ($self, $c) = @_;
+    my $send = sub {
+        my ($res) = @_;
+        print {$c} $JSON->encode($res)."\n";
+        close($c);
+        return;
+    };
+    my $line = eval {
+        local $SIG{ALRM} = sub { die "timeout\n" };
+        alarm 10;
+        my $l = <$c>;
+        alarm 0;
+        $l;
+    };
+    alarm 0;
+    _log("a client sent no request in 10 s") unless defined $line;
+    if (!defined $line) {
+        $send->({ok => JSON::XS::false(), error => "no request in time"});
+        return;
+    }
+    my $res = $self->handle($line, $send);
+    $send->($res) if defined $res;
+    return;
+}
+
+# the broker's sockets: the requests of the clients (the Unix socket) and of the agents (the
+# listener, when there are agents). Every round also ends the held polls and the jobs whose
+# time is up, and closes the idle pods (once a minute).
 sub serve {
     my ($self) = @_;
     my $path = $self->{socket};
@@ -618,8 +751,10 @@ sub serve {
     chmod(0660, $path);
     my ($gid) = split ' ', $(;
     _log("listening on $path as uid $< gid ".($gid // '?'));
+    my $agents = $self->_agent_listener();
     local $SIG{PIPE} = 'IGNORE';
     my $sel = IO::Select->new($srv);
+    $sel->add($agents) if $agents;
     my $reaped = 0;
     while (1) {
         # the idle pods are closed once a minute, whether or not requests come (a failure is logged)
@@ -627,20 +762,19 @@ sub serve {
             $reaped = time;
             eval { $self->_reap(); 1 } or _log("idle check failed: ".($@ =~ s/\s+\z//r));
         }
-        next unless $sel->can_read(5);
-        my $c = $srv->accept or next;
-        my $line = eval {
-            local $SIG{ALRM} = sub { die "timeout\n" };
-            alarm 10;
-            my $l = <$c>;
-            alarm 0;
-            $l;
-        };
-        alarm 0;
-        _log("a client sent no request in 10 s") unless defined $line;
-        my $res = defined $line ? $self->handle($line) : {ok => JSON::XS::false(), error => "no request in time"};
-        print {$c} $JSON->encode($res)."\n";
-        close($c);
+        eval { $self->{hub}->tick(time); 1 } or _log("agent check failed: ".($@ =~ s/\s+\z//r));
+        for my $fh ($sel->can_read(1)) {
+            if ($fh == $srv) {
+                my $c = $srv->accept or next;
+                $self->_client_request($c);
+            } elsif ($agents and $fh == $agents) {
+                my $c = $agents->accept or next;
+                eval { $self->_agent_request($c); 1 } or do {
+                    _log("agent request failed: ".($@ =~ s/\s+\z//r));
+                    close($c);
+                };
+            }
+        }
     }
     return;
 }
@@ -680,6 +814,7 @@ sub main {
     $cfg->{host_root} = $ENV{AI_BROKER_HOST_ROOT} if length($ENV{AI_BROKER_HOST_ROOT} // '');
     $cfg->{socket}    = $ENV{AI_BROKER_SOCKET}    if length($ENV{AI_BROKER_SOCKET} // '');
     $cfg->{engine}    = $ENV{AI_BROKER_ENGINE}    if length($ENV{AI_BROKER_ENGINE} // '');
+    $cfg->{agent_listen} = $ENV{AI_BROKER_AGENT_LISTEN} if length($ENV{AI_BROKER_AGENT_LISTEN} // '');
     my $b = broker->new(%$cfg);
     broker::_log(sprintf("starting: root=%s host_root=%s engine=%s pods=%s memory=%s pids=%s",
         $b->{root}, $b->{host_root}, $b->{engine}, join(',', map {"$_=$b->{pods}{$_}{image}"} sort keys %{$b->{pods}}),

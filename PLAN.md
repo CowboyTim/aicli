@@ -49,7 +49,7 @@ user's view) and AGENTS.md (the code, and "Status" for the history), not here.
   access (`TAG+="uaccess"` or a mode), or a rootful Podman for the broker's pods.
 - **Pod images.** Built by `pods/docker-bake.hcl` (bash, arduino, rocm, android,
   node), not yet built or pushed. The `rocm` kind's `seccomp` and `ipc` settings
-  are copied from `run.sh`; not checked on a GPU.
+  are taken from the Docker side of the old launcher; not checked on a GPU.
 - **Brute-force protection for logins.** `auth/aicli-auth.pam` has only
   `pam_unix`. A `pam_faillock` sketch needs a test in the auth container before
   it is committed. The `metrics_api` PAM file (a copy kept out of the repo) was
@@ -89,27 +89,39 @@ user's view) and AGENTS.md (the code, and "Status" for the history), not here.
 
 ## Open: remote agents (hardware attached to a project)
 
-Decided: the hardware is reached through agents that call in. An agent is the
+Built so far (`remote_hub.pm`, `remote_agent.pm`, `ai.pl --agent`, the broker's agent
+listener, tests t/123, t/124): the polls, the jobs for the tags, the answers, the times, the
+agent's program list, the agent's working directory, the bearer token (the broker keeps its
+SHA-256), the optional public key pin. Tested with a real broker and agent process (t/124, t/125).
+Not built: the parts below.
+
+Decided: the hardware is reached through agents that call in. The broker never starts
+an agent (it has no /dev); the user starts it on the machine that has the devices, and it
+calls back. The agent images rocm, arduino and android are built and run outside this
+project. `base` is a pod, started by the broker, built here. An agent is the
 unit that does the work: `ai.pl --agent`, a mode of ai.pl that loads no chat and
 holds no model key, on a machine (a Raspberry Pi with a Zigbee stick, a DGX Spark,
 a Strix Halo box, a laptop, or the broker's own host). It runs jobs in its own
 containers with its own devices, and it can be run by hand for a test. The broker is only the
 control plane: it sends small job specs and gets small results back. Project
-files, images and build output never pass through the broker. Option A: the
-connection goes through nginx with mTLS.
+files, images and build output never pass through the broker. The connection goes
+through nginx over the public TLS (the certificate of PUBLIC_DOMAIN, checked by the agent
+as any client does; no client certificate). The agent's credential is its token.
 
-- **Transport:** a `/agents/` location in nginx with `ssl_verify_client on` and
-  a client CA of our own (made by a script next to deploy.sh, one certificate per
-  agent, the name in the certificate's CN). nginx passes the CN to the broker's
-  agent listener in a header; the broker trusts it only from nginx.
+- **Transport:** a `/agents/` location in nginx that proxies to the broker's agent
+  listener. The public certificate is checked by the agent, as usual; an optional pin
+  of the server's public key (`--pin sha256//BASE64`) is on top of that. A pin breaks at
+  a renewal with a new key, so it is for when that is wanted. No client CA.
+- **Agent credential:** the token of each agent (`Authorization: Bearer`). The broker
+  keeps only the SHA-256 (`token_sha256` in `broker.json`).
 - **Enrollment:** each logged-in user has an enrollment token on the main page, with
   a copy button. Any number of agents can enroll with it: `ai.pl --agent --enroll TOKEN
-  --name NAME` on each machine gets that agent's own client certificate from our CA,
-  stored locally. The token is not the session cookie and is kept as a hash. Roles
+  --name NAME` on each machine gets that agent its own token (the broker stores its
+  SHA-256), kept locally. The token is not the session cookie and is kept as a hash. Roles
   (admins of projects and users) are not designed yet, so every logged-in user has one.
   The token is revocable and can be rotated on the page; rotating or revoking it stops
   new enrollments and leaves the enrolled agents as they are. Each agent can be revoked
-  on its own (its certificate, on the page). The page lists the enrolled agents and when
+  on its own (its token's hash is removed from the broker). The page lists the enrolled agents and when
   each enrolled. The token is reusable, so it is a secret that can add machines: it is
   shown only to its user, and it is not logged.
 - **Long poll, not a WebSocket:** the agent asks for work (`GET /agents/poll`),
@@ -118,7 +130,7 @@ connection goes through nginx with mTLS.
   the connection drops cleanly. Same shape as a gitlab runner.
 - **Tags are set at enrollment:** `ai.pl --agent --enroll TOKEN --name NAME --tags
   arduino,usb-meter` (as `gitlab-runner register --tag-list`). The broker stores them with
-  the agent's certificate, and the agent cannot change them. Tags describe the hardware
+  the agent's token hash, and the agent cannot change them. Tags describe the hardware
   and the platform (for example `zigbee`, `gfx1151`, `dgx-spark`, `arduino`, `arm64`,
   `armv6`). A kind names the tags it needs. An agent without a tag never gets that
   kind's jobs.
@@ -147,15 +159,16 @@ connection goes through nginx with mTLS.
   images (a second build for its platform), chosen by its platform tag. A Pi Zero W
   (armv6, 512 MB) can run the agent but not a rocm or android job, so those tags keep
   such jobs off it.
-- **Revocation:** a certificate can be revoked (CRL in nginx); a removed agent is
+- **Revocation:** an agent's token hash is removed from the broker; a removed agent is
   detached at its next poll.
 - **The agent itself:** `ai.pl --agent`, run as a container on its own machine (rootful
-  Docker where serial and USB need cgroup rules, as `run.sh` does) or directly on the
-  host. It holds only its certificate and its git credential, no model key, and it
+  Docker where serial and USB need cgroup rules) or directly on the
+  host. It holds only its token and its git credential, no model key, and it
   loads the chat's libraries only where they are needed. An agent on the broker's own
   host is the same program, just local.
-- **Open:** how the CA and the certificates are made and handed over (a script of
-  ours, `auth.pl`, or by hand); how the agent is updated and how its version is
+- **Open:** where `pods/entrypoint.sh`, `pods/run.sh` and `pods/usb-meter-nodes.sh` go
+  (they serve the agent images, built outside this project); how an agent's token is made and kept on the broker side (enrollment, the hash in
+  the agents file); how the agent is updated and how its version is
   checked against the broker; how the arduino build output comes back, and whether
   the first step is the log only.
 

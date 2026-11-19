@@ -450,6 +450,9 @@ sub http {
     # environment itself otherwise
     my $proxy = exists $r{proxy} ? $r{proxy} : utils::proxy_for('ai');
     $ch->setopt(curl::CURLOPT_PROXY(), $proxy // '');
+    # a pin of the server's public key (sha256//base64, see remote_agent): the request fails
+    # unless the certificate has that key; the normal certificate check stays on
+    $ch->setopt(curl::CURLOPT_PINNEDPUBLICKEY(), $r{pin}) if length($r{pin} // '');
     if(length($proxy // '') and defined(my $no_proxy = $::ORIG_ENV{NO_PROXY} // $::ORIG_ENV{no_proxy})){
         eval {$ch->setopt(curl::CURLOPT_NOPROXY(), $no_proxy)};
     }
