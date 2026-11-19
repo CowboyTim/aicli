@@ -1,7 +1,7 @@
 #!/usr/bin/perl
 # the passwords of the accounts are set by auth.pl itself: its rules (the length, printable,
 # not the name), the hash (SHA-512 crypt, a random salt, the rounds), and the stored hash
-# (usermod -p, a stand-in here). Nothing goes through the system's passwd.
+# (chpasswd -e, a stand-in here). Nothing goes through the system's passwd.
 use strict; use warnings;
 
 use Test::More;
@@ -28,22 +28,23 @@ is(crypt('a good long one', $hash), $hash, "it checks the password it was made f
 isnt(crypt('another one here', $hash), $hash, "and not another one");
 isnt(hash_password('a good long one'), $hash, "every hash has its own salt");
 
-# set_password: asked twice, the rules, the hash stored with usermod -p
+# set_password: asked twice, the rules, the hash given to chpasswd -e
 my @cmds;
 {
-    local $main::RUN = sub { push @cmds, [@_]; return 1 };
+    local $main::RUN_IN = sub { push @cmds, [@_]; return 1 };
     local *STDIN;
     open(STDIN, '<', \"a good long one\na good long one\n") or die "stdin: $!";
     set_password('alice');
     is(scalar(@cmds), 1, "one system command");
-    is($cmds[0][0], 'usermod', "usermod stores the hash");
-    is($cmds[0][1], '-p', "with -p: the hash, not the password");
-    is($cmds[0][3], 'alice', "for the account");
-    is(crypt('a good long one', $cmds[0][2]), $cmds[0][2], "and the hash checks the password");
-    unlike(join(' ', @{ $cmds[0] }), qr/a good long one/, "the password is in no argument");
+    my ($input, @argv) = @{ $cmds[0] };
+    is_deeply(\@argv, [qw(chpasswd -e)], "chpasswd -e stores it");
+    like($input, qr/\Aalice:\$6\$rounds=100000\$/, "the input is name:hash");
+    my ($hash) = $input =~ m/:(\S+)\n\z/;
+    is(crypt('a good long one', $hash), $hash, "and the hash checks the password");
+    unlike($input . join(' ', @argv), qr/a good long one/, "the password is in no argument, nor in the input");
 }
 {
-    local $main::RUN = sub { push @cmds, [@_]; return 1 };
+    local $main::RUN_IN = sub { push @cmds, [@_]; return 1 };
     local *STDIN;
     open(STDIN, '<', \"a good long one\nanother good one\n") or die "stdin: $!";
     my $n = @cmds;
@@ -52,7 +53,7 @@ my @cmds;
     is(scalar(@cmds), $n, "and nothing is stored");
 }
 {
-    local $main::RUN = sub { push @cmds, [@_]; return 1 };
+    local $main::RUN_IN = sub { push @cmds, [@_]; return 1 };
     local *STDIN;
     open(STDIN, '<', \"short\nshort\n") or die "stdin: $!";
     my $n = @cmds;

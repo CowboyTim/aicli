@@ -319,7 +319,7 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   is `ai/ui/theme.css`, inlined by the agent (`/*theme.css*/` in index.html).
   Passwords are set by auth.pl itself (`set_password`, asked twice on the terminal): its rules
   (AI_AUTH_MINLEN, default 10; printable; not the account name), a SHA-512 crypt hash with
-  AI_AUTH_ROUNDS rounds (default 100000), stored with `usermod -p`. The system passwd command is
+  AI_AUTH_ROUNDS rounds (default 100000), stored with `chpasswd -e` (the hash on its standard input). The system passwd command is
   not used, so its rules do not apply.   The accounts: `auth.pl user add|passwd|del|list`, `role add|remove`. PAM reads `/etc`, so the
   four account files are copied to the volume after a change and back at a start (a bind mount
   over them fails: useradd renames over them).
@@ -617,7 +617,7 @@ Other APIs are reached through an OpenAI compatible gateway, such as LiteLLM or 
 | `t/89_context_thinking.t` | the reasoning setting, what the request says, the first request through compactions, `/context` |
 | `t/97_live.t` | a real model, only when `AI_LIVE_SERVER` is set (`AI_LIVE_MODEL`, optional `AI_LIVE_SEARXNG`): one answer, a native tool call, the thinking setting, search. Skipped otherwise |
 | `t/100_ui.t` | the web interface: routes, the token, origin check, body limits, the input queue, the event stream on socket pairs; the listen addresses (IPv4, IPv6, `::`), stop and start on the same port, TLS with a generated certificate (a https request, the Secure cookie), the state of the speech recognizer; then `ai.pl --ui` as a child, a message in and the streamed answer out, Ctrl-C |
-| `t/122_auth_password.t` | the password rules of auth.pl (length, printable, not the name, AI_AUTH_MINLEN), the SHA-512 crypt hash (rounds, salt, it checks), set_password asked twice (no echo on a terminal, refused when they differ or break the rules), the hash stored with usermod -p and not the password |
+| `t/122_auth_password.t` | the password rules of auth.pl (length, printable, not the name, AI_AUTH_MINLEN), the SHA-512 crypt hash (rounds, salt, it checks), set_password asked twice (no echo on a terminal, refused when they differ or break the rules), the hash given to chpasswd -e on standard input and not the password |
 | `t/119_pod_devices.t` | a pod kind's devices: the config's rules (privileged, a device outside /dev, a bad usb id, an env name), the device paths that exist at open (globs, usb ids through sysfs), the numbers and owner groups of real character devices (stand-ins behind symlinks), what the container spec gets |
 | `t/118_pod_control.t` | the pod kinds (base, node): the projects and their pods, the cap across kinds, an idle pod closed and one found open after a restart kept, `pods`, `pod_open` (kind, already open, refusals), `pod_close` (the session's base pod noted), a closed base pod opened by a bash call, `pod_run` (node in its pod, a program of the base pod refused), through a real broker process (fake engine with containers and images) |
 | `t/109_pod_tools.t` | the tools of a project in its pod: bash, perl and grep through a real broker (fake engine, stand-in client): the program and its argv, the exit code, the pod's paths, a workspace that is no project or has no open pod refused, a path outside the project refused, AI_POD_TOOLS=0 runs them here |

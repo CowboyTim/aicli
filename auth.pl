@@ -123,6 +123,16 @@ our $RUN = sub {
     return $? == 0;
 };
 
+# a command that reads its input from standard input (the hash for chpasswd): no shell, the
+# input is written to it
+our $RUN_IN = sub {
+    my ($input, @cmd) = @_;
+    open(my $pipe, '|-', @cmd) or return 0;
+    print {$pipe} $input;
+    close($pipe);
+    return $? == 0;
+};
+
 sub valid_role {
     my ($name) = @_;
     return defined $name && $name =~ m/\Aaicli-[a-z0-9_-]{1,27}\z/;
@@ -194,7 +204,7 @@ sub restore_accounts {
 # the admin commands: user add|passwd|del|list, role add|remove
 # --- passwords: the rules of this app and the hash are here, not in the system's passwd (which
 # has rules of its own). The password is read here, checked here, hashed here (SHA-512 crypt,
-# AI_AUTH_ROUNDS rounds, the length AI_AUTH_MINLEN); usermod -p only stores the hash.
+# AI_AUTH_ROUNDS rounds, the length AI_AUTH_MINLEN); chpasswd -e only stores the hash.
 our $PW_ALPHABET = join '', ('.', '/', 0 .. 9, 'A' .. 'Z', 'a' .. 'z');
 sub min_password { return $ENV{AI_AUTH_MINLEN} // 10 }
 sub hash_rounds  { return $ENV{AI_AUTH_ROUNDS} // 100000 }
@@ -254,7 +264,8 @@ sub set_password {
     my $again = read_password("again: ");
     die "auth: the two passwords differ\n" unless defined $first and defined $again and $first eq $again;
     if (defined(my $why = password_problem($name, $first))) { die "auth: $why\n" }
-    $RUN->('usermod', '-p', hash_password($first), $name) or die "auth: could not store the password of $name\n";
+    $RUN_IN->("$name:".hash_password($first)."\n", 'chpasswd', '-e')
+        or die "auth: could not store the password of $name\n";
     return 1;
 }
 
