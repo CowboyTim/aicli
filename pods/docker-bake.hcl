@@ -2,14 +2,14 @@
 # the toolchains, and ai.pl fetched from GitHub at AICLI_REF), and the device images built on it:
 # rocm, arduino and android. bash is the base image under its own name (see README.md).
 #
-#   docker buildx bake                 build base into the local image store
+#   docker buildx bake                 build every image into the local image store
 #   docker buildx bake local           build every image into the local image store
 #   docker buildx bake arduino         build one image (also rocm, android, bash)
 #   docker buildx bake --print         show the resolved configuration
 #   docker buildx bake --pull          also pull fresh base images
 #
-# Each image gets two tags: ${IMAGE_REPO}:<kind> for local use, and ${REGISTRY}/pod-<kind>:latest,
-# which is the name to push and pull (the device images are built from the registry's base
+# Each image gets two tags: ${IMAGE_REPO}:<kind> for local use, and ${REGISTRY}/pod-<kind>:latest
+# (only when AICLI_REGISTRY_HOST is set), which is the name to push and pull (the device images are built from the registry's base
 # image, see README.md). To push one:
 #   docker push $REGISTRY/pod-arduino:latest
 #
@@ -119,11 +119,12 @@ variable "GRADLE_VERSION" {
   default = "8.14.6"
 }
 
+# docker buildx bake: every image, into the local image store
 group "default" {
-  targets = ["base"]
+  targets = ["base", "bash", "rocm", "arduino", "android"]
 }
 
-# every image, into the local image store
+# the same as default, by name
 group "local" {
   targets = ["base", "bash", "rocm", "arduino", "android"]
 }
@@ -148,7 +149,7 @@ target "_common" {
 target "base" {
   inherits = ["_common"]
   target   = "base"
-  tags     = ["${IMAGE_REPO}:base", "${REGISTRY}/pod-base:latest"]
+  tags     = concat(["${IMAGE_REPO}:base"], AICLI_REGISTRY_HOST == "" ? [] : ["${REGISTRY}/pod-base:latest"])
   args = {
     BASE_IMAGE = UBUNTU_IMAGE
   }
@@ -158,7 +159,7 @@ target "base" {
 target "bash" {
   inherits = ["_common"]
   target   = "base"
-  tags     = ["${IMAGE_REPO}:bash", "${REGISTRY}/pod-bash:latest"]
+  tags     = concat(["${IMAGE_REPO}:bash"], AICLI_REGISTRY_HOST == "" ? [] : ["${REGISTRY}/pod-bash:latest"])
   args = {
     BASE_IMAGE = UBUNTU_IMAGE
   }
@@ -167,7 +168,7 @@ target "bash" {
 target "rocm" {
   inherits = ["_common"]
   target   = "rocm"
-  tags     = ["${IMAGE_REPO}:rocm", "${REGISTRY}/pod-rocm:latest"]
+  tags     = concat(["${IMAGE_REPO}:rocm"], AICLI_REGISTRY_HOST == "" ? [] : ["${REGISTRY}/pod-rocm:latest"])
   args = {
     BASE_IMAGE          = ROCM_IMAGE
     TORCH_INDEX         = TORCH_INDEX
@@ -180,7 +181,7 @@ target "rocm" {
 target "arduino" {
   inherits = ["_common"]
   target   = "arduino"
-  tags     = ["${IMAGE_REPO}:arduino", "${REGISTRY}/pod-arduino:latest"]
+  tags     = concat(["${IMAGE_REPO}:arduino"], AICLI_REGISTRY_HOST == "" ? [] : ["${REGISTRY}/pod-arduino:latest"])
   args = {
     BASE_IMAGE          = UBUNTU_IMAGE
     ARDUINO_CLI_VERSION = ARDUINO_CLI_VERSION
@@ -194,7 +195,7 @@ target "arduino" {
 target "android" {
   inherits = ["_common"]
   target   = "android"
-  tags     = ["${IMAGE_REPO}:android", "${REGISTRY}/pod-android:latest"]
+  tags     = concat(["${IMAGE_REPO}:android"], AICLI_REGISTRY_HOST == "" ? [] : ["${REGISTRY}/pod-android:latest"])
   args = {
     BASE_IMAGE            = UBUNTU_IMAGE
     ANDROID_CMDLINE_TOOLS = ANDROID_CMDLINE_TOOLS
