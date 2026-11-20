@@ -29,6 +29,8 @@ http {
         "Bearer ${SEARXNG_API_TOKEN}" 1;
     }
     limit_req_zone $binary_remote_addr zone=searxng:10m rate=2r/s;
+    # the API of flm (/api/flm/): queued, not refused, at a rate per client
+    limit_req_zone $binary_remote_addr zone=flm_api:10m rate=5r/s;
     limit_req_zone $binary_remote_addr zone=login:10m rate=5r/m;
 
 
@@ -135,6 +137,38 @@ http {
             proxy_set_header Host $host;
             proxy_set_header X-Forwarded-Proto $scheme;
             proxy_set_header X-Forwarded-For $remote_addr;
+        }
+
+        # the check of an API request: a token made for flm (aud=flm), internal only. Its user
+        # and account go to flm; the token itself does not
+        location = /_gate_flm {
+            internal;
+            set $auth_flm http://auth:9000/auth/verify?aud=flm;
+            proxy_pass $auth_flm;
+            proxy_pass_request_body off;
+            proxy_set_header Content-Length "";
+            proxy_set_header Host $host;
+        }
+        # the API of flm (FastFlowLM on the NPU): the model list and inference, /api/flm/<path> is
+        # flm's /<path> (/v1/models, /v1/chat/completions, /v1/audio/transcriptions). Each request
+        # needs a token of the user's, from POST /auth/api/token, as Bearer
+        location /api/flm/ {
+            auth_request /_gate_flm;
+            auth_request_set $api_user $upstream_http_x_user;
+            auth_request_set $api_account $upstream_http_x_account;
+            limit_req zone=flm_api burst=20;
+            client_max_body_size 25m;
+            set $flm http://flm:52625;
+            rewrite ^/api/flm/(.*)$ /$1 break;
+            proxy_pass $flm;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header Authorization "";
+            proxy_set_header Cookie "";
+            proxy_set_header X-Aicli-User $api_user;
+            proxy_set_header X-Aicli-Account $api_account;
+            proxy_buffering off;
+            proxy_read_timeout 600s;
         }
 
         location / {

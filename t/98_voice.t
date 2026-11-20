@@ -11,6 +11,8 @@ no warnings 'once';
 
 $::DEBUG = ($ENV{DEBUG}//"0") == "1"?1:0;
 
+use Cwd ();
+my $ui_file = Cwd::abs_path("$FindBin::Bin/../ui.pm"); # before TestAI::setup, which changes directory
 use ai;
 use TestAI;
 
@@ -343,6 +345,17 @@ sub keys_from {
     ok(!defined $text, "quiet: no text");
     like($out, qr/nothing heard/, "quiet: said that nothing was heard");
     is(scalar(@TestAI::REQUESTS), $before, "quiet: no request to the recognizer");
+}
+
+# the recognizer that is not there yet: its check is made again later, once at a time
+{
+    require $ui_file;
+    no warnings 'once';
+    $ui::voice_retry_pending = 0;
+    ui::_voice_retry();
+    ui::_voice_retry();
+    is($ui::voice_retry_pending, 1, "an unreachable recognizer: one check again is pending");
+    $ui::voice_retry_pending = 0;
 }
 
 done_testing();

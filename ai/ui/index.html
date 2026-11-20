@@ -140,6 +140,11 @@
         <button type="button" id="agentcopy">copy</button>
       </div>
       <ul id="agentlist"></ul>
+      <div class="agenthead">API token <button type="button" id="apinew">new API token</button> <span id="apinote"></span></div>
+      <div class="enroll" id="apienroll" hidden>
+        <input id="apitokenbox" readonly aria-label="API token">
+        <button type="button" id="apicopy">copy</button>
+      </div>
     </div>
     <label>theme <select id="theme" aria-label="theme">
       <option value="system">system</option>
@@ -582,6 +587,26 @@
     if (navigator.clipboard) { navigator.clipboard.writeText(agenttoken.value); } else { document.execCommand("copy"); }
   });
   agentsLoad();
+
+  // an API token for the services behind /api/<service>/ (flm: the models and inference), made
+  // from this login: a week, shown once, sent as Authorization: Bearer
+  var apinote = document.getElementById("apinote");
+  var apienroll = document.getElementById("apienroll");
+  var apitokenbox = document.getElementById("apitokenbox");
+  document.getElementById("apinew").addEventListener("click", function () {
+    fetch("/auth/api/token?aud=flm", { method: "POST" }).then(function (r) {
+      if (!r.ok) { throw new Error(r.status === 401 ? "not logged in" : "no API token (" + r.status + ")"); }
+      return r.json();
+    }).then(function (d) {
+      apitokenbox.value = d.token;
+      apienroll.hidden = false;
+      apinote.textContent = "shown once, valid " + Math.round(d.expires_in / 86400) + " days: Authorization: Bearer TOKEN on https://" + location.host + "/api/flm/";
+    }).catch(function (err) { apinote.textContent = String(err); });
+  });
+  document.getElementById("apicopy").addEventListener("click", function () {
+    apitokenbox.select();
+    if (navigator.clipboard) { navigator.clipboard.writeText(apitokenbox.value); } else { document.execCommand("copy"); }
+  });
 
   // the state names the current model: selected, added first when the list lacks it
   function setCurrent(current) {

@@ -42,6 +42,17 @@ set_key() {
     fi
 }
 
+# KEY is removed from FILE
+del_key() {
+    local f=$1 k=$2
+    [ -f "$f" ] || return 0
+    local tmp
+    tmp=$(mktemp "$f.XXXXXX")
+    sed "/^$k=/d" "$f" > "$tmp"
+    cat "$tmp" > "$f"
+    rm -f "$tmp"
+}
+
 # the value of KEY: the environment, else FILE, else DEFAULT
 pick() {
     local f=$1 k=$2 d=${3-} v
@@ -84,16 +95,23 @@ for k in SEARXNG_SECRET SEARXNG_API_TOKEN AICLI_GATE_SECRET; do
     set_key "$env_f" "$k" "$v"
 done
 
-# the chat model server and the speech recognizer: two settings, each explicit (the environment
-# or .agent.env; required)
-for k in AI_LOCAL_SERVER AI_ASR_URL; do
-    v=$(pick "$agent_f" "$k")
-    if [ -z "$v" ]; then
-        echo "deploy.sh: $k is needed (its URL, in the environment or in $agent_f)" >&2
-        exit 1
-    fi
-    set_key "$agent_f" "$k" "$v"
-done
+# the chat model server: explicit (the environment or .agent.env; required)
+v=$(pick "$agent_f" AI_LOCAL_SERVER)
+if [ -z "$v" ]; then
+    echo "deploy.sh: AI_LOCAL_SERVER is needed (its URL, in the environment or in $agent_f)" >&2
+    exit 1
+fi
+set_key "$agent_f" AI_LOCAL_SERVER "$v"
+# the speech recognizer: the flm service of docker-compose.yaml, unless AI_ASR_URL is set. Compose
+# reads it from the shell or .env, so a URL that .agent.env has moves to .env. AI_ASR_URL= (set and
+# empty) clears it: the lines are removed, and the flm service is the recognizer again.
+if [ "${AI_ASR_URL+x}" = x ] && [ -z "$AI_ASR_URL" ]; then
+    del_key "$env_f" AI_ASR_URL
+    del_key "$agent_f" AI_ASR_URL
+else
+    v=$(pick "$agent_f" AI_ASR_URL)
+    [ -n "$v" ] && set_key "$env_f" AI_ASR_URL "$v"
+fi
 set_key "$agent_f" AI_MODEL "$(pick "$agent_f" AI_MODEL "Qwen3.5-4B-ROCMFP4")"
 
 if [ "${AICLI_ENV_ONLY:-0}" = 1 ]; then

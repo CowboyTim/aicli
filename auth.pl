@@ -18,6 +18,7 @@
 #   AI_AUTH_LISTEN    host:port to listen on (default 0.0.0.0:9000)
 #   AI_AUTH_KEY       the RSA key file (default /var/lib/aicli-auth/jwt-rsa.pem)
 #   AI_AUTH_LIFETIME     seconds a token lasts; renewed in its second half (default 86400: a day idle)
+#   AI_AUTH_API_LIFETIME seconds an API token lasts (POST /auth/api/token, for /api/flm/; default 604800: a week)
 #   AI_AUTH_SESSION_MAX  seconds from a login to the end of its session (default 2592000: a month)
 #   AI_AUTH_REVOKED      the revocation list (default /var/lib/aicli-auth/revoked.json)
 #   AI_AUTH_PAM_SERVICE  the PAM service (default aicli-auth, /etc/pam.d/aicli-auth)
@@ -402,7 +403,7 @@ sub ensure_account_id {
 }
 
 sub jwt_create {
-    my ($rsa, $user, $roles, $lifetime, $now, $ses, $sid) = @_;
+    my ($rsa, $user, $roles, $lifetime, $now, $ses, $sid, $aud) = @_;
     my $acct_of = account_id($user); # undef for a login that is not in the passwd (tests)
     $now //= time();
     $ses //= $now;
@@ -412,6 +413,7 @@ sub jwt_create {
         iss => $ISSUER, sub => $user, roles => [ @$roles ], sid => $sid, ses => $ses,
         iat => $now, exp => $now + $lifetime,
         ($acct_of ? (acct => $acct_of) : ()),
+        ($aud ? (aud => $aud) : ()), # a token for one service (an API token), not a login
     }));
     my $signed = "$header.$payload";
     my $sig = _sign_rs256($rsa, $signed);
@@ -452,6 +454,10 @@ our $REVOKED_DEFAULT = '/var/lib/aicli-auth/revoked.json';
 
 sub token_lifetime { return $ENV{AI_AUTH_LIFETIME} // 86400 }
 sub session_max    { return $ENV{AI_AUTH_SESSION_MAX} // 2592000 }
+sub api_lifetime   { return $ENV{AI_AUTH_API_LIFETIME} // 604800 }
+
+# the services that take an API token (its aud claim), see /auth/api/token
+our %API_AUDIENCE = map {($_ => 1)} qw(flm);
 sub revoked_file   { return $ENV{AI_AUTH_REVOKED} // $REVOKED_DEFAULT }
 
 # a random id of 16 bytes, base64url
@@ -580,6 +586,7 @@ sub current_claims {
     my ($rsa, $req, $now) = @_;
     my ($c) = jwt_verify($rsa, token_of($req), $now);
     return undef unless $c;
+    return undef if defined $c->{aud}; # an API token is not a login: it makes no session or token
     return undef if is_revoked($c, load_revoked());
     return undef if $now - ($c->{ses} // $c->{iat}) > session_max();
     return $c;
@@ -717,6 +724,20 @@ sub handle {
             ['Content-Type', 'application/json'], ['Set-Cookie', _cookie($token, session_max())],
         ], body => $JSON->encode({ user => $user, roles => \@roles })."\n");
     }
+    if ($path eq '/auth/api/token' and $m eq 'POST') {
+        # an API token for a service behind nginx (/api/<service>/): a JWT with the service as its
+        # aud, the session's sid and ses, so logging out or a revoked session ends it too
+        my $c = current_claims($rsa, $req, $now)
+            or return _response(401, 'unauthorized');
+        my $aud = $req->{query}{aud} // 'flm';
+        return _response(400, 'no such service') unless $API_AUDIENCE{$aud};
+        return _response(401, 'unauthorized') unless getpwnam($c->{sub});
+        my @roles = roles_of($c->{sub});
+        my $token = jwt_create($rsa, $c->{sub}, \@roles, api_lifetime(), $now, $c->{ses} // $c->{iat}, $c->{sid}, $aud);
+        print STDERR "auth: api token for $c->{sub}, service $aud, valid ".api_lifetime()." s\n";
+        return _response(200, '', headers => [['Content-Type', 'application/json']],
+            body => $JSON->encode({ token => $token, aud => $aud, expires_in => api_lifetime() })."\n");
+    }
     if ($path eq '/auth/logout' and $m eq 'POST') {
         my ($claims) = jwt_verify($rsa, token_of($req), $now);
         revoke_session($claims, $now) if $claims;
@@ -735,6 +756,27 @@ sub handle {
         my $ses = $claims->{ses} // $claims->{iat};
         if ($now - $ses > session_max()) {
             print STDERR "auth: verify refused: session of $claims->{sub} is too old\n";
+            return _response(401, 'unauthorized');
+        }
+        # the aud of the request (nginx's /api/<service>/): only a token made for that service, and
+        # no renewal (an API token has no cookie); a login is not one of these
+        my $aud = $req->{query}{aud};
+        if (defined $aud and length $aud) {
+            if (($claims->{aud} // '') ne $aud) {
+                print STDERR "auth: verify refused: not a token for $aud\n";
+                return _response(401, 'unauthorized');
+            }
+            if (!getpwnam($claims->{sub})) {
+                print STDERR "auth: verify refused: no account $claims->{sub}\n";
+                return _response(401, 'unauthorized');
+            }
+            return _response(200, 'ok', headers => [
+                ['X-User', $claims->{sub}], ['X-Roles', join(',', @{ $claims->{roles} // [] })],
+                ['X-Account', $claims->{acct} // ''],
+            ]);
+        }
+        if (defined $claims->{aud}) {
+            print STDERR "auth: verify refused: a token for $claims->{aud} is not a login\n";
             return _response(401, 'unauthorized');
         }
         # the second half of the token's life: a new token, the roles read again

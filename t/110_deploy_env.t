@@ -47,7 +47,7 @@ is(value($env_f, 'IPV6_SUBNET'), '2001:db8:1:2:c::8:0/120', "the subnet of the d
 is(value($env_f, 'IPV6_GATEWAY'), '2001:db8:1:2:c::8:1', "and its gateway");
 ok(value($env_f, 'BROKER_UID') =~ m/^\d+$/, "the id of the user");
 is(value($agent_f, 'AI_LOCAL_SERVER'), 'http://[2001:db8:1:2::20]:8000/rocm/v1', "agent: the model server, as given");
-is(value($agent_f, 'AI_ASR_URL'), 'http://[2001:db8:1:2::21]:52625/v1/audio/transcriptions', "agent: the speech recognizer, as given (its own address)");
+is(value($env_f, 'AI_ASR_URL'), 'http://[2001:db8:1:2::21]:52625/v1/audio/transcriptions', "the speech recognizer, as given: kept in .env, where compose reads it (its own address)");
 ok(length value($agent_f, 'AI_MODEL'), "agent: a model");
 
 my $secret = value($env_f, 'SEARXNG_SECRET');
@@ -91,5 +91,10 @@ my $other = File::Temp::tempdir("aicli_setup2_XXXXXX", TMPDIR => 1, CLEANUP => 1
     ok(!-e "$old/agent.env", "the old agent.env is gone");
     is(value("$old/.agent.env", 'AI_UI_TOKEN'), 'keep-me', "its settings are in .agent.env");
 }
+
+# AI_ASR_URL= (set and empty) clears the recognizer's URL from both files: the flm service is the default
+is(run_setup(%in, AI_ASR_URL => ''), 0, "a second run with AI_ASR_URL cleared");
+ok(!defined value($env_f, 'AI_ASR_URL'), "the URL is gone from .env");
+ok(!defined value($agent_f, 'AI_ASR_URL'), "and from .agent.env");
 
 done_testing();

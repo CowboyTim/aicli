@@ -858,10 +858,25 @@ sub check_voice {
             } else {
                 $voice = 'unreachable';
                 print STDERR "aicli speech: the recognizer endpoint $url is not reachable: ".($req->{error} // 'no answer')."\n";
+                _voice_retry();
             }
             publish(state => _state());
         },
     );
+    return;
+}
+
+# the recognizer may start after the agent (flm loads its model first): while it is unreachable,
+# the check is made again every VOICE_RETRY seconds, once at a time
+our $voice_retry_pending = 0;
+our $VOICE_RETRY = 30;
+sub _voice_retry {
+    return if $voice_retry_pending;
+    $voice_retry_pending = 1;
+    loop::timer($VOICE_RETRY, sub {
+        $voice_retry_pending = 0;
+        check_voice() unless $_[0] or $voice eq 'ok';
+    });
     return;
 }
 

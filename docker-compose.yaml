@@ -53,6 +53,7 @@ services:
       - broker
       - searxng
       - proxy
+      - flm
     networks:
       - aicli
     command:
@@ -69,6 +70,10 @@ services:
       # the public name (nginx): the page prints its address, and the QR code is for it
       AI_PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-}
       AI_SEARXNG_URL: http://searxng:8080
+      # the speech recognizer: the flm service (FastFlowLM on the NPU) unless AI_ASR_URL is set in
+      # the shell or in .env (compose reads those, not .agent.env)
+      AI_ASR_URL: ${AI_ASR_URL:-http://flm:52625/v1/audio/transcriptions}
+      AI_ASR_MODEL: ${AI_ASR_MODEL:-whisper-v3:turbo}
       AI_SEARXNG_PROXY: ""
       UID: ${BROKER_UID:-1000}
       GID: ${BROKER_GID:-1000}
@@ -117,6 +122,21 @@ services:
       - no-new-privileges:true
     restart: unless-stopped
   # searxng: the search engine of the agent's search tool (JSON output, see searxng/settings.yml)
+  # flm: FastFlowLM, the speech recognizer on the AMD NPU (flm/README.md). Its device is the
+  # host's /dev/accel/accel0 (the amdxdna driver is on the host); memlock unlimited, as the NPU needs.
+  flm:
+    build:
+      context: ./flm
+    image: local/ai/flm:latest
+    devices:
+      - ${FLM_NPU:-/dev/accel/accel0}:/dev/accel/accel0
+    ulimits:
+      memlock: -1
+    volumes:
+      - aicli-flm:/var/lib/flm
+    networks:
+      - aicli
+    restart: unless-stopped
   searxng:
     image: searxng/searxng:latest
     networks:
@@ -204,5 +224,7 @@ volumes:
     name: aicli-agent
   aicli-auth:
     name: aicli-auth
+  aicli-flm:
+    name: aicli-flm
   letsencrypt:
     name: aicli-letsencrypt

@@ -627,6 +627,12 @@ published); nginx sends the event stream without buffering, and accepts recordin
 Searxng for other tools is at `https://PUBLIC_DOMAIN/searxng/` with `SEARXNG_API_TOKEN` as
 `Authorization: Bearer`.
 
+The FastFlowLM API (the NPU: the model list, chat and speech recognition, `flm` in docker-compose.yaml)
+is at `https://PUBLIC_DOMAIN/api/flm/`, e.g. `/api/flm/v1/models`, `/api/flm/v1/chat/completions`,
+`/api/flm/v1/audio/transcriptions`. It takes a token of the user's, made on the page ("new API token",
+a week) or with `POST /auth/api/token?aud=flm` after a login, sent as `Authorization: Bearer`.
+The token is not the login cookie and no login cookie works there.
+
 A model server on the host (for example `AI_LOCAL_SERVER`) is reached by its address on
 the host, and the host's firewall must allow the agent's network to reach its port (ufw).
 

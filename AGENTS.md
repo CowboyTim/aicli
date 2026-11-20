@@ -153,7 +153,7 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   `utils::tool_env()`, packages `curl` (Net::Curl/WWW::Curl shim) and `log`.
 - **md.pm** – `md`: markdown of the answer, line by line as it streams (`new_printer()` uses it on a terminal)
 - **/voice** (in `ai.pm`, section "Speech"): `voice_record()` runs the recorder as a child (`loop::spawn`), stopped with SIGINT by a timer; `transcribe()` sends the recording as multipart/form-data (`multipart_body()`) to AI_ASR_URL; `voice_quiet()` skips a recording with no sound (the recognizer answers silence with "you"). The recording goes to `voice_dir()` (`/tmp/aicli-<uid>`, the sandbox lets the recorder write there, not in the session directory). While it is made: `voice_meter_start()` samples the level for the footer, `voice_preview_start()` sends the audio since the last final words every three seconds (verbose JSON segments), `heard_agree()` (LocalAgreement) makes the segments that two passes agree on final and drops their audio.
-- **FastFlowLM** is used for voice (`flm serve ... --asr 1`, port 52625), not for chat work. Its chat defaults (8192 tokens) stay as they are; there is no `agent` tool with it.
+- **FastFlowLM** is used for voice (`flm serve -a whisper-v3:turbo`, port 52625, the `flm` service in docker-compose.yaml, flm/), not for chat work. Its chat defaults (8192 tokens) stay as they are; there is no `agent` tool with it.
 - **worker.pm** – `worker`: one session as a chat in a process of its own,
   served over a socket (`worker::serve($fh, session => ...)`): input lines
   (`{"text"}`, `{"model"}`, `{"models"}`, `{"abort"}`) into the web interface's
@@ -321,6 +321,13 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   `ensure_account_id`, kept with `usermod -c`), in the token as `acct` and sent to nginx as X-Account. PAM reads `/etc`, so the
   four account files are copied to the volume after a change and back at a start (a bind mount
   over them fails: useradd renames over them).
+  API tokens (for the services behind nginx): `POST /auth/api/token?aud=flm`, from a live login
+  (never from an API token), gives a JWT with `aud: flm`, the login's `sub`, `acct`, `sid` and `ses`
+  (so logout and a revoked session end it), a week by default (AI_AUTH_API_LIFETIME). nginx's
+  `/api/flm/` checks it with `/auth/verify?aud=flm` (`/_gate_flm`), sends the user and account as
+  X-Aicli-User and X-Aicli-Account to flm, and strips the token and the cookie. `/auth/verify`
+  refuses an API token for the page (no aud) and a login for an API (aud mismatch); no renewal for
+  an API token. The page's agents panel has the "new API token" button.
 - **t/** – tests, **PLAN.md** – open work and ideas.
 
 ## How a turn works
@@ -623,6 +630,7 @@ Other APIs are reached through an OpenAI compatible gateway, such as LiteLLM or 
 | `t/135_error_display.t` | the errors of a tool read whole on the page (a line is not cut at the terminal width there; an error has up to 40 lines, a result 8) |
 | `t/134_history_tools.t` | the history of a session on the page: the tool calls of the chat with their results, in their place between what was said and the answers, a call without a result yet has none |
 | `t/133_favicon.t` | the icon of the pages: favicon.ico (16, 32, 48, 64, 256 pixels) and favicon.svg, a strawberry drawn for aicli (not emoji artwork); both pages link it; nginx serves it publicly; the local interface answers it without a login |
+| `t/136_api_token.t` | the API tokens of the services (`/auth/api/token`, aud=flm): issued from a login only, verified with `?aud=flm` (a login refused for it, an API token refused for the page), no renewal, a user that is not an account, a token past its time, the end at logout |
 | `t/132_account_id.t` | the account ID of a login in the passwd comment: the fifth subfield, the other subfields kept, made once, read back without the dashes, the UUID's form and version, a login not in the passwd refused |
 | `t/129_page_accounts.t` | the page's accounts: the login's name (none, a bad one, the local operator), what an account sees (its sessions, projects, busy list, the page's state), the events (each to its account, the models to all, a failure of a session to its account), the routes an account may not use (message, switch, delete, rename, pod, a session in another's project) |
 | `t/130_project_admin.t` | the page's projects: created in the login's account and switched to (names checked, a taken name, a login with no account), renamed only without sessions (same account), deleted with its sessions and files only on force, never the page's own project, nothing of another account touched; the local operator's account/project |
