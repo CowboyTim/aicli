@@ -69,6 +69,34 @@ its own when it is needed, not as a pod. A tool is a fork/exec in that container
   (the project, the program, the arguments, the timeout) and gets the result back; the
   files do not pass through the broker.
 
+## Decided: a thin ai.pl image, device images per kind of hardware
+
+The `ai.pl` image (the `dev` stage) keeps only what every session needs: some dev tools
+(python3, make, cmake, pkg-config, the C/C++ toolchain), image conversion (ImageMagick, and
+its `convert` tool), ffmpeg, the perl tool's modules (PDL, Audio::Wav), lame, qrencode and
+the pipewire recorder for voice. lua, strace and the device programs are out. It is kept
+as thin as possible. Hardware tools do not go in it.
+
+Each kind of hardware has its own image, built from this project or next to it, and that
+image is also a remote agent: it installs `ai.pl` as a library and runs `ai.pl --agent`
+with the enrollment's tags (`arduino`, `rocm`, `android`, `usb-meter`, `rtl-sdr`, `nrf`).
+Its programs are the ones of the image (`--programs`), so the jobs it takes are the
+programs it can run. The device images are: arduino (arduino-cli), rocm (the GPU stack),
+android (adb and the SDK), usb-meter (usb_logger), rtl-sdr (rtl-sdr tools), nrf (nrfutil,
+the BLE sniffer).
+
+- An agent image starts from the thin image or from its own base, whichever keeps it
+  smaller. It holds ai.pl's agent code and no model key.
+- The devices of a device image come from its host through its own run options, not from
+  the image. `aicli.sh` shares no hardware any more: its device flags are gone.
+- Enrollment and tags are as now (`ai.pl --enroll ... --tags`). A job for a tag goes only
+  to an agent with it.
+
+Built: the thin `dev` stage and the wrapper without device flags (`aicli.sh` has no
+--rocm, --arduino, --usb, --rtlsdr, --nrf-sniffer or --bluetooth; `aicli-devices.sh` is gone).
+Not built: the device images, which go in their own repository. Their repository and the
+run options per device are for that repository.
+
 ## Open: the stack (pods, registry, auth, deploy)
 
 - **First real run on the host.** Not tested here (no Docker, Podman or PAM in
@@ -235,8 +263,9 @@ account in its path. Renaming a login does not move its projects.
 
 - **Devel probe counts:** `devel` reports `lua: 0` and `python: 1` on the
   test machine. Check what the probes count and whether they are right.
-- **Hardware tests:** `--usb`, `--rtlsdr`, `--nrf-sniffer`, `--bluetooth` have
-  not been run against real devices in a while.
+- **Hardware:** the device images (in their own repository) are not built yet; the
+  devices were last run through the removed `aicli.sh` flags, so they have not been checked
+  since the move.
 
 ## Ideas, not started
 

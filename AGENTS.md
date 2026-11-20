@@ -229,7 +229,8 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   adds the GitHub Actions cache). CI still uses `docker build`.
   The Dockerfile has three stages: `system` (the apt installs both images
   share), `base` (ai.pl and the basic unix tools) and `dev` (the default
-  target: languages, ImageMagick, radios, the nRF tools, the devel lists). The
+  target: python3, the C/C++ toolchain, ImageMagick, ffmpeg, PDL, lame, the devel lists;
+  no hardware tools, those are device images in their own repository). The
   package installs come before the `COPY` of the code in each stage, so a code
   change keeps the build cache; keep it that way when adding a package.
 - **broker.pl** – the control plane of the remote agents (no pods, no engine, no project
