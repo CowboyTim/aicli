@@ -1,13 +1,17 @@
-# Build definition for the base image of the device images in this directory (pods/): the basic
-# tools, the toolchains, and ai.pl fetched from GitHub at AICLI_REF (see Dockerfile and README.md).
+# Build definition for the images of this directory (pods/): the base image (the basic tools,
+# the toolchains, and ai.pl fetched from GitHub at AICLI_REF), and the device images built on it:
+# rocm, arduino and android. bash is the base image under its own name (see README.md).
 #
 #   docker buildx bake                 build base into the local image store
+#   docker buildx bake local           build every image into the local image store
+#   docker buildx bake arduino         build one image (also rocm, android, bash)
 #   docker buildx bake --print         show the resolved configuration
-#   docker buildx bake --pull          also pull a fresh base image
+#   docker buildx bake --pull          also pull fresh base images
 #
-# The image also gets the tag ${REGISTRY}/pod-base:latest, the name the device images are
-# built FROM when they are pulled from the registry. To push it:
-#   docker push $REGISTRY/pod-base:latest
+# Each image gets two tags: ${IMAGE_REPO}:<kind> for local use, and ${REGISTRY}/pod-<kind>:latest,
+# which is the name to push and pull (the device images are built from the registry's base
+# image, see README.md). To push one:
+#   docker push $REGISTRY/pod-arduino:latest
 #
 # Every variable can be overridden from the environment, e.g.
 #   AGENT_UID=$(id -u) AGENT_GID=$(id -g) docker buildx bake
@@ -41,6 +45,11 @@ variable "UBUNTU_IMAGE" {
   default = "ubuntu:24.04"
 }
 
+variable "ROCM_IMAGE" {
+  # Pin to a digest or ROCm version tag for reproducible builds.
+  default = "rocm/dev-ubuntu-24.04:latest"
+}
+
 variable "AGENT_USER" {
   default = "agent"
 }
@@ -53,8 +62,70 @@ variable "AGENT_GID" {
   default = "1000"
 }
 
+# rocm: the TheRock nightly index for one GPU family (gfx1151 = Strix Halo)
+variable "TORCH_INDEX" {
+  default = "https://rocm.nightlies.amd.com/v2/gfx1151/"
+}
+
+variable "TORCH_VERSION" {
+  default = "2.9.1+rocm7.13.0a20260513"
+}
+
+variable "TORCHVISION_VERSION" {
+  default = "0.24.0+rocm7.13.0a20260513"
+}
+
+variable "TORCHAUDIO_VERSION" {
+  default = "2.9.0+rocm7.13.0a20260513"
+}
+
+# arduino
+variable "ARDUINO_CLI_VERSION" {
+  default = "1.5.1"
+}
+
+variable "ARDUINO_BOARD_URLS" {
+  default = "https://espressif.github.io/arduino-esp32/package_esp32_index.json"
+}
+
+variable "ARDUINO_CORES" {
+  default = "esp32:esp32"
+}
+
+# arduino: usb-multimeter on PyPI (usb_logger)
+variable "USB_METER_VERSION" {
+  default = "3.0.0"
+}
+
+# arduino: nrfutil's refresh (run.sh --update changes it, the layer is built again)
+variable "NRFUTIL_REFRESH" {
+  default = "0"
+}
+
+# android: the build number in commandlinetools-linux-<n>_latest.zip (developer.android.com/studio)
+variable "ANDROID_CMDLINE_TOOLS" {
+  default = "15859902"
+}
+
+variable "ANDROID_PLATFORM" {
+  default = "android-35"
+}
+
+variable "ANDROID_BUILD_TOOLS" {
+  default = "35.0.0"
+}
+
+variable "GRADLE_VERSION" {
+  default = "8.14.6"
+}
+
 group "default" {
   targets = ["base"]
+}
+
+# every image, into the local image store
+group "local" {
+  targets = ["base", "bash", "rocm", "arduino", "android"]
 }
 
 # Shared settings; the leading underscore marks it as not meant to be built alone
@@ -63,12 +134,14 @@ target "_common" {
   dockerfile = "Dockerfile"
   platforms  = ["linux/amd64"]
   args = {
-    USERNAME = AGENT_USER
-    UID      = AGENT_UID
-    GID      = AGENT_GID
+    USERNAME  = AGENT_USER
+    UID       = AGENT_UID
+    GID       = AGENT_GID
+    AICLI_REPO = AICLI_REPO
+    AICLI_REF  = AICLI_REF
   }
   # Load into the local image store (like "docker build --load"),
-  # so "docker run" and the broker's push can see the result.
+  # so "docker run" and the push can see the result.
   output = ["type=docker"]
 }
 
@@ -78,7 +151,55 @@ target "base" {
   tags     = ["${IMAGE_REPO}:base", "${REGISTRY}/pod-base:latest"]
   args = {
     BASE_IMAGE = UBUNTU_IMAGE
-    AICLI_REPO = AICLI_REPO
-    AICLI_REF  = AICLI_REF
+  }
+}
+
+# bash: the base image, under the name run.sh uses for it
+target "bash" {
+  inherits = ["_common"]
+  target   = "base"
+  tags     = ["${IMAGE_REPO}:bash", "${REGISTRY}/pod-bash:latest"]
+  args = {
+    BASE_IMAGE = UBUNTU_IMAGE
+  }
+}
+
+target "rocm" {
+  inherits = ["_common"]
+  target   = "rocm"
+  tags     = ["${IMAGE_REPO}:rocm", "${REGISTRY}/pod-rocm:latest"]
+  args = {
+    BASE_IMAGE          = ROCM_IMAGE
+    TORCH_INDEX         = TORCH_INDEX
+    TORCH_VERSION       = TORCH_VERSION
+    TORCHVISION_VERSION = TORCHVISION_VERSION
+    TORCHAUDIO_VERSION  = TORCHAUDIO_VERSION
+  }
+}
+
+target "arduino" {
+  inherits = ["_common"]
+  target   = "arduino"
+  tags     = ["${IMAGE_REPO}:arduino", "${REGISTRY}/pod-arduino:latest"]
+  args = {
+    BASE_IMAGE          = UBUNTU_IMAGE
+    ARDUINO_CLI_VERSION = ARDUINO_CLI_VERSION
+    ARDUINO_BOARD_URLS  = ARDUINO_BOARD_URLS
+    ARDUINO_CORES       = ARDUINO_CORES
+    USB_METER_VERSION   = USB_METER_VERSION
+    NRFUTIL_REFRESH     = NRFUTIL_REFRESH
+  }
+}
+
+target "android" {
+  inherits = ["_common"]
+  target   = "android"
+  tags     = ["${IMAGE_REPO}:android", "${REGISTRY}/pod-android:latest"]
+  args = {
+    BASE_IMAGE            = UBUNTU_IMAGE
+    ANDROID_CMDLINE_TOOLS = ANDROID_CMDLINE_TOOLS
+    ANDROID_PLATFORM      = ANDROID_PLATFORM
+    ANDROID_BUILD_TOOLS   = ANDROID_BUILD_TOOLS
+    GRADLE_VERSION        = GRADLE_VERSION
   }
 }

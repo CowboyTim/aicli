@@ -49,10 +49,21 @@ docker push $AICLI_REGISTRY_HOST/aicli/pod-base:latest
 
 ## Device images
 
-Not built yet. Each kind will be a `FROM` of `base` with its own programs, and an entrypoint
-that starts `ai.pl --agent` with the kind's tags (`arduino`, `rocm`, `android`, `usb-meter`,
-`rtl-sdr`, `nrf`). The devices are not in the image: they are passed in at run time by the
-host, with the options of each kind.
+Each device image is a stage of the `Dockerfile`, built `FROM base`, and an image
+of `docker-bake.hcl`:
 
-Work on the kinds (android, bash, arduino, rocm) happens here, in the same directory: the
-devices of a kind are set by `run.sh`, and its `entrypoint.sh` gets the same device list.
+| image | stage | what it adds |
+|-------|-------|--------------|
+| `bash` | base | the basic tools, Rust, nodejs, npm, go (the base image, under its own name) |
+| `rocm` | rocm | the ROCm image (`ROCM_IMAGE`), a Python venv with torch (TheRock's ROCm wheels for `TORCH_INDEX`), numpy, pyarrow, soundfile, pillow, transformers |
+| `arduino` | arduino | arduino-cli with the ESP32 core, usb_logger (usb-multimeter, via pipx), nrfutil with ble-sniffer |
+| `android` | android | JDK 17, the Android SDK (platform, build tools, platform-tools), Gradle |
+
+`bake` builds one with `docker buildx bake arduino`, or all with `docker buildx bake local`.
+`run.sh --arduino`, `--android`, `--rocm` and `--bash` run them, with the devices of
+the flavor passed in.
+
+The entrypoint (`entrypoint.sh`) makes the device nodes that `run.sh` asks for, then runs
+`ai.pl` for options (`-x`, `--flag ...`), the command given, or bash with no arguments.
+Each image is an `ai.pl` container. The device images as remote agents (`ai.pl --agent`
+with their tags) come next: see PLAN.md, "a thin ai.pl image, device images per kind of hardware".

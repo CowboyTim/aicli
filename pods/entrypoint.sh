@@ -1,6 +1,6 @@
 #!/bin/bash
-# Container entrypoint: makes the serial and USB device nodes that run.sh asks for,
-# then runs the command given (no arguments: bash).
+# Container entrypoint: makes the serial and USB device nodes that run.sh asks for, then runs
+# ai.pl (for options), or the command given (no arguments: bash).
 set -e
 
 # Serial device nodes. run.sh sets SERIAL_NODES ("ttyUSB:188 ttyACM:166") and
@@ -26,8 +26,12 @@ if [ "${USB_METERS:-0}" = 1 ]; then
     usb-meter-nodes -q || echo "entrypoint: usb-meter-nodes failed" >&2
 fi
 
+# the arguments: none is a shell; options (-x, --flag ...) are ai.pl's; anything else is
+# run as a command (bash -c ..., arduino-cli ..., ai.pl --agent ...)
 if [ $# -eq 0 ]; then
     exec bash
 fi
-
-exec "$@"
+case "$1" in
+    -*) exec /usr/bin/perl /ai.pl "$@" ;;
+    *)  exec "$@" ;;
+esac
