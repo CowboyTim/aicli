@@ -307,7 +307,7 @@ from a session that is busy. A worker that sits idle for C<AI_WORKER_IDLE>
 seconds (900 by default) is stopped; it starts again with its next message.
 Ctrl-C ends the interface and its workers; the stop button of the page stops a
 turn. The directory the interface starts in is the root: the directories
-directly under it are the projects. A session is made in a project, its worker
+of the accounts under it hold the projects (C<root/account/project>). A session is made in a project, its worker
 may only write there (and in the temp directory and its own session), and the
 prompt of a new session carries the project's C<AGENTS.md>. Slash commands and
 files come later.

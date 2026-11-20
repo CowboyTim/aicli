@@ -1,20 +1,3 @@
 {
-  "root": "/projects",
-  "engine": "/run/engine/podman.sock",
-  "socket": "/run/aicli-broker/broker.sock",
-  "registries": {
-    "${AICLI_REGISTRY_HOST}": {"username_env": "AICLI_REGISTRY_USER", "password_env": "AICLI_REGISTRY_PASSWORD"}
-  },
-  "pods": {
-    "base": {
-      "image": "${AICLI_POD_REGISTRY}/pod-base:latest",
-      "programs": ["bash", "perl", "grep"],
-      "note": "the basic tools of every session: bash, perl and grep (general dev image)"
-    }
-  },
-  "max_pods": 4,
-  "idle_minutes": 30,
-  "memory": "2g",
-  "pids": 512,
-  "userns": "keep-id"
+  "socket": "/run/aicli-broker/broker.sock"
 }

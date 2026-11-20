@@ -30,7 +30,7 @@ our ($active, %worker, %model_of, $models, $OUTBOX, $IDLE, $last_error, $BROKER_
 
 # a project's name in its account's directory: a letter or digit, then letters, digits, '.', '_' or '-'
 our $PROJECT_RE = qr/[A-Za-z0-9][A-Za-z0-9._-]{0,62}/;
-our $ACCOUNT_RE = qr/[A-Za-z0-9][A-Za-z0-9_]{0,95}/; # an account: a directory of the root and the part of a pod's name before its
+our $ACCOUNT_RE = qr/[A-Za-z0-9][A-Za-z0-9_]{0,95}/; # an account: a directory of the root (an account ID is a UUID without its dashes, see auth.pl)
 # dash, so no dash in it (an account ID is a UUID without its dashes, see auth.pl)
 
 $IDLE = 900;
@@ -251,9 +251,9 @@ sub _recognize {
 
 sub queued { return scalar @queue }
 
-# --- the pods: the broker (broker.pl) starts and stops the dev pods of the projects ---
-# The master asks the broker over its socket, in a child of the loop (the request
-# waits for the engine: the loop must not). The answer comes to a callback.
+# --- the broker (broker.pl): the agents of the users (remote_hub.pm) ---
+# The master asks the broker over its socket, in a child of the loop (the request waits for
+# the broker's answer: the loop must not). The answer comes to a callback.
 
 sub _broker_ask {
     my ($req, $cb) = @_;
@@ -283,44 +283,6 @@ sub _broker_ask {
         my $r = eval {$::JSON->decode($out // '')};
         $r = {ok => JSON::XS::false(), error => "the broker answered nothing usable"} unless ref($r) eq 'HASH';
         $cb->($r);
-    });
-    return;
-}
-
-# the projects, each with the state of its pod, from the broker's list
-sub _pods_data {
-    my ($r, $acct) = @_;
-    # the panel shows the base pods (aicli-base-<account>-<project>): the basic tools of a project
-    my %pod;
-    for my $p (@{$r->{pods} // []}) {
-        next unless ($p->{name} // '') =~ m/\Aaicli-base-([A-Za-z0-9_]+)-(.+)\z/;
-        $pod{"$1/$2"} = $p->{status} // '';
-    }
-    return {
-        ok       => $r->{ok} ? JSON::XS::true() : JSON::XS::false(),
-        error    => $r->{error} // '',
-        available => length($BROKER_SOCKET // '') || $BROKER_ASK ? JSON::XS::true() : JSON::XS::false(),
-        projects => [map {{name => $_, open => exists $pod{$_} ? JSON::XS::true() : JSON::XS::false(),
-                           status => $pod{$_} // 'not started'}} grep {_visible($acct, $_)} @{ai::project_dirs()}],
-    };
-}
-
-sub _refresh_pods {
-    _broker_ask({op => 'list'}, sub {
-        my ($r) = @_;
-        publish_each(pods => sub { _pods_data($r, $_[0]) });
-    });
-    return;
-}
-
-# the page asked for an open, close or list of a project's pod
-sub _pod_request {
-    my ($op, $project) = @_;
-    _broker_ask({op => $op, project => $project}, sub {
-        my ($r) = @_;
-        publish(broker => {op => $op, project => $project, ok => $r->{ok} ? JSON::XS::true() : JSON::XS::false(),
-                           error => $r->{error} // '', pod => $r->{pod} // ''}, project => $project);
-        _refresh_pods();
     });
     return;
 }
@@ -804,7 +766,7 @@ sub _visible {
     return defined $owner && $owner eq $acct ? 1 : 0;
 }
 
-# may an account use a project (open its pods, make or switch its sessions)? Nothing is used
+# may an account use a project (make or switch its sessions)? Nothing is used
 # for the root or for a project that is not there
 sub _owns {
     my ($acct, $rel) = @_;
@@ -846,7 +808,7 @@ sub publish {
     return;
 }
 
-# an event whose data is made for each client (the account's sessions, projects, pods)
+# an event whose data is made for each client (the account's sessions, projects)
 sub publish_each {
     my ($type, $make) = @_;
     return unless @clients;
@@ -1208,7 +1170,6 @@ sub _dispatch {
         _queue($cn, _frame(state => _master_state($acct)));
         _queue($cn, _frame(history => _history_data($active))) if _visible($acct, _active_rel());
         _queue($cn, _frame(sessions => _sessions_data($acct)));
-        _refresh_pods();
         # the models: the list of the last time, or asked for now
         if (defined $models) {
             _queue($cn, _frame(models => _models_out()));
@@ -1294,18 +1255,6 @@ sub _dispatch {
         return _json($cn, 400, {error => ($last_error || 'the session cannot be used')})
             unless _activate($name, new => $new, project => (ref($d->{project}) ? undef : $d->{project}));
         return _json($cn, 200, {session => _shown_active($acct)});
-    }
-    if($p eq '/pod' and $m eq 'POST'){
-        my $d = eval {$::JSON->decode($body)};
-        my ($op, $project) = ref($d) eq 'HASH' ? ($d->{op}, $d->{project}) : ();
-        return _json($cn, 400, {error => 'a JSON object with op (open, close or list) and project is wanted'})
-            unless defined $op and $op =~ m/\A(?:open|close|list)\z/;
-        return _json($cn, 400, {error => 'a project name is wanted'})
-            if $op ne 'list' and (!defined $project or ref($project) or !length($project));
-        return _json($cn, 403, {error => "there is no project '$project' of yours"})
-            if $op ne 'list' and !_owns($acct, $project);
-        if ($op eq 'list') { _refresh_pods() } else { _pod_request($op, $project) }
-        return _json($cn, 202, {ok => \1});
     }
     # the agents of the user (remote_hub.pm, through the broker): the enrollment token (shown
     # once), the list, a revocation. The user is the login's (nginx sends it as X-Aicli-User).
@@ -1434,7 +1383,7 @@ sub _dispatch {
     if($p eq '/state' and $m eq 'GET'){
         return _json($cn, 200, _master_state($acct));
     }
-    return _respond($cn, 405, 'text/plain', "method not allowed\n") if $p =~ m{^/(events|message|session|session/delete|session/rename|project|pod|voice|abort|state|rewind)$};
+    return _respond($cn, 405, 'text/plain', "method not allowed\n") if $p =~ m{^/(events|message|session|session/delete|session/rename|project|voice|abort|state|rewind)$};
     return _respond($cn, 404, 'text/plain', "not found\n");
 }
 

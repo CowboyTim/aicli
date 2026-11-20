@@ -33,30 +33,53 @@ user's view) and AGENTS.md (the code, and "Status" for the history), not here.
 - **Terminals other than tmux 3.4** for the footer (kitty and others). Emoji
   and wide-character widths may differ.
 
+## Decided: no pods; the ai.pl container holds the tools
+
+Built (code and docs; tests t/107, t/110, t/124, t/127, t/129, t/131, t/135): the pod kinds, the
+engine and the pod tools are gone; the broker is the control plane of the remote agents only; the page
+has no pods panel; `aicli.sh --broker` mounts the broker's socket and needs no `--root`.
+Still to decide: the `pods/` directory (its base image is no longer built or used; the `dev` stage of
+the Dockerfile is the `ai.pl` container), and how a session's job reaches a remote agent (the broker's
+`exec` is there, nothing sends it yet).
+
+There are no pods. The unit that holds the tools is an `ai.pl` container (the agent of
+the web interface, or a remote agent). The minimal image has the standard tools
+(bash, perl, grep, find, and the basic unix tools); a toolchain is added to an image of
+its own when it is needed, not as a pod. A tool is a fork/exec in that container, as
+`_run` does now, confined by landlock, with no key in the child.
+
+- **Projects are where they are now.** An `ai.pl` that is not remote works on the
+  projects under its root (`account/project`). A remote `ai.pl` is user-specific (one
+  per user, from the agent's enrollment), and holds that user's projects on its own
+  machine, in the same `account/project` layout. The structure stays: the account is
+  the user, the project is a directory under it.
+- **The broker stays.** Remote agents connect in to it (`/agents/` through nginx, the
+  polls, the results), and it routes a job to the agent of the job's account and tags.
+  Without remote agents, the broker has nothing to do; the local `ai.pl` needs none.
+- **What is removed:** the pod kinds and their `broker.json` entries, the per-project
+  pods, the model's pod tools (`pods`, `pod_open`, `pod_close`, `pod_run`), the pods
+  panel of the page, `_pod_run` and `AI_POD_ROOT` for bash, perl and grep, the reaper
+  and the open-pod cap. The `pods/` directory is the image of the minimal `ai.pl`
+  container (the tools), not pod images.
+- **Every `ai.pl` is a container with its tools in it.** The local `ai.pl` of the web
+  interface (the compose `agent` service) runs its tools in its own container, not on
+  the host. The projects it works on are the ones under its root, as now.
+- **A remote job stays on the remote.** The project's files are on the remote agent's
+  machine, in its container, and the job's work is done there. The broker sends a job
+  (the project, the program, the arguments, the timeout) and gets the result back; the
+  files do not pass through the broker.
+
 ## Open: the stack (pods, registry, auth, deploy)
 
 - **First real run on the host.** Not tested here (no Docker, Podman or PAM in
   the sandbox): the auth login through the page, `user add` and `user passwd`
   with the terminal prompts, the `chpasswd -e` step inside the auth container,
-  and the broker's first pull from `AICLI_REGISTRY_HOST` with its login.
-- **Podman's field names.** The broker's create request uses libpod's
-  `devices`, `groups`, `seccomp_profile_path` and `ipc`. Check them against the
-  running Podman: `podman container inspect` of a `-dev` container after its
-  first open.
-- **Devices for rootless Podman.** Serial, USB and the ROCm GPU nodes are owned
-  by groups (`dialout`, `render`, `video`) that a rootless container with
-  `keep-id` cannot use. Undecided: a udev rule on the host that gives the user
-  access (`TAG+="uaccess"` or a mode), or a rootful Podman for the broker's pods.
-- **Pod images.** Built by `pods/docker-bake.hcl` (bash, arduino, rocm, android,
-  node), not yet built or pushed. The `rocm` kind's `seccomp` and `ipc` settings
-  are taken from the Docker side of the old launcher; not checked on a GPU.
+  and the agent images' first pull from `AICLI_REGISTRY_HOST` with its login.
 - **Brute-force protection for logins.** `auth/aicli-auth.pam` has only
   `pam_unix`. A `pam_faillock` sketch needs a test in the auth container before
   it is committed. The `metrics_api` PAM file (a copy kept out of the repo) was
   compared: its `pam_selinux`, `pam_permit` fall-through and listfile rules do
   not fit.
-- **The pods panel** in the web page shows the base pods only, and it is not
-  refreshed by the model's own pod calls.
 - **Git history** still has the domain and the public IPv6 prefix in older
   commits (removed from the tree). Rewriting `main` is undecided.
 - **Flaky test:** `t/100_ui.t` ("the slow turn starts") failed once in a full
@@ -98,7 +121,8 @@ the project on the agent (see the parts below).
 Decided: the hardware is reached through agents that call in. The broker never starts
 an agent (it has no /dev); the user starts it on the machine that has the devices, and it
 calls back. The agent images rocm, arduino and android are built and run outside this
-project. `base` is a pod, started by the broker, built here. An agent is the
+project. The base pod is gone: the agent container holds the tools (see "Decided: the tools
+run in the agent's container"). An agent is the
 unit that does the work: `ai.pl --agent`, a mode of ai.pl that loads no chat and
 holds no model key, on a machine (a Raspberry Pi with a Zigbee stick, a DGX Spark,
 a Strix Halo box, a laptop, or the broker's own host). It runs jobs in its own
@@ -138,9 +162,9 @@ as any client does; no client certificate). The agent's credential is its token.
   the user who enrolled it. Without this, one user's token could claim another user's
   tags. Projects can later be shared with other users, which is a role question not
   designed yet.
-- **Kinds decide where they run:** a kind without tags runs in a local pod (Podman,
-  as now); a kind with tags runs on a connected agent that has all of them. No agent
-  connected: `pod_run` says so and does not fall back to a local pod.
+- **Jobs decide where they run:** a job runs by fork/exec on the agent that has its tags
+  (the agent's container has the tools). No agent connected: the job is refused with the
+  reason; it does not fall back to a local pod.
 - **What a job carries:** the project's name, a commit the agent must check out, the
   program and its arguments (no shell), the timeout, and the output cap. Nothing else.
   The broker checks the program against the kind's allowlist before it sends the job.
@@ -244,6 +268,9 @@ account in its path. Renaming a login does not move its projects.
   hash) and stores the hash with `chpasswd -e`.
 - **A domain or a public address in the repo.** They are settings in `.env`.
 - **Pods with bluetooth or host networking.** Not offered to pods.
+- **A base pod for the session's tools.** The agent container is the toolchain and
+  the sandbox; a pod per project for bash, perl and grep only added a registry pull, a
+  network path to the engine and a second place to keep the tools in step.
 - **Tool confirmation or an allow-list.** The container is the sandbox.
 - **Sub-agents on FastFlowLM.** The NPU is kept for voice; the `agent` tool is
   not offered with `AI_PROVIDER=flm`.

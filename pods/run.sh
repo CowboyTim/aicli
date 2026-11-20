@@ -26,9 +26,9 @@
 # every ttyUSB* (major 188), ttyACM* (major 166) and USB (189) device is allowed with
 # a device cgroup rule, and the entrypoint mknods the nodes in the container, so
 # boards plugged in or re-enumerated after start work without a restart. Nothing
-# from the host's /dev is mounted. The pods the broker opens (broker.json) are
-# configured in the same terms, but without these cgroup rules, which rootless
-# Podman cannot apply; see README.md, "The pods".
+# from the host's /dev is mounted. The agents' containers (built outside this project)
+# are configured in the same terms, but without these cgroup rules, which rootless
+# Podman cannot apply; see PLAN.md, "Open: remote agents".
 #
 # USB: the power meters (JT-UM120, FNIRSI) are HID devices that usb_logger reads
 # through libusb. The entrypoint mknods /dev/bus/usb/<bus>/<dev> for the meters present

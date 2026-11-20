@@ -2,7 +2,7 @@
 # the page's account of a request: the account ID nginx sends (X-Aicli-Account, a UUID without
 # its dashes, from the login's passwd comment), behind the gate only; a missing or bad one owns
 # nothing; the local operator (no gate) has none of that and sees all. A login with a dash or an
-# address has an ID like any other, so its projects, pods and page work the same.
+# address has an ID like any other, so its projects and page work the same.
 use strict; use warnings;
 
 use Test::More;
@@ -45,14 +45,11 @@ my $mine = '0123456789abcdef0123456789abcdef';
 mkdir "$root/$mine" or die "mkdir: $!";
 mkdir "$root/$mine/proj" or die "mkdir: $!";
 is_deeply(ai::project_dirs(), ["$mine/proj"], "its project is listed");
-my $b = broker->new(root => $root, host_root => $root, socket => "$base/unused.sock",
-    pods => {base => {image => 'reg.example/aicli/pod-base:latest', programs => ['bash']}});
-ok($b->project_name("$mine/proj"), "the broker takes the project");
-is(broker::_pod_name('base', "$mine/proj"), "aicli-base-$mine-proj", "its pod is named with the ID");
-my %run = broker::_running(JSON::XS->new->encode([{Name => "aicli-base-$mine-proj", Status => 'Running'}]));
-ok($run{"base/$mine/proj"}, "and the running pod reads back with the ID and the project");
+my $b = broker->new(socket => "$base/unused.sock");
+ok($b->project_name("$mine/proj"), "the broker takes the project's name (account ID and project)");
+ok(!$b->project_name("$mine/../proj"), "and a name with a dot-dot is not one");
 
-# the page: a project made for that login, and its pods panel
+# the page: a project made for that login
 my ($sa, $sb);
 socketpair($sa, $sb, Socket::AF_UNIX(), Socket::SOCK_STREAM(), Socket::PF_UNSPEC()) or die $!;
 $sa->blocking(0); $sb->blocking(0);
@@ -68,10 +65,9 @@ for (1 .. 50) {
 like($raw, qr/HTTP\/1\.1 200/, "a project for that login: 200");
 ok(-d "$root/$mine/lab", "made in its account");
 
-my $pods = ui::_pods_data({ok => 1, pods => [{name => "aicli-base-$mine-proj", status => 'running'}]}, $mine);
-my ($p) = grep {$_->{name} eq "$mine/proj"} @{$pods->{projects}};
-ok($p && $p->{open}, "the pods panel shows its base pod as open");
-is_deeply([map {$_->{name}} @{ui::_pods_data({ok => 1, pods => []}, 'ffffffffffffffffffffffffffffffff')->{projects}}], [],
+is_deeply([grep {ui::_visible($mine, $_)} @{ai::project_dirs()}], ["$mine/lab", "$mine/proj"],
+    "its own projects are its view");
+is_deeply([grep {ui::_visible('ffffffffffffffffffffffffffffffff', $_)} @{ai::project_dirs()}], [],
     "another account sees none of it");
 
 done_testing();

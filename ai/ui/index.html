@@ -36,11 +36,6 @@
   #model, #session, #project { max-width: 100% !important; }
   .projadmin { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
   .projadmin input { min-width: 0; width: 9em; }
-  #pods { flex: 1 1 100%; font-size: 13px; color: var(--muted); }
-  #pods .podhead { margin-bottom: 4px; }
-  #pods ul { list-style: none; margin: 0; padding: 0; }
-  #pods li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 0; }
-  #pods button { font-size: 13px; padding: 2px 8px; }
   #agents { flex: 1 1 100%; font-size: 13px; color: var(--muted); }
   #agents .agenthead { margin-bottom: 4px; }
   #agents ul { list-style: none; margin: 0; padding: 0; }
@@ -138,10 +133,6 @@
       <option value="simple">simple</option>
       <option value="cards">cards</option>
     </select></label>
-    <div id="pods">
-      <div class="podhead">pods <span id="podnote"></span></div>
-      <ul id="podlist"></ul>
-    </div>
     <div id="agents">
       <div class="agenthead">agents <button type="button" id="agentnew">new enrollment token</button> <span id="agentnote"></span></div>
       <div class="enroll" id="agentenroll" hidden>
@@ -197,8 +188,6 @@
   var model = document.getElementById("model");
   var session = document.getElementById("session");
   var project = document.getElementById("project");
-  var podlist = document.getElementById("podlist");
-  var podnote = document.getElementById("podnote");
   var agentlist = document.getElementById("agentlist");
   var agentnote = document.getElementById("agentnote");
   var agentenroll = document.getElementById("agentenroll");
@@ -549,35 +538,6 @@
     }).catch(function (err) { add("error", String(err)); });
   });
 
-  // the pods: one row per project, with its state and an open or close button. The
-  // broker answers each request (a broker event); the list is sent again after it.
-  function podAsk(op, projectName) {
-    fetch("/pod", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ op: op, project: projectName })
-    }).then(function (r) {
-      if (!r.ok) { return r.json().then(function (j) { add("error", j.error || r.statusText); }); }
-    }).catch(function (err) { add("error", String(err)); });
-  }
-  function setPods(d) {
-    podlist.textContent = "";
-    podnote.textContent = d.ok ? (d.available ? "" : "no broker (start with aicli.sh --broker)") : (d.error || "");
-    (d.projects || []).forEach(function (p) {
-      var li = document.createElement("li");
-      var label = document.createElement("span");
-      label.textContent = p.name + "  " + p.status;
-      var btn = document.createElement("button");
-      btn.type = "button";
-      btn.textContent = p.open ? "close" : "open";
-      btn.disabled = !d.available;
-      btn.addEventListener("click", function () { podAsk(p.open ? "close" : "open", p.name); });
-      li.appendChild(label);
-      li.appendChild(btn);
-      podlist.appendChild(li);
-    });
-  }
-
   // the agents of the user: a new enrollment token (shown once, copied to the agent's machine), the
   // list of the agents enrolled with it, and a revoke for each. The broker answers the page here.
   function agentsCall(path, body) {
@@ -663,15 +623,6 @@
   // the sessions whose turns run now (a mark in the list): the others are not shown here
   es.addEventListener("busy", function (e) {
     setSessions(undefined, undefined, JSON.parse(e.data).list || []);
-  });
-  es.addEventListener("pods", function (e) { setPods(JSON.parse(e.data)); });
-  es.addEventListener("broker", function (e) {
-    var d = JSON.parse(e.data);
-    if (d.ok) {
-      add("usage", d.op + " " + d.project + (d.pod ? " (" + d.pod + ")" : "") + ": done");
-    } else {
-      add("error", d.op + " " + d.project + ": " + d.error);
-    }
   });
   // the conversation of the session, drawn again on connect and after a switch
   es.addEventListener("history", function (e) {

@@ -247,7 +247,7 @@ token.
 |--------|---|
 | `--ui [port]` | serve the interface (default 8080); continues the last session of this directory |
 | `--new` | with `--ui`: a new session instead of the last one of this directory |
-| `--root DIR` (`aicli.sh`) | mount `DIR` as a whole: its directories are the projects, and the container starts in the current directory (which must be inside `DIR`). One container, one web interface for all projects |
+| `--root DIR` (`aicli.sh`) | mount `DIR` as a whole: the projects are the directories of its accounts (`DIR/<account>/<project>`), and the container starts in the current directory (which must be inside `DIR`). One container, one web interface for all projects |
 | `--ui-bind <address>` | the address to listen on: `127.0.0.1` (default), `::1`, `0.0.0.0` (any IPv4), `::` (any IPv6). The printed phone address is the one of this machine that a phone can reach, with a QR code on the terminal (`qrencode`) |
 | `--tls-cert <file> --tls-key <file>` | serve https, with a PEM certificate and key (needs `Net::SSLeay`, Debian `libnet-ssleay-perl`). A self-signed one: `openssl req -x509 -newkey rsa:2048 -nodes -days 365 -subj /CN=localhost -keyout key.pem -out cert.pem` |
 
@@ -537,117 +537,29 @@ for the main agent and becomes a job in the event loop for a sub-agent.
 
 ## The broker
 
-`docker compose up -d --build` runs the broker (`docker-compose.yaml`). It starts a
-dev pod for each project under `AI_PROJECTS`, through the rootless Podman of the
-host (`PODMAN_SOCKET`, owned by `BROKER_UID`). The broker is the only container
-with that socket; the agents reach it through the volume `aicli-broker`. A pod
-mounts its project and nothing else, runs unprivileged with its limits, and only
-images of `broker.json` are allowed. From a shell with the volume:
-`perl broker.pl open alpha`, `list`, `close alpha`. The web interface gets the same from
-its pods panel when it runs with `aicli.sh --broker --root DIR` (the broker's volume is
-mounted; without the flag the web interface does not reach the broker).
+`docker compose up -d --build` runs the broker (`docker-compose.yaml`). The broker is the
+control plane of the remote agents: it keeps the agents of the users (their enrollment, tags
+and token hashes), gives a job to an agent of the job's account that has the job's tags, and
+sends the answer back. It runs no program and holds no project.
 
-With `--broker`, `bash`, `perl` and `grep` run in the dev pod of the project the
-workspace is in, not in the agent's container. So a project's pod must be open before
-its tools work (the tool reports that otherwise). Each tool call starts a
-`podman exec` in that pod, which takes a fraction of a second. The file tools (read,
-write, edit) still run in the agent's container, on the same mounted directory.
-`AI_POD_TOOLS=0` runs the tools in the agent's container again.
+Every `ai.pl` runs its tools in its own container, the local one of the web interface and a
+remote agent alike. A remote agent's project is on its machine, under its `--work` directory,
+and the job runs there. The files never pass through the broker.
 
-The model works with the pods through four tools: `pods` (the projects, which of their
-pods are open, the kinds of pod with their programs, the cap), `pod_open PROJECT [KIND]`,
-`pod_close PROJECT [KIND]` and `pod_run KIND COMMAND`. See "The pods" below.
+The broker's Unix socket (`/run/aicli-broker/broker.sock`, in the volume `aicli-broker`) takes
+one JSON line per request:
 
-Host setup: install Podman, enable the user socket (`systemctl --user enable --now
-podman.socket`), and set `AI_PROJECTS`, `PODMAN_SOCKET`, `BROKER_UID`, `BROKER_GID`.
+- `exec`: a job for an agent: `project` (`account/project`), `tags` (the agent must have all
+  of them), `argv` (a program and its arguments, no shell) and `timeout` (seconds, at most 120).
+  The answer comes when the agent has run it: `exit` and `output` (base64).
+- `enroll_token`, `agents` and `agent_revoke`: a user's enrollment token, the user's agents, a
+  revocation. The web interface's agents page uses them through `aicli.sh --broker`.
 
-## The pods
+Anything else is refused. The broker checks the shape of a request; the agent checks the program
+against its own `--programs`.
 
-A pod is a container with a project's files at `/work`, where a few programs run for
-the agent. Each kind of pod is defined in `broker.json` (`pods`): the image (a registry
-reference), the programs it may run, a note the model sees, and the devices it needs.
-The pod image is built from `pods/` (see `pods/docker-bake.hcl`):
-
-| kind | image | programs | devices |
-|------|-------|----------|---------|
-| `base` | `pod-base` (general dev tools, Rust, nodejs, go) | `bash`, `perl`, `grep` | none; opened by the first basic call |
-
-A kind is a short lower-case name with no dash. A pod runs only the programs its kind
-lists: `pod_run base "perl -v"` runs in the base pod, and `arduino-cli` in the base pod is
-refused. A call opens its pod when it is closed (the cap still applies). `max_pods`
-(4 by default) limits the open pods of all kinds, `idle_minutes` (30) closes a pod that
-has not been used for that long, checked once a minute.
-
-### Which images the broker pulls
-
-`broker.json` has two lists. `pods` names each kind and its image; with `registries` in
-the config, every image must come from one of the listed registries, or the broker refuses to
-start. `registries` names the login of each: the names of two variables (`username_env`,
-`password_env`), never the values. The values are in the broker's environment, from `.env`
-(`AICLI_REGISTRY_USER`, `AICLI_REGISTRY_PASSWORD`). They are optional for the stack: compose starts without
-them, and only a pull from the registry (the broker's first pod open) needs them. A pull sends the login to its own registry
-only, as `X-Registry-Auth`.
-
-### Building and pushing the images
-
-The pod images go to the registry `$AICLI_REGISTRY_HOST`, outside this stack. The
-broker pulls from it, and it is named by `AICLI_POD_REGISTRY` (in `.env`, default
-`$AICLI_REGISTRY_HOST/aicli`).
-
-```
-cd pods
-docker buildx bake                    # the four images, into the local Docker image store
-docker login $AICLI_REGISTRY_HOST
-docker push $AICLI_REGISTRY_HOST/aicli/pod-base:latest
-```
-
-The bake file tags each image twice: `aicli-pod:<target>` for local use (`docker run`) and
-`<REGISTRY>/pod-<kind>:latest`, where REGISTRY defaults to `$AICLI_REGISTRY_HOST/aicli`
-(override it in the environment). The broker uses Podman's image store, which the Docker
-daemon does not share, so the pull from the registry is what makes an image visible to it.
-
-### Devices and groups
-
-The broker passes a kind's devices by name and adds the groups that own them, at open time,
-from its config:
-
-- `devices`: paths under `/dev`, globs allowed. A path that exists when the pod opens is
-  passed (`/dev/ttyACM*`, `/dev/kfd`); one that does not exist is left out, so a board
-  plugged in later is found by the next open.
-- `usb_ids`: `vid:pid`. The broker finds the device in sysfs and passes its
-  `/dev/bus/usb/<bus>/<dev>` node, so a meter replugged gets found by the next open.
-- `groups`: extra gids. The gids of the devices passed are added by the broker itself.
-- `env`: variables for the container, names in capitals.
-- `seccomp: "unconfined"` and `ipc: "host"`: for a kind that needs them (none of the pods here).
-
-Never privileged, never a mount of `/dev`, never a cgroup rule: the config refuses
-anything else, and the model cannot name a device.
-
-What rootless Podman can and cannot do (the broker's Podman runs rootless, with
-`userns: keep-id`):
-
-- Passing an existing device node works: Podman bind-mounts it.
-- Device cgroup rules (`--device-cgroup-rule`, which rootful Docker uses for serial and USB)
-  need cgroup write access, which a rootless user does not have. So serial and USB are passed
-  node by node, which is what the `devices` and `usb_ids` settings do.
-- Creating the device nodes inside the container (`mknod`) does not work rootless either. The
-  nodes must exist on the host, and the pod gets them passed in.
-- Groups: a device owned by `dialout`, `render` or `video` is only usable if that group is
-  mapped into the container. With `keep-id` only your own UID and GID are mapped, so the
-  owner group of a device is usually not mapped, and the device's `0660` permissions then
-  deny access. Two ways out, to choose on the host: a udev rule that gives your user access
-  to the device (`TAG+="uaccess"` or a `MODE`), or a rootful Podman for the broker's pods.
-  `getent group dialout video render` and `ls -l /dev/ttyACM0 /dev/kfd /dev/dri/*` show
-  which groups own them on this host.
-
-The Podman field names for devices and groups in the create request are not checked
-against a running Podman here: after the first pod opens, `podman container inspect`
-of its `-dev` container shows what was passed.
-
-### The host
-
-Host setup: install Podman, enable the user socket (`systemctl --user enable --now
-podman.socket`), and set `AI_PROJECTS`, `PODMAN_SOCKET`, `BROKER_UID`, `BROKER_GID`.
+Host setup: set `AI_PROJECTS` (the root of the local ai.pl's projects), `BROKER_UID` and
+`BROKER_GID` (the owner of the broker's socket).
 
 ## Remote agents
 
@@ -674,12 +586,11 @@ ai.pl --agent --broker https://PUBLIC_DOMAIN/agents --name strix --programs ardu
 The broker side is in `broker.json` (`token_sha256` is `sha256sum` of the token):
 
 ```json
-"agents": {"strix": {"tags": ["arduino", "gfx1151"], "token_sha256": "..."}},
-"pods": {"arduino": {"tags": ["arduino"], "programs": ["arduino-cli", "python3"], "note": "boards"}}
+"agents": {"strix": {"tags": ["arduino", "gfx1151"], "token_sha256": "..."}}
 ```
 
-A kind with `tags` runs on an agent that has all of them. Its `exec` waits for the agent's
-answer; `open` and `close` refuse it. The broker listens for agents on `AI_BROKER_AGENT_LISTEN`
+A job names the tags it needs: an agent of the job's account with all of them runs it. The
+agent's own `--programs` decide what it runs. The broker listens for agents on `AI_BROKER_AGENT_LISTEN`
 (host:port) when there are agents. Its requests come through nginx over HTTPS, with the public
 certificate; the token is the agent's whole credential.
 

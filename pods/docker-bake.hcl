@@ -9,7 +9,7 @@
 # The image also gets the tag ${REGISTRY}/pod-base:latest, which is what the broker pulls
 # (broker.json). To make it available to the broker, push it:
 #   docker push $REGISTRY/pod-base:latest
-# README.md, "The pods", has the registry setup.
+# PLAN.md, "Decided: no pods", says what is left of this directory.
 #
 # Every variable can be overridden from the environment, e.g.
 #   AGENT_UID=$(id -u) AGENT_GID=$(id -g) docker buildx bake

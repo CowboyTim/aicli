@@ -1,11 +1,11 @@
-# The broker: it starts the dev pods of the projects, through the rootless Podman
-# of the host. It is the only container that has the engine socket; the agent
-# containers get the broker's socket from the volume aicli-broker, and nothing else.
+# The broker: the control plane of the remote agents (remote_hub.pm). It runs no program and
+# holds no project: the agents of the users call in on its listener, and a job goes to an agent
+# of its account with its tags. The local ai.pl (the agent container) runs its tools itself.
 #
-#   AI_PROJECTS     the host directory of the projects: the root; its subdirectories are the accounts, and
-#                   the subdirectories of an account are its projects (AI_PROJECTS/<account>/<project>)
-#   PODMAN_SOCKET   the rootless Podman socket of the user that runs the broker
-#   BROKER_UID      that user's UID (the owner of the socket; the agents run as the same UID)
+#   AI_PROJECTS     the host directory of the local projects: the root of the local ai.pl (its
+#                   subdirectories are the accounts, and the subdirectories of an account are its
+#                   projects, AI_PROJECTS/<account>/<project>); the broker does not read it
+#   BROKER_UID      the UID of the broker's socket owner (the agent container's user)
 #   BROKER_GID      its GID
 #
 #   ./deploy.sh                          the IPv6 network, then docker compose up -d --build
@@ -31,23 +31,12 @@ services:
       - no-new-privileges:true
     environment:
       AI_BROKER_CONFIG: /etc/aicli/broker.json
-      AI_BROKER_HOST_ROOT: ${AI_PROJECTS:?set AI_PROJECTS to the host directory of the projects}
       AI_BROKER_SOCKET: /run/aicli-broker/broker.sock
-      AI_BROKER_ENGINE: /run/engine/podman.sock
       # the agents: the listener (nginx's /agents/ route) and the state (enrolled agents, tokens' hashes)
       AI_BROKER_AGENT_LISTEN: 0.0.0.0:9100
       AI_BROKER_STATE: /var/lib/aicli-broker/state.json
-      # the registry the pod images are pulled from (broker.json: ${AICLI_POD_REGISTRY}/pod-<kind>)
-      AICLI_REGISTRY_HOST: ${AICLI_REGISTRY_HOST:-}
-      AICLI_POD_REGISTRY: ${AICLI_POD_REGISTRY:-${AICLI_REGISTRY_HOST:-}/aicli}
-      # the login of the registry the pods come from (broker.json "registries"; the password is never in a file)
-      AICLI_REGISTRY_USER: ${AICLI_REGISTRY_USER:-}
-      AICLI_REGISTRY_PASSWORD: ${AICLI_REGISTRY_PASSWORD:-}
-      CONTAINER_HOST: unix:///run/engine/podman.sock
     volumes:
       - ./broker.json:/etc/aicli/broker.json:ro
-      - ${PODMAN_SOCKET:?set PODMAN_SOCKET to the rootless Podman socket}:/run/engine/podman.sock
-      - ${AI_PROJECTS}:/projects:ro
       - aicli-broker:/run/aicli-broker
       - aicli-broker-state:/var/lib/aicli-broker
     restart: unless-stopped
@@ -86,7 +75,6 @@ services:
       HOME: /workspace
       AI_DIR: /workspace/.aicli
       AI_PROMPT_TEMPLATE: coder
-      AI_POD_ROOT: /workdir/projects
       AI_BROKER_SOCKET: /run/aicli-broker/broker.sock
       TMPDIR: /tmp
     working_dir: /workdir/projects

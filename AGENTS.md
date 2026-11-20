@@ -232,27 +232,15 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   target: languages, ImageMagick, radios, the nRF tools, the devel lists). The
   package installs come before the `COPY` of the code in each stage, so a code
   change keeps the build cache; keep it that way when adding a package.
-- **broker.pl** – the broker: starts the dev pods of the projects through the
-  rootless Podman engine (libpod API over its Unix socket), for the agents, and
-  nothing else. Requests are JSON lines on its socket: `open`, `close`, `list`,
-  `projects` (the projects under the root with their pods' state, the kinds with their
-  programs and notes, the cap: for the model's `pods` tool), `exec`. A pod is a kind
-  (`pods` of `broker.json`: image, programs, note; `_pods_config()`, a kind is a short
-  lower-case name with no dash) and a project: engine name `aicli-<kind>-<project>`,
-  container `<pod>-dev`. `open` refuses a new pod past `max_pods` (all kinds, not counting
-  one already open) and pulls the image when the engine does not have it (`_image()`,
-  from the registry its reference names, `tls_verify`). `exec` checks the program against
-  its kind's list (`programs`), and opens the pod first when it is closed. `_reap()` closes
-  a pod unused for `idle_minutes` (last open or exec, `$self->{last}{"kind/project"}`), once
-  a minute from the serve loop (a pod found open at a start counts from that start).
-  A project is `account/project`: a directory of an account's directory under the root (`project_name()`), its host
-  path is `host_root/<name>` (podman binds it on the host, not in the broker's
-  container). The container of a pod: one bind mount (`/work`), not privileged,
-  `cap_drop ALL`, no new privileges, memory and pids limits, the image from the
-  allowlist. It runs in `Dockerfile.broker`, the only container with the engine
-  socket (`docker-compose.yaml`; `broker.json` is the config). `broker.pl open NAME`
-  asks a running broker (the client side, `AI_BROKER_SOCKET`).
-  Not tested against a real Podman yet (only the fake engine of t/107 and t/108).
+- **broker.pl** – the control plane of the remote agents (no pods, no engine, no project
+  files): a Unix socket of JSON lines (`exec`: a job for an agent of the project's account
+  with the job's tags, answered when the agent is done; `enroll_token`, `agents`,
+  `agent_revoke` for the page; anything else refused), and the agents' listener
+  (`AI_BROKER_AGENT_LISTEN`, through `remote_hub.pm`). `_exec` checks the shape of a request:
+  the project as `account/project` by name, the tags as short lower-case words, argv as a list
+  of strings (no shell), the timeout at most 120 s. The program is checked by the agent. Runs
+  in `Dockerfile.broker`: no engine socket, no projects mounted; `broker.json` has the socket
+  and the agents (`AI_BROKER_STATE` for the enrolled ones).
 - **Remote agents** (`remote_hub.pm`, the broker's side; `remote_agent.pm` and `ai.pl --agent`,
   the agent's side; PLAN.md "remote agents"): a machine with devices runs `ai.pl --agent`,
   which polls the broker (`GET /agents/poll`, held up to 30 s) and posts each job's answer
@@ -283,53 +271,18 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   belongs to its makers), `ai/ui/favicon.ico` is the same at 16, 32, 48, 64 and 256 pixels (rendered with
   rsvg-convert, packed with PIL). nginx serves both publicly; the local interface serves them too.
   `/agent/list` and `/agent/revoke` are the page's (through the broker's `agents`, `agent_revoke`
-  socket operations). A name or a token of the config and the state can not be the same. A kind with `tags` in
-  `broker.json` runs on an agent with all of them: its `exec` waits for the answer (through the
-  same Unix socket), its `open` is refused. The agent runs only the programs of its own
+  socket operations). A name or a token of the config and the state can not be the same. A job names
+  tags, and an agent of its account with all of them runs it: `exec` waits for the answer (through the
+  same Unix socket). The agent runs only the programs of its own
   `--programs`, in `--work/<project>`, with no shell. Not built yet: the owner check of a job
   (the agents are the user's, the jobs are not yet checked against the project's owner), the
   checkout of the project on the agent (it runs in a directory it has, empty by default), and
   the agents' page is not refreshed by the broker's events.
-- **Pods in the web interface** (`ui.pm`, `_broker_ask`, `_pod_request`, `_refresh_pods`):
-  the master asks the broker over `AI_BROKER_SOCKET` (or `/run/aicli-broker/broker.sock`,
-  which `aicli.sh --broker` mounts) in a child of the loop, so the page stays live while
-  the engine works. The answers are `broker` events, the list is a `pods` event (every
-  project of the root with its pod's state). `POST /pod` takes `open`, `close` or `list`.
-  The page has a pods panel with an open or close button per project.
-- **Tools in the pod** (`ai.pm`, package `tools`, `pod_for_tools`, `_pod_path`,
-  `_pod_run`): with `AI_POD_ROOT` set (the root as the container sees it, `aicli.sh
-  --broker --root`), `bash`, `perl` and `grep` do not run here: `_pod_run` asks the broker
-  (`op: exec`, a list of program and arguments, no shell) and prints the output the
-  broker sends back, with the exit code. The workspace must be a project under the root
-  (fail closed: a directory that is no project, or a project whose pod is not open, is a
-  tool error). The file tools (read, write, edit) still run here. `AI_POD_TOOLS=0` turns
-  the pod off.
-- **The model's pod tools** (`ai.pm`, package `tools`, `pods_4b1e`, `pod_open_9d52`,
-  `pod_close_c03a`, `pod_run_5a7e`, `pod_tools_on`, `_broker_child`, `_pod_run`): the same
-  socket for all (`_broker_child` is the one request-in-a-child helper). `bash`, `perl` and
-  `grep` are `_pod_run($project, 'base', ...)`: exec in the session's base pod. `pods` lists
-  the projects (`op: projects`), `pod_open` asks `op: open` (kind, default base), `pod_close`
-  asks `op: close`, `pod_run` execs a program of a kind in the session's project. Available
-  when `AI_POD_ROOT` is set and `AI_POD_TOOLS` is not off. The session's workspace still picks
-  the project; the kinds are the model's to choose. The web page's pods panel shows the base
-  pods only (`ui::_pods_data`) and is not refreshed by the model's calls.
-- **The pod image** (`pods/`: `Dockerfile` with the target base, `docker-bake.hcl`, run
-  from `pods/`): the basic tools of a session (bash, perl, grep, find) and the toolchains
-  in base. Tagged `<REGISTRY>/pod-base:latest`, pushed to the registry and pulled by the broker
-  through Podman. `broker.json` has the pod kinds (only `base` for now), their programs.
-  No `ai.pl` in it. The agent images (rocm, arduino, android) are not built here: they run
-  `ai.pl --agent` and are started outside this project, with the devices they need
-  (`pods/entrypoint.sh`, `pods/run.sh`, `pods/usb-meter-nodes.sh` are their device side,
-  kept here for now).
-- **The registry**: the pod images are pushed to and pulled from `$AICLI_REGISTRY_HOST`
-  (`AICLI_POD_REGISTRY`), outside this stack. Nothing of it runs here or is proxied by nginx. With
-  `registries` in `broker.json` the images must come from a listed registry, and the login (two
-  variable names there, the values in the broker environment) goes only to that registry.
-- **The broker's `exec`** (`broker.pl`, `_exec`, `_capture`): only bash, perl and grep,
-  in the dev container of an open project (`/work`), through `podman-remote` (the
-  config's `remote`, `CONTAINER_HOST` in compose) with its output cut at 1 MB and a
-  120 s limit. The broker's socket is in the agent's container with `--broker`, but the
-  model's tools no longer run there, so they cannot reach it.
+- **The tools run in the `ai.pl` container.** There are no pods. `bash`, `perl`, `grep`
+  and the file tools run in the container of the `ai.pl` that holds the session (the local
+  one of the web interface, or a remote agent's), as fork/exec, confined by landlock. The
+  broker is not on the path of a local session. The projects are the directories
+  `root/account/project` (the local root, or the agent's `--work`).
 - **docker-compose.yaml** – the services: `broker` (broker.pl), `agent` (the web
   interface, `ai.pl --ui`, on `aicli-net`, listens in its container on `AGENT_PORT`,
   nothing published), `searxng`, `proxy` (squid), `nginx` (`nginx/nginx.conf.template`:
@@ -662,12 +615,11 @@ Other APIs are reached through an OpenAI compatible gateway, such as LiteLLM or 
 | `t/97_live.t` | a real model, only when `AI_LIVE_SERVER` is set (`AI_LIVE_MODEL`, optional `AI_LIVE_SEARXNG`): one answer, a native tool call, the thinking setting, search. Skipped otherwise |
 | `t/100_ui.t` | the web interface: routes, the token, origin check, body limits, the input queue, the event stream on socket pairs; the listen addresses (IPv4, IPv6, `::`), stop and start on the same port, TLS with a generated certificate (a https request, the Secure cookie), the state of the speech recognizer; then `ai.pl --ui` as a child, a message in and the streamed answer out, Ctrl-C |
 | `t/122_auth_password.t` | the password rules of auth.pl (length, printable, not the name, AI_AUTH_MINLEN), the SHA-512 crypt hash (rounds, salt, it checks), set_password asked twice (no echo on a terminal, refused when they differ or break the rules), the hash given to chpasswd -e on standard input and not the password |
-| `t/119_pod_devices.t` | a pod kind's devices: the config's rules (privileged, a device outside /dev, a bad usb id, an env name), the device paths that exist at open (globs, usb ids through sysfs), the numbers and owner groups of real character devices (stand-ins behind symlinks), what the container spec gets |
-| `t/124_remote_agents.t` | a remote agent end to end: a broker process (its listener and its Unix socket), an `ai.pl --agent` process, a relay that stands in for nginx (adds the secret header): a job runs on the agent in its project directory, its output and exit code come back, the agent's own program list refuses a program (126), the kind's list refuses a program, `open` refuses a kind on an agent, an unknown kind |
+| `t/124_remote_agents.t` | a remote agent end to end: a broker process (its listener and its Unix socket) and an `ai.pl --agent` process; a job with the agent's tags runs in the agent's project directory and its output and exit code come back; the agent's own program list refuses a program (126); a job with no tags, a bad tag, a timeout over the limit, another account's project, and an operation the broker does not have are refused |
 | `t/128_agent_routes.t` | the web interface's agent routes with a stand-in broker: a token for the login's user (no login: refused, nothing asked), the list, a revocation (a name needed), a refusal of the broker (502 with its reason) |
 | `t/127_enroll_e2e.t` | the enrollment end to end: a broker with its state file, the user's token and list over the socket, `ai.pl --enroll` (a wrong token refused, the right one keeps agent.json 0600, the token not printed), `ai.pl --agent` with that file and no token on its command line runs a job, a revocation stops it |
 | `t/126_enrollment.t` | the enrollment without sockets: a user's token (only its hash kept, a new one replaces it), agents enrolled with it (own token, hash only), the names and tags checked, the list of a user, revocation (owner only, the token stops), the state file over a restart |
-| `t/135_error_display.t` | the errors of a tool read whole on the page (a line is not cut at the terminal width there; an error has up to 40 lines, a result 8); the broker keeps the engine's own text of a failure (a refused pull says why) |
+| `t/135_error_display.t` | the errors of a tool read whole on the page (a line is not cut at the terminal width there; an error has up to 40 lines, a result 8) |
 | `t/134_history_tools.t` | the history of a session on the page: the tool calls of the chat with their results, in their place between what was said and the answers, a call without a result yet has none |
 | `t/133_favicon.t` | the icon of the pages: favicon.ico (16, 32, 48, 64, 256 pixels) and favicon.svg, a strawberry drawn for aicli (not emoji artwork); both pages link it; nginx serves it publicly; the local interface answers it without a login |
 | `t/132_account_id.t` | the account ID of a login in the passwd comment: the fifth subfield, the other subfields kept, made once, read back without the dashes, the UUID's form and version, a login not in the passwd refused |
@@ -675,12 +627,9 @@ Other APIs are reached through an OpenAI compatible gateway, such as LiteLLM or 
 | `t/130_project_admin.t` | the page's projects: created in the login's account and switched to (names checked, a taken name, a login with no account), renamed only without sessions (same account), deleted with its sessions and files only on force, never the page's own project, nothing of another account touched; the local operator's account/project |
 | `t/125_agent_pin.t` | the agent's arguments: a pin of the form sha256//BASE64 (others refused), the token (a short one, none refused) |
 | `t/123_remote_hub.t` | the hub without sockets: the config of the agents (names, tags, token hashes), the bearer tokens that get in (403, a token of no agent, no token, not a bearer token), a held poll and a job for its tags, the answer (from the right agent only, once), busy polls (409), bad answers (400, 404), no agent for the tags, no agent connected, held polls ending (204), a job no agent takes, an agent that does not answer, an output over the cap |
-| `t/118_pod_control.t` | the pod kinds (base, and a second kind in the fixture): the projects and their pods, the cap across kinds, an idle pod closed and one found open after a restart kept, `pods`, `pod_open` (kind, already open, refusals), `pod_close` (the session's base pod noted), a closed base pod opened by a bash call, `pod_run` (node in its pod, a program of the base pod refused), through a real broker process (fake engine with containers and images) |
-| `t/109_pod_tools.t` | the tools of a project in its pod: bash, perl and grep through a real broker (fake engine, stand-in client): the program and its argv, the exit code, the pod's paths, a workspace that is no project or has no open pod refused, a path outside the project refused, AI_POD_TOOLS=0 runs them here |
-| `t/108_pods.t` | the pods of the web interface: the projects with their pod states, open and close through a real broker process (fake engine), the broker events and the list after them, no broker refused |
-| `t/107_broker.t` | the broker with a fake engine on a Unix socket: refused requests (not JSON, unknown ops, bad project names, links, files, images not allowed), the calls of open (list, pod, container, start), the spec (one mount, not privileged, no socket), reopen, list, close, no engine, the socket round trip, chunked answers |
+| `t/107_broker.t` | the broker without sockets (its dispatch): not JSON and unknown operations refused (the pod ones are gone), a job's checks (tags, argv, timeout, project names), a job for an agent that is not connected or of another account refused, the user's enrollment token and agents |
 | `t/104_projects.t` | the projects under the root (hidden and files left out), a session made in one with its AGENTS.md and its workspace in its prompt, the switch to a project (the newest session, or a new one), the root |
-| `t/105_wrapper.t` | `aicli.sh --root`: the root mounted, the container started in the current project and named for the root; a directory outside the root refused; without `--root` as before (a fake docker records the arguments) |
+| `t/105_wrapper.t` | `aicli.sh --root`: the root mounted, the container started in the current project and named for the root; a directory outside the root refused; `--broker` mounts the broker's socket volume with no root needed and no pod root; without `--root` as before (a fake docker records the arguments) |
 | `t/102_sessions.t` | `ai.pl --ui` with two sessions: a worker each, two turns at the same time, a switch while one is busy, the abort of the active one only, ctrl-C ends the interface and its workers |
 | `t/103_worker_sandbox.t` | a session worker confined by landlock: writes in its workspace and session only, reads everywhere, a tool's child inherits the limit (the probe file is outside the test's temp directory) |
 | `t/101_worker.t` | a session worker over a socket pair: the state and the events of a turn, the message in the session's chat file, the models, a slash command refused, the end when the socket closes |

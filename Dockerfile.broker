@@ -1,10 +1,9 @@
-# The broker (broker.pl): a Perl program with JSON::XS, and podman-remote (the engine's
-# client, for exec), in a container of its own. See docker-compose.yaml; it is the only container with the
-# engine socket.
+# The broker (broker.pl): a Perl program with JSON::XS, in a container of its own. It runs no
+# program and holds no project; see docker-compose.yaml.
 ARG BASE_IMAGE=ubuntu:24.04
 FROM ${BASE_IMAGE}
 RUN apt-get update \
- && apt-get install -y --no-install-recommends perl libjson-xs-perl podman-remote \
+ && apt-get install -y --no-install-recommends perl libjson-xs-perl \
  && rm -rf /var/lib/apt/lists/*
 COPY broker.pl /usr/local/lib/aicli/broker.pl
 COPY remote_hub.pm /usr/local/lib/aicli/remote_hub.pm

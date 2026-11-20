@@ -21,7 +21,6 @@ my $broker_pl = Cwd::abs_path("$FindBin::Bin/../broker.pl");
 my $ai_pl     = Cwd::abs_path("$FindBin::Bin/../ai.pl");
 
 my $tmp = File::Temp::tempdir(CLEANUP => 1, DIR => '/tmp');
-mkdir "$tmp/root"; mkdir "$tmp/root/acme"; mkdir "$tmp/root/acme/alpha";
 mkdir "$tmp/ai";
 my $socket = "$tmp/broker.sock";
 
@@ -37,8 +36,7 @@ sub wait_for {
 
 my $agent_port = free_port();
 open(my $cfh, '>', "$tmp/broker.json") or die $!;
-print {$cfh} $J->encode({root => "$tmp/root", host_root => "$tmp/root", socket => $socket,
-    engine => "$tmp/no-engine.sock", pods => {arduino => {tags => ['arduino'], programs => ['perl', 'bash'], note => 'boards'}}});
+print {$cfh} $J->encode({socket => $socket});
 close($cfh);
 
 my $broker_pid = fork();
@@ -100,7 +98,7 @@ if (!$agent_pid) {
 
 my $first;
 ok(wait_for(sub {
-    $first = ask({op => 'exec', project => 'acme/alpha', pod => 'arduino', argv => ['perl', '-e', 'print "from strix\n"']});
+    $first = ask({op => 'exec', project => 'acme/alpha', tags => ['arduino'], argv => ['perl', '-e', 'print "from strix\n"']});
     ($first->{error} // '') !~ /is connected/;
 }, 20), "the enrolled agent connects");
 is($first->{exit}, 0, "the job runs on it");
@@ -110,7 +108,7 @@ is(MIME::Base64::decode_base64($first->{output}), "from strix\n", "its output co
 my $rev = ask({op => 'agent_revoke', user => 'acme', name => 'strix'});
 ok($rev->{ok}, "acme revokes strix");
 is_deeply(ask({op => 'agents', user => 'acme'})->{agents}, [], "and it is gone");
-my $after = ask({op => 'exec', project => 'acme/alpha', pod => 'arduino', argv => ['perl', '-v']});
+my $after = ask({op => 'exec', project => 'acme/alpha', tags => ['arduino'], argv => ['perl', '-v']});
 like($after->{error}, qr/no agent of acme with the tags \(arduino\) is configured/, "a job for its tags: no agent now");
 
 kill 'TERM', $agent_pid, $broker_pid;

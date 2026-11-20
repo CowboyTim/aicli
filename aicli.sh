@@ -14,9 +14,9 @@
 #   ./aicli.sh -c              anything else goes to ai.pl
 #   ./aicli.sh --ui [PORT]     the web interface (ai.pl --ui); the container shares the host network,
 #                              so it is at http://127.0.0.1:PORT (8080) on the host, token on stderr
-#   ./aicli.sh --broker        with --root: the broker's socket (volume aicli-broker, see docker-compose.yaml).
-#                              The web interface's pages start and stop the projects' pods from it, and
-#                              bash, perl and grep run in the pod of the project (AI_POD_TOOLS=0 turns that off)
+#   ./aicli.sh --broker        the broker's socket (volume aicli-broker, see docker-compose.yaml): the web
+#                              interface's agents page (enrollment, the list, revocation) talks to the broker
+#                              through it. The tools run in this container, not in the broker
 #   ./aicli.sh --root DIR      DIR is mounted as a whole, the projects are the directories of its accounts (DIR/<account>/<project>), and
 #                              the container starts in the current directory (which must be in DIR):
 #                              one container for all projects, one web interface (ai.pl --ui from DIR)
@@ -122,15 +122,9 @@ else
     echo "aicli.sh: no PipeWire socket at $HOST_RUNTIME/pipewire-0, /voice cannot record (start PipeWire, or set XDG_RUNTIME_DIR)" >&2
 fi
 
-# the broker's socket: only with --broker (the volume is created by compose). The
-# projects are the directories of --root, and the tools run in their pods: the
-# broker needs the root as it is mounted here (AI_POD_ROOT)
+# the broker's socket: only with --broker (the volume is created by compose)
 if [ "$broker" = 1 ]; then
-    if [ -z "$root" ]; then
-        echo "aicli.sh: --broker needs --root (the projects, whose pods run the tools)" >&2
-        exit 2
-    fi
-    extra_opts="-v aicli-broker:/run/aicli-broker -e AI_POD_ROOT=/workdir/$MNAME $extra_opts"
+    extra_opts="-v aicli-broker:/run/aicli-broker $extra_opts"
 fi
 
 # every AI_* setting of this shell goes into the container

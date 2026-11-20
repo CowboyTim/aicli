@@ -1,6 +1,6 @@
 #!/usr/bin/perl
 # the page of accounts: the login's name is the account of a request (nginx's gate); what an
-# account sees (its sessions, its projects, its pods, its events) and what it may do (switch,
+# account sees (its sessions, its projects, its events) and what it may do (switch,
 # message, delete, open) is its own projects only; the local operator (no nginx) sees all.
 use strict; use warnings;
 
@@ -153,7 +153,7 @@ is($code, 404, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa cannot delete bbbbbbbbbbbbbbbbb
 is($code, 404, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa cannot rename it");
 ok(-d "$ai::SESSIONS_DIR/$bob_session", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb's session is still there");
 ($code) = call('POST', '/pod', $aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, '{"op":"open","project":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/beta"}');
-is($code, 403, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa cannot open a pod of bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb's project");
+is($code, 404, "there is no pod route any more (no pods): not found, for anyone");
 ($code) = call('POST', '/session', $aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, '{"new":true,"project":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/beta"}');
 is($code, 403, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa cannot make a session in bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb's project");
 ($code) = call('POST', '/session', $aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, '{"new":true}');

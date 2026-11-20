@@ -30,7 +30,6 @@ sub value { my ($f, $k) = @_; my ($v) = slurp($f) =~ m/^\Q$k\E=(.*)$/m; return $
 my %in = (
     PUBLIC_DOMAIN => 'ai.example.org', CERTBOT_EMAIL => 'me@example.org',
     AI_PROJECTS => '/home/me/projects',
-    AICLI_REGISTRY_HOST => 'registry.example.com', AICLI_REGISTRY_USER => 'puller', AICLI_REGISTRY_PASSWORD => 'pullpass',
     IPV6_PREFIX => '2001:db8:1:2:c::8',
     AI_LOCAL_SERVER => 'http://[2001:db8:1:2::20]:8000/rocm/v1',
     AI_ASR_URL => 'http://[2001:db8:1:2::21]:52625/v1/audio/transcriptions',
@@ -40,9 +39,8 @@ is(run_setup(%in), 0, "the first run with what it needs");
 my $env_f = "$dir/.env";
 my $agent_f = "$dir/.agent.env";
 is(value($env_f, 'PUBLIC_DOMAIN'), 'ai.example.org', "the domain is written");
-is(value($env_f, 'AICLI_REGISTRY_HOST'), 'registry.example.com', "the registry host is written (the broker needs it)");
-is(value($env_f, 'AICLI_REGISTRY_USER'), 'puller', "and its login");
-is(value($env_f, 'AICLI_REGISTRY_PASSWORD'), 'pullpass', "and its password");
+ok(!defined value($env_f, 'AICLI_REGISTRY_HOST') && !defined value($env_f, 'PODMAN_SOCKET'),
+    "no registry and no Podman socket: the broker starts no pods any more");
 like(value($env_f, 'SEARXNG_SECRET'), qr/\A[0-9a-f]{64}\z/, "a secret is made");
 like(value($env_f, 'SEARXNG_API_TOKEN'), qr/\A[0-9a-f]{64}\z/, "and the token of searxng");
 is(value($env_f, 'IPV6_SUBNET'), '2001:db8:1:2:c::8:0/120', "the subnet of the default prefix");
