@@ -1,10 +1,10 @@
-# The pod image of this project: "base", the basic tools a session's pod needs (bash,
-# perl, grep, find) plus Rust, nodejs, npm and go, as the agent user with the host UID/GID.
+# The base image of the device images (arduino, rocm, android, usb-meter, rtl-sdr, nrf): the
+# basic tools of a session (bash, perl, grep, find), the toolchains (Rust, nodejs, npm, go), and
+# ai.pl with its modules, fetched from this project's repository on GitHub at the commit AICLI_REF.
+# Each device image is built FROM this one and adds its own device programs and the run of
+# `ai.pl --agent` (see README.md). The image holds no device: devices are passed in at run time.
 #
-# The agent images (rocm, arduino, android, which run ai.pl and connect back to the broker)
-# are not built here: they need devices passed in and are built and run outside this project.
-#
-# docker-bake.hcl sets BASE_IMAGE; "docker buildx bake" builds base.
+# docker-bake.hcl sets the build arguments; "docker buildx bake" builds base.
 
 ARG BASE_IMAGE=ubuntu:24.04
 
@@ -86,6 +86,23 @@ RUN apt-get update \
         rtl-sdr \
         libjson-xs-perl libwww-curl-perl libterm-readline-gnu-perl libdata-uuid-perl \
  && rm -rf /var/lib/apt/lists/*
+# ai.pl and the modules it loads, from this project's repository on GitHub. The commit is
+# pinned (AICLI_REF): the same ai.pl in every build until it is changed here. Its layout is the
+# one of the ai.pl image: the modules at /, the templates and the web page under /ai.
+ARG AICLI_REPO=https://github.com/CowboyTim/aicli
+ARG AICLI_REF=0b70b5eaaec61cb55782df5d9f335ff46686ff2f
+RUN set -eux; \
+    tmp=$(mktemp -d); \
+    curl -fsSL "${AICLI_REPO}/archive/${AICLI_REF}.tar.gz" -o "$tmp/src.tar.gz"; \
+    mkdir "$tmp/src"; \
+    tar -xzf "$tmp/src.tar.gz" -C "$tmp/src" --strip-components=1; \
+    install -m 0644 "$tmp/src/ai.pl" "$tmp/src/ai.pm" "$tmp/src/md.pm" "$tmp/src/remote_agent.pm" \
+        "$tmp/src/remote_hub.pm" "$tmp/src/tui.pm" "$tmp/src/utils.pm" "$tmp/src/ui.pm" "$tmp/src/worker.pm" /; \
+    chmod 0755 /ai.pl; \
+    cp -r "$tmp/src/ai" /ai; \
+    perl -cw /ai.pl; \
+    rm -rf "$tmp"
+
 USER ${USERNAME}
 
 # Rust (rustc, cargo, clippy, rustfmt) via rustup, for the user, stable channel.

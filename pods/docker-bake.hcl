@@ -1,15 +1,13 @@
-# Build definition for the pod image of this project: "base", the basic tools of a session's
-# pod (bash, perl, grep, find, Rust, nodejs, npm, go). The agent images (rocm, arduino,
-# android) are built outside this project.
+# Build definition for the base image of the device images in this directory (pods/): the basic
+# tools, the toolchains, and ai.pl fetched from GitHub at AICLI_REF (see Dockerfile and README.md).
 #
 #   docker buildx bake                 build base into the local image store
 #   docker buildx bake --print         show the resolved configuration
 #   docker buildx bake --pull          also pull a fresh base image
 #
-# The image also gets the tag ${REGISTRY}/pod-base:latest, which is what the broker pulls
-# (broker.json). To make it available to the broker, push it:
+# The image also gets the tag ${REGISTRY}/pod-base:latest, the name the device images are
+# built FROM when they are pulled from the registry. To push it:
 #   docker push $REGISTRY/pod-base:latest
-# PLAN.md, "Decided: no pods", says what is left of this directory.
 #
 # Every variable can be overridden from the environment, e.g.
 #   AGENT_UID=$(id -u) AGENT_GID=$(id -g) docker buildx bake
@@ -20,15 +18,23 @@ variable "IMAGE_REPO" {
 }
 
 variable "AICLI_REGISTRY_HOST" {
-  # the registry host the pod image is pushed to and pulled from (an external registry, set in
-  # the environment; bake reads a variable of the same name from it). The broker takes
-  # AICLI_POD_REGISTRY from its compose settings.
+  # the registry host the images are pushed to and pulled from (an external registry, set in
+  # the environment; bake reads a variable of the same name from it)
   default = ""
 }
 
 variable "REGISTRY" {
-  # the image prefix of the pod image: ${AICLI_REGISTRY_HOST}/aicli
+  # the image prefix of the images: ${AICLI_REGISTRY_HOST}/aicli
   default = "${AICLI_REGISTRY_HOST}/aicli"
+}
+
+variable "AICLI_REPO" {
+  default = "https://github.com/CowboyTim/aicli"
+}
+
+# the commit of ai.pl (a full commit id of the repository above; see Dockerfile)
+variable "AICLI_REF" {
+  default = "0b70b5eaaec61cb55782df5d9f335ff46686ff2f"
 }
 
 variable "UBUNTU_IMAGE" {
@@ -72,5 +78,7 @@ target "base" {
   tags     = ["${IMAGE_REPO}:base", "${REGISTRY}/pod-base:latest"]
   args = {
     BASE_IMAGE = UBUNTU_IMAGE
+    AICLI_REPO = AICLI_REPO
+    AICLI_REF  = AICLI_REF
   }
 }

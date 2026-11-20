@@ -1,4 +1,4 @@
-# Device images
+# Device images (pods/)
 
 The device images hold what a kind of hardware needs: the boards and their toolchains,
 the GPU stack, the USB meters, the radios. Each kind is its own image, and each one is a
@@ -6,12 +6,15 @@ remote agent of the broker: it runs `ai.pl --agent` and takes the jobs for its t
 PLAN.md, "a thin ai.pl image, device images per kind of hardware"). The main `ai.pl` image
 (`local/ai/aicli`, built from the repository root) has no hardware in it.
 
-This directory is the base they are built from:
+This directory is the base they are built from. It also holds the device side of the
+layout (`run.sh`, `entrypoint.sh`, `usb-meter-nodes.sh`): `run.sh` shares the devices with the
+container, and `entrypoint.sh` uses the same list.
 
 | file | what it is |
 |------|------------|
 | `Dockerfile` | the `base` stage: the basic tools (bash, perl, grep, find), Rust, nodejs, npm and go, and `ai.pl` with its modules |
 | `docker-bake.hcl` | the build definition of `base` (`docker buildx bake`) |
+| `run.sh`, `entrypoint.sh`, `usb-meter-nodes.sh` | the devices of a container (see their headers) |
 | `README.md` | this file |
 
 ## ai.pl comes from GitHub
@@ -36,12 +39,12 @@ docker buildx bake --print               # the resolved settings
 AGENT_UID=$(id -u) AGENT_GID=$(id -g) docker buildx bake   # files written into a workspace stay yours
 ```
 
-`base` is tagged `aicli-device:base` for local use, and `$REGISTRY/device-base:latest` (where
+`base` is tagged `aicli-pod:base` for local use, and `$REGISTRY/pod-base:latest` (where
 `REGISTRY` is `$AICLI_REGISTRY_HOST/aicli`). Push it when the device images are built on
 another machine:
 
 ```
-docker push $AICLI_REGISTRY_HOST/aicli/device-base:latest
+docker push $AICLI_REGISTRY_HOST/aicli/pod-base:latest
 ```
 
 ## Device images
@@ -51,6 +54,5 @@ that starts `ai.pl --agent` with the kind's tags (`arduino`, `rocm`, `android`, 
 `rtl-sdr`, `nrf`). The devices are not in the image: they are passed in at run time by the
 host, with the options of each kind.
 
-The files `pods/entrypoint.sh`, `pods/run.sh` and `pods/usb-meter-nodes.sh` in the repository
-are the device side of an earlier layout. They stay where they are until the device images
-take them over.
+Work on the kinds (android, bash, arduino, rocm) happens here, in the same directory: the
+devices of a kind are set by `run.sh`, and its `entrypoint.sh` gets the same device list.
