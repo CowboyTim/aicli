@@ -2,11 +2,13 @@
 #
 # Run a shell (or a command) in one of the aicli pod images, with a workspace mounted.
 #
-#   ./run.sh                    bash in the general dev image, in the current directory
+#   ./run.sh                    ai.pl (the chat) in the bash image, in the current directory
 #   ./run.sh --rocm             the ROCm image instead (GPU devices passed through)
 #   ./run.sh --arduino          the arduino-cli/ESP32 image
 #   ./run.sh --android          the Android SDK/Gradle image
+#   ./run.sh bash               a shell in the container
 #   ./run.sh bash -c 'make'     anything else runs as a command in the container
+#   ./run.sh --agent --broker URL --name NAME    ai.pl as a remote agent (its options go to ai.pl)
 #   ./run.sh --build            rebuild the selected image first (build cache kept)
 #   ./run.sh --update           pull fresh base images, rebuild
 #   ./run.sh --no-ssh-agent     don't share your ssh-agent (shared by default)

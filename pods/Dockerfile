@@ -69,12 +69,13 @@ ENV HOME=/home/${USERNAME} \
 # The working directory of the user, owned by the user
 RUN mkdir -p "${HOME}/work"
 
-# The device nodes that run.sh asks for, then ai.pl for options (-x, --flag ...), a command
-# otherwise, and bash with no arguments. usb-meter-nodes makes the USB meters' nodes.
+# The device nodes that run.sh asks for, then ai.pl (the chat; options such as --agent), or the
+# command given. usb-meter-nodes makes the USB meters' nodes.
 COPY --chmod=0755 entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY --chmod=0755 usb-meter-nodes.sh /usr/local/bin/usb-meter-nodes
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-CMD ["bash"]
+# no arguments: ai.pl, the chat (the entrypoint)
+CMD []
 
 # --------------------------------------------------------------------------
 FROM common AS base

@@ -64,6 +64,6 @@ of `docker-bake.hcl`:
 the flavor passed in.
 
 The entrypoint (`entrypoint.sh`) makes the device nodes that `run.sh` asks for, then runs
-`ai.pl` for options (`-x`, `--flag ...`), the command given, or bash with no arguments.
-Each image is an `ai.pl` container. The device images as remote agents (`ai.pl --agent`
+`ai.pl`: the chat with no arguments, its options (`--agent`, `-p`, `--ui`, ...) with options,
+or the command given (`bash`, `bash -c ...`). Each image is an `ai.pl` container. The device images as remote agents (`ai.pl --agent`
 with their tags) come next: see PLAN.md, "a thin ai.pl image, device images per kind of hardware".
