@@ -1,0 +1,7 @@
+LICENSE
+.git
+README.md
+run.sh
+*~
+docker-bake.hcl
+.nrfutil/
