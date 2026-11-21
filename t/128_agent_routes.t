@@ -81,4 +81,32 @@ $answer = {ok => JSON::XS::false(), error => "no agent 'strix' of yours"};
 is($code, 502, "the broker refuses: 502, with its reason");
 is($d->{error}, "no agent 'strix' of yours", "and the reason");
 
+# a job on an agent: the login's own project, its tags and program go to the broker as an exec;
+# the output comes back as text. Another account's project, no login, a bad request and a timeout
+# over 100 s are refused, and the broker is not asked
+use MIME::Base64 ();
+my $job = {project => 'cccccccccccccccccccccccccccccccc/alpha', tags => ['bash'], argv => ['perl', '-e', 'print 1']};
+$answer = {ok => JSON::XS::true(), exit => 0, output => MIME::Base64::encode_base64("hi \xc3\xa9\n", '')};
+($code, $d) = call('POST', '/agent/job', $user, $J->encode({%$job, timeout => 30}));
+is($code, 200, "a job of the login's project: 200");
+is($d->{output}, "hi \x{e9}\n", "its output comes back as text");
+is_deeply($asked[0], {op => 'exec', project => 'cccccccccccccccccccccccccccccccc/alpha', tags => ['bash'],
+    argv => ['perl', '-e', 'print 1'], timeout => 30}, "asked of the broker as an exec");
+
+$answer = {ok => JSON::XS::false(), error => "no agent of cccccccccccccccccccccccccccccccc with the tags (bash) is connected"};
+($code, $d) = call('POST', '/agent/job', $user, $J->encode($job));
+is($code, 502, "the broker refuses: 502");
+like($d->{error}, qr/is connected/, "and says why");
+
+@asked = ();
+($code) = call('POST', '/agent/job', $user, $J->encode({%$job, project => 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/beta'}));
+is($code, 403, "another account's project: 403");
+($code) = call('POST', '/agent/job', {'x-aicli-gate' => 'gate-secret'}, $J->encode($job));
+is($code, 403, "no login: 403");
+($code) = call('POST', '/agent/job', $user, 'not json');
+is($code, 400, "not JSON: 400");
+($code) = call('POST', '/agent/job', $user, $J->encode({%$job, timeout => 500}));
+is($code, 400, "a timeout over 100 s: 400");
+is(scalar @asked, 0, "and the broker is not asked for any of them");
+
 done_testing();

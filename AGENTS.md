@@ -272,14 +272,14 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   The icon: `ai/ui/favicon.svg` is the drawing (plain shapes, made for aicli: no emoji artwork, which
   belongs to its makers), `ai/ui/favicon.ico` is the same at 16, 32, 48, 64 and 256 pixels (rendered with
   rsvg-convert, packed with PIL). nginx serves both publicly; the local interface serves them too.
-  `/agent/list` and `/agent/revoke` are the page's (through the broker's `agents`, `agent_revoke`
+  `/agent/list`, `/agent/revoke` and `/agent/job` (a job: exec for a project of the login, its output as text) are the page's (through the broker's `agents`, `agent_revoke`
   socket operations). A name or a token of the config and the state can not be the same. A job names
   tags, and an agent of its account with all of them runs it: `exec` waits for the answer (through the
   same Unix socket). The agent runs only the programs of its own
   `--programs`, in `--work/<project>`, with no shell. Not built yet: the owner check of a job
   (the agents are the user's, the jobs are not yet checked against the project's owner), the
   checkout of the project on the agent (it runs in a directory it has, empty by default), and
-  the agents' page is not refreshed by the broker's events.
+  the agents' page asks again every 10 s while its menu is open, and shows online or offline (a poll held or lately).
 - **The tools run in the `ai.pl` container.** There are no pods. `bash`, `perl`, `grep`
   and the file tools run in the container of the `ai.pl` that holds the session (the local
   one of the web interface, or a remote agent's), as fork/exec, confined by landlock. The

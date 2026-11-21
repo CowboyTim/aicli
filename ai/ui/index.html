@@ -45,6 +45,13 @@
   #agents li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 0; }
   #agents li > span { min-width: 0; flex: 1 1 auto; overflow-wrap: anywhere; }
   #agents button { font-size: 13px; padding: 2px 8px; flex: 0 0 auto; }
+  #agents .job { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0; }
+  #agents .job select, #agents .job input { min-width: 0; font-size: 13px; }
+  #agents .job input { flex: 1 1 8em; }
+  #agents .job #jobcmd { flex: 2 1 12em; font-family: monospace; }
+  #agents #joboutput { flex: 1 1 100%; width: 100%; margin: 0; max-height: 16em; overflow: auto; white-space: pre-wrap; font-size: 12px; border: 1px solid var(--line); padding: 6px; }
+  #agents .online { font-weight: bold; color: var(--fg); }
+  #agents .offline { color: var(--muted); }
   #agents .enroll { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
   #agents .enroll input { flex: 1 1 0; width: 0; min-width: 0; font-family: monospace; font-size: 12px; }
   #agents .enroll[hidden] { display: none; }
@@ -144,6 +151,15 @@
         <button type="button" id="agentcopy">copy</button>
       </div>
       <ul id="agentlist"></ul>
+      <div class="agenthead">run on an agent: a project's job for the agents with these tags</div>
+      <div class="job">
+        <select id="jobproject" aria-label="project of the job"></select>
+        <input id="jobtags" placeholder="tags, e.g. bash" aria-label="tags of the job">
+        <input id="jobcmd" placeholder="program and arguments, e.g. perl -v" aria-label="command of the job">
+        <button type="button" id="jobrun">run</button>
+        <span id="jobnote"></span>
+        <pre id="joboutput" hidden></pre>
+      </div>
       <div class="agenthead">API token <button type="button" id="apinew">new API token</button> <span id="apinote"></span></div>
       <div class="enroll" id="apienroll" hidden>
         <input id="apitokenbox" readonly aria-label="API token">
@@ -198,6 +214,7 @@
   var session = document.getElementById("session");
   var project = document.getElementById("project");
   var agentlist = document.getElementById("agentlist");
+  var jobproject = document.getElementById("jobproject");
   var agentnote = document.getElementById("agentnote");
   var agentenroll = document.getElementById("agentenroll");
   var agenttoken = document.getElementById("agenttoken");
@@ -477,6 +494,14 @@
       o.textContent = name || "(root)";
       project.appendChild(o);
     });
+    // the jobs of the agents go to the login's own projects (not the root)
+    jobproject.textContent = "";
+    list.filter(function (name) { return name; }).forEach(function (name) {
+      var o = document.createElement("option");
+      o.value = name;
+      o.textContent = name;
+      jobproject.appendChild(o);
+    });
     project.value = current || "";
     project.disabled = list.length === 0;
   }
@@ -574,7 +599,11 @@
       btn.addEventListener("click", function () {
         agentsCall("/agent/revoke", { name: a.name }).then(agentsLoad).catch(function (err) { agentnote.textContent = String(err); });
       });
+      var state = document.createElement("span");
+      state.className = a.online ? "online" : "offline";
+      state.textContent = a.online ? "online" : "offline";
       li.appendChild(label);
+      li.appendChild(state);
       li.appendChild(btn);
       agentlist.appendChild(li);
     });
@@ -589,6 +618,31 @@
   document.getElementById("agentcopy").addEventListener("click", function () {
     agenttoken.select();
     if (navigator.clipboard) { navigator.clipboard.writeText(agenttoken.value); } else { document.execCommand("copy"); }
+  });
+  // a job: the program and its arguments (split at spaces, no shell, no quotes) run in the project's
+  // work of an agent with those tags; the output and the exit code are shown here
+  document.getElementById("jobrun").addEventListener("click", function () {
+    var jobtags = document.getElementById("jobtags"), jobcmd = document.getElementById("jobcmd");
+    var jobrun = document.getElementById("jobrun"), jobnote = document.getElementById("jobnote");
+    var joboutput = document.getElementById("joboutput");
+    var argv = jobcmd.value.trim().split(/\s+/).filter(Boolean);
+    var tags = jobtags.value.split(/[\s,]+/).filter(Boolean);
+    if (!jobproject.value || !tags.length || !argv.length) {
+      jobnote.textContent = "a project, tags and a command are wanted";
+      return;
+    }
+    jobrun.disabled = true;
+    jobnote.textContent = "running…";
+    joboutput.hidden = true;
+    agentsCall("/agent/job", { project: jobproject.value, tags: tags, argv: argv, timeout: 60 }).then(function (d) {
+      jobnote.textContent = "exit " + d.exit;
+      joboutput.textContent = d.output || "";
+      joboutput.hidden = false;
+    }).catch(function (err) {
+      jobnote.textContent = String(err);
+    }).then(function () {
+      jobrun.disabled = false;
+    });
   });
   agentsLoad();
 
@@ -937,11 +991,21 @@
 
   // the menu: the ☰ button opens it; a click outside or Escape closes it
   var menuBtn = document.getElementById("menu-btn"), menu = document.getElementById("menu");
+  var menuTimer = null;
   menuBtn.addEventListener("click", function (ev) {
     ev.stopPropagation();
     var open = !menu.classList.contains("open");
     menu.classList.toggle("open", open);
     menuBtn.setAttribute("aria-expanded", String(open));
+    // the agents' state is kept fresh while the menu is open
+    if (open) {
+      agentsLoad();
+      clearInterval(menuTimer);
+      menuTimer = setInterval(function () {
+        if (menu.classList.contains("open")) { agentsLoad(); return; }
+        clearInterval(menuTimer); menuTimer = null; // closed another way (outside click, Escape)
+      }, 10000);
+    }
   });
   document.addEventListener("click", function (ev) {
     if (!menu.contains(ev.target)) { menu.classList.remove("open"); menuBtn.setAttribute("aria-expanded", "false"); }

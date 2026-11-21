@@ -1312,6 +1312,29 @@ sub _dispatch {
         });
         return;
     }
+    # a job on one of the login's agents: a program (no shell: the words of the command) for the
+    # project's tags; the broker sends it to an online agent of the account that has the tags, and
+    # the answer (exit code, output) comes back here. Only the login's own projects.
+    if($p eq '/agent/job' and $m eq 'POST'){
+        my $user = $acct // '';
+        return _json($cn, 403, {ok => \0, error => 'jobs need the login (through nginx)'}) unless length $user;
+        my $d = eval {$::JSON->decode($body // '')};
+        return _json($cn, 400, {ok => \0, error => 'a JSON object with project, tags, argv and timeout is wanted'})
+            unless ref($d) eq 'HASH';
+        return _json($cn, 403, {ok => \0, error => 'that project is not yours'})
+            unless defined $d->{project} and !ref($d->{project}) and _owns($acct, $d->{project});
+        my $timeout = $d->{timeout} // 60;
+        return _json($cn, 400, {ok => \0, error => 'a timeout of 1 to 100 seconds is wanted'})
+            unless "$timeout" =~ m/\A\d+\z/ and $timeout >= 1 and $timeout <= 100;
+        _broker_ask({op => 'exec', project => $d->{project}, tags => $d->{tags}, argv => $d->{argv}, timeout => $timeout + 0}, sub {
+            my ($r) = @_;
+            if ($r->{ok} and defined $r->{output}) {
+                $r->{output} = ai::to_text(MIME::Base64::decode_base64($r->{output}));
+            }
+            _json($cn, $r->{ok} ? 200 : 502, $r);
+        });
+        return;
+    }
     # a new project: a directory of the login's account (the local operator names it
     # account/project), made here and switched to, so its session is the page's
     if($p eq '/project/new' and $m eq 'POST'){

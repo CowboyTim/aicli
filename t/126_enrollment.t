@@ -70,6 +70,11 @@ ok($h->enroll($alice2, 'new1', ['arduino'], 100)->{ok}, "the new one does");
 # the agents of a user
 my $list = $h->agents_of('alice');
 is_deeply([map {$_->{name}} @$list], ['new1', 'pi', 'strix'], "alice's agents, by name");
+is($list->[0]{online}, 0, "new1 has not polled: offline");
+$h->{seen}{new1} = time;
+is($h->agents_of('alice')->[0]{online}, 1, "new1 polled just now: online");
+$h->{seen}{new1} = time - 3600;
+is($h->agents_of('alice')->[0]{online}, 0, "and offline again an hour later");
 is_deeply($h->agents_of('bob'), [], "bob has none");
 ok(!exists $list->[0]{token_sha256}, "the list has no hashes");
 

@@ -147,10 +147,12 @@ sub enroll {
     return {ok => 1, token => $agent_token, name => $name, tags => [@$tags]};
 }
 
-# the agents a user enrolled: name, tags and when
+# the agents a user enrolled: name, tags, when, and online (1 when it has a poll held or polled lately)
 sub agents_of {
     my ($self, $user) = @_;
-    return [map {{name => $_, tags => [@{$self->{agents}{$_}{tags}}], enrolled => $self->{agents}{$_}{enrolled}}}
+    my $now = time;
+    return [map {{name => $_, tags => [@{$self->{agents}{$_}{tags}}], enrolled => $self->{agents}{$_}{enrolled},
+            online => ($self->_online($_, $now) ? 1 : 0)}}
         grep {defined $self->{agents}{$_}{user} and $self->{agents}{$_}{user} eq ($user // '')} sort keys %{$self->{agents}}];
 }
 
