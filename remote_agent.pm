@@ -155,6 +155,31 @@ sub _result {
     return;
 }
 
+# a name for an agent that was not given one: a random UUID (version 4), e.g. 3f0c…-…
+sub new_name {
+    open(my $fh, '<:raw', '/dev/urandom') or die "remote agent: no random source: $!\n";
+    my $n = read($fh, my $b, 16);
+    close($fh);
+    die "remote agent: no random source\n" unless defined $n and $n == 16;
+    vec($b, 6, 8) = (ord(substr($b, 6, 1)) & 0x0f) | 0x40;   # version 4
+    vec($b, 8, 8) = (ord(substr($b, 8, 1)) & 0x3f) | 0x80;   # variant 10
+    my $h = unpack('H*', $b);
+    return join '-', substr($h, 0, 8), substr($h, 8, 4), substr($h, 12, 4), substr($h, 16, 4), substr($h, 20, 12);
+}
+
+# tags that name what an agent can do, from its programs: the program's name (its last path part)
+# when it is a short lower-case word, each once
+sub tags_of_programs {
+    my @tags;
+    my %seen;
+    for my $p (@_) {
+        my ($base) = $p =~ m{([^/]+)\z};
+        next unless defined $base and $base =~ m/\A[a-z][a-z0-9-]{0,31}\z/;
+        push @tags, $base unless $seen{$base}++;
+    }
+    return @tags;
+}
+
 # Enrollment (once per machine): the user's enrollment token and the agent's name and tags go to
 # the broker, which answers the agent's own token. Synchronous: it runs before the agent's loop.
 # Dies with the broker's reason when it refuses.

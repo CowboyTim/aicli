@@ -1,54 +1,65 @@
-# The base image of the device images (arduino, rocm, android, usb-meter, rtl-sdr, nrf): the
-# basic tools of a session (bash, perl, grep, find), the toolchains (Rust, nodejs, npm, go), and
+# The images of this directory (pods/): the base image, a slim Debian with only what ai.pl needs
+# to run (perl and its modules, bash, grep, find, sudo for the device nodes, CA certificates) and
 # ai.pl with its modules, fetched from this project's repository on GitHub at the commit AICLI_REF.
-# Each device image is built FROM this one and adds its own device programs and the run of
-# `ai.pl --agent` (see README.md). The image holds no device: devices are passed in at run time.
+# The device images add their own programs and their devices' side (see README.md); they are
+# built on the base image, except rocm, which is built on the ROCm image: the same ai.pl layer
+# goes on that image too (it has perl and bash, the layer adds what ai.pl loads).
 #
-# docker-bake.hcl sets the build arguments; "docker buildx bake" builds base.
+# The layers, bottom up:
+#   fetch   the repository's files of AICLI_REF (curl is only here, not in the images)
+#   aicli   ROOT_IMAGE + the runtime packages of ai.pl + the user + ai.pl + the entrypoint
+#   base    aicli: the image of the bash target too
+#   arduino, android, rocm   aicli + their programs
+#
+# docker-bake.hcl sets the build arguments: ROOT_IMAGE is the image the aicli layer is put on.
 
-ARG BASE_IMAGE=ubuntu:24.04
+ARG ROOT_IMAGE=debian:trixie-slim
+ARG FETCH_IMAGE=debian:trixie-slim
 
 # --------------------------------------------------------------------------
-FROM ${BASE_IMAGE} AS common
-
-USER root
-ENV DEBIAN_FRONTEND=noninteractive
-
-# The Ubuntu base image drops man pages and docs (dpkg excludes); remove that so
-# man, perldoc and the packages below keep their documentation.
-RUN rm -f /etc/dpkg/dpkg.cfg.d/excludes \
- && apt-get update \
- && apt-get install -y --no-install-recommends \
-        ca-certificates curl git sudo less jq python3 python3-serial \
-        openssh-client \
-        build-essential cmake ninja-build clang perl \
-        lua5.4 luajit python-is-python3 \
-        python3-dev python3-pip python3-venv \
-        librsvg2-bin python3-cairosvg fonts-dejavu-core fontconfig \
-        ripgrep fd-find file tree zip unzip xz-utils rsync wget patch \
-        diffutils procps htop strace lsof git-lfs \
-        gdb valgrind clang-format clang-tidy lld ccache pkg-config \
-        autoconf automake libtool libtool-bin bear \
-        libssl-dev zlib1g-dev libffi-dev libsqlite3-dev sqlite3 \
-        liblua5.4-dev luarocks pipx shellcheck shfmt \
-        iproute2 iputils-ping dnsutils netcat-openbsd socat \
-        cpanminus perl-doc libperl-dev perltidy \
-        libdbi-perl libdbd-sqlite3-perl libtext-csv-perl libyaml-libyaml-perl \
-        libmoose-perl libreadonly-perl \
-        time ltrace man-db manpages tmux vim-tiny gawk psmisc moreutils bc ncdu \
-        entr direnv \
- && ln -s /usr/bin/fdfind /usr/local/bin/fd \
+# fetch: ai.pl and the modules it loads, from the repository archive of one commit (pinned, so the
+# same ai.pl in every build until AICLI_REF is changed). Its layout is the one of the main image:
+# the modules at /, the templates and the web page under /ai. Copied into the images as /.
+FROM ${FETCH_IMAGE} AS fetch
+ARG AICLI_REPO=https://github.com/CowboyTim/aicli
+ARG AICLI_REF=0b70b5eaaec61cb55782df5d9f335ff46686ff2f
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl \
  && rm -rf /var/lib/apt/lists/*
+RUN set -eux; \
+    tmp=$(mktemp -d); \
+    curl -fsSL "${AICLI_REPO}/archive/${AICLI_REF}.tar.gz" -o "$tmp/src.tar.gz"; \
+    mkdir "$tmp/src"; \
+    tar -xzf "$tmp/src.tar.gz" -C "$tmp/src" --strip-components=1; \
+    mkdir -p /out; \
+    install -m 0755 "$tmp/src/ai.pl" /out/ai.pl; \
+    install -m 0644 "$tmp/src/ai.pm" "$tmp/src/md.pm" "$tmp/src/remote_agent.pm" \
+        "$tmp/src/remote_hub.pm" "$tmp/src/tui.pm" "$tmp/src/utils.pm" "$tmp/src/ui.pm" \
+        "$tmp/src/worker.pm" /out/; \
+    cp -r "$tmp/src/ai" /out/ai; \
+    rm -rf "$tmp"
 
-# Declared after apt so a different UID/GID doesn't invalidate the apt layer.
-# docker-bake.hcl passes your host UID/GID (AGENT_UID, AGENT_GID) so files written into
-# mounted workspaces end up owned by you, not by root or a random uid.
+# --------------------------------------------------------------------------
+# aicli: the runtime of ai.pl on ROOT_IMAGE. Packages: perl with the modules ai.pl loads (JSON::XS,
+# the curl binding WWW::Curl, Term::ReadLine::Gnu for the chat's input), bash, grep and find (the
+# tools of a session), ca-certificates (HTTPS to the providers and the broker), and sudo, which the
+# entrypoint uses to make the serial device nodes that run.sh asks for. No compiler, no
+# documentation, no caches: the device images add what they need.
+FROM ${ROOT_IMAGE} AS aicli
 ARG USERNAME=agent
 ARG UID=1000
 ARG GID=1000
+ENV DEBIAN_FRONTEND=noninteractive
+USER root
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        ca-certificates perl libjson-xs-perl libwww-curl-perl libterm-readline-gnu-perl \
+        bash grep findutils sudo \
+ && rm -rf /var/lib/apt/lists/*
 
-# Non-root user with the requested UID/GID. Ubuntu 24.04 images ship an
-# "ubuntu" user at uid 1000, which would clash with most host users.
+# Non-root user with the requested UID/GID (docker-bake.hcl passes the host's, so files written
+# into a mounted workspace are the host user's). The ROCm image has an "ubuntu" user at uid 1000,
+# which would clash with most host users: it is removed first (a no-op on Debian).
 RUN set -eux; \
     if id -u ubuntu >/dev/null 2>&1; then userdel -r ubuntu || userdel ubuntu; fi; \
     if getent group ubuntu >/dev/null; then groupdel ubuntu || true; fi; \
@@ -60,70 +71,35 @@ RUN set -eux; \
     echo "${USERNAME} ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/${USERNAME}"; \
     chmod 0440 "/etc/sudoers.d/${USERNAME}"
 
-USER ${USERNAME}
-WORKDIR /home/${USERNAME}
-
-ENV HOME=/home/${USERNAME} \
-    PATH=/home/${USERNAME}/.local/bin:${PATH}
-
-# The working directory of the user, owned by the user
-RUN mkdir -p "${HOME}/work"
-
-# The device nodes that run.sh asks for, then ai.pl (the chat; options such as --agent), or the
-# command given. usb-meter-nodes makes the USB meters' nodes.
+# ai.pl and its files (from fetch), the device nodes of the entrypoint
+COPY --from=fetch /out/ /
 COPY --chmod=0755 entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY --chmod=0755 usb-meter-nodes.sh /usr/local/bin/usb-meter-nodes
+RUN perl -cw /ai.pl
+
+USER ${USERNAME}
+ENV HOME=/home/${USERNAME} \
+    PATH=/home/${USERNAME}/.local/bin:${PATH}
+WORKDIR /home/${USERNAME}
+RUN mkdir -p "${HOME}/work"
+
+# the device nodes that run.sh asks for, then ai.pl (the chat; options such as --agent), or the
+# command given. usb-meter-nodes makes the USB meters' nodes.
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 # no arguments: ai.pl, the chat (the entrypoint)
 CMD []
 
 # --------------------------------------------------------------------------
-FROM common AS base
-
-# General-purpose: python, perl, lua/luajit, C/C++ (gcc, clang, cmake, ninja)
-# come from common.
-# Node.js (+ npm) and Go from Ubuntu's apt. ARGs don't carry across stages,
-# hence USERNAME again (same default as in base).
-ARG USERNAME=agent
-USER root
-RUN apt-get update \
- && apt-get install -y --no-install-recommends nodejs npm golang-go \
-        rtl-sdr \
-        libjson-xs-perl libwww-curl-perl libterm-readline-gnu-perl libdata-uuid-perl \
- && rm -rf /var/lib/apt/lists/*
-# ai.pl and the modules it loads, from this project's repository on GitHub. The commit is
-# pinned (AICLI_REF): the same ai.pl in every build until it is changed here. Its layout is the
-# one of the ai.pl image: the modules at /, the templates and the web page under /ai.
-ARG AICLI_REPO=https://github.com/CowboyTim/aicli
-ARG AICLI_REF=0b70b5eaaec61cb55782df5d9f335ff46686ff2f
-RUN set -eux; \
-    tmp=$(mktemp -d); \
-    curl -fsSL "${AICLI_REPO}/archive/${AICLI_REF}.tar.gz" -o "$tmp/src.tar.gz"; \
-    mkdir "$tmp/src"; \
-    tar -xzf "$tmp/src.tar.gz" -C "$tmp/src" --strip-components=1; \
-    install -m 0644 "$tmp/src/ai.pl" "$tmp/src/ai.pm" "$tmp/src/md.pm" "$tmp/src/remote_agent.pm" \
-        "$tmp/src/remote_hub.pm" "$tmp/src/tui.pm" "$tmp/src/utils.pm" "$tmp/src/ui.pm" "$tmp/src/worker.pm" /; \
-    chmod 0755 /ai.pl; \
-    cp -r "$tmp/src/ai" /ai; \
-    perl -cw /ai.pl; \
-    rm -rf "$tmp"
-
-USER ${USERNAME}
-
-# Rust (rustc, cargo, clippy, rustfmt) via rustup, for the user, stable channel.
-RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile default --default-toolchain stable \
- && "${HOME}/.cargo/bin/cargo" --version
-ENV PATH=${HOME}/.cargo/bin:${PATH}
-
-WORKDIR ${HOME}/work
+# base: the aicli layer on the slim Debian image; the bash target of docker-bake.hcl is this too
+FROM aicli AS base
 
 # --------------------------------------------------------------------------
-# rocm: the ROCm image (ROCM_IMAGE, passed as BASE_IMAGE) with a Python venv for the agent
-# user: torch, torchvision and torchaudio are the ROCm wheels that go with TheRock (AMD's ROCm
+# rocm: the aicli layer on the ROCm image (ROOT_IMAGE, see docker-bake.hcl) with a Python venv for the
+# agent user: torch, torchvision and torchaudio are the ROCm wheels that go with TheRock (AMD's ROCm
 # build), from TheRock's nightly index for one GPU family (TORCH_INDEX; gfx1151 by default). The
 # versions are one matching nightly set. The other packages are pinned. numpy stays 1.26.x,
 # since pyarrow 17 does not work with NumPy 2.
-FROM base AS rocm
+FROM aicli AS rocm
 ARG USERNAME=agent
 ARG UID=1000
 ARG GID=1000
@@ -136,6 +112,11 @@ ARG PYARROW_VERSION=17.0.0
 ARG SOUNDFILE_VERSION=0.14.0
 ARG PILLOW_VERSION=13.0.0
 ARG TRANSFORMERS_VERSION=5.5.1
+USER root
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 python3-venv python3-pip \
+ && rm -rf /var/lib/apt/lists/*
+USER ${USERNAME}
 # The downloads are large (the torch wheels alone are ~700 MB), so this is split into layers and
 # uses a pip cache mount: a failed or timed-out download resumes from the wheels already fetched,
 # and finished layers stay cached. Needs the BuildKit builder (the default for docker buildx bake).
@@ -174,6 +155,11 @@ ARG NRFUTIL_URL="https://files.nordicsemi.com/artifactory/swtools/external/nrfut
 ARG NRFUTIL_SHA256=a14996288928a92081cadeefd2dd37fcb54ee99a568fd4eaa6fb9586a51fba57
 ARG NRFUTIL_DEVICE=device=2.17.5
 ARG NRFUTIL_REFRESH=0
+USER root
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl python3 python3-venv pipx libusb-1.0-0 \
+ && rm -rf /var/lib/apt/lists/*
+USER ${USERNAME}
 
 # arduino-cli from the official GitHub release
 RUN mkdir -p "${HOME}/.local/bin" \
@@ -191,11 +177,6 @@ RUN arduino-cli config init \
 
 # usb_logger (the rsfzi/JT-UM120-usb-power-data-logger project), into ~/.local/bin via pipx;
 # pyusb talks to the meter through libusb, which needs its shared library
-USER root
-RUN apt-get update \
- && apt-get install -y --no-install-recommends libusb-1.0-0 \
- && rm -rf /var/lib/apt/lists/*
-USER ${USERNAME}
 RUN pipx install "usb-multimeter==${USB_METER_VERSION}" \
  && usb_logger --help >/dev/null
 
@@ -214,7 +195,7 @@ RUN echo "nrfutil refresh: ${NRFUTIL_REFRESH}" \
  && nrfutil ble-sniffer --help >/dev/null
 
 # --------------------------------------------------------------------------
-# android: JDK 17 (what the current Android Gradle Plugin needs), the SDK command-line tools with
+# android: JDK 21 (trixie's; the current Android Gradle Plugin and Gradle 8.14 run on it), the SDK command-line tools with
 # one platform, build tools and platform-tools (adb), and Gradle. The SDK and Gradle live in the
 # user's home, so sdkmanager can add platforms without root. Phones are not reachable over USB
 # here (no device passthrough for them): use wireless debugging, adb pair and adb connect to the
@@ -227,10 +208,10 @@ ARG ANDROID_BUILD_TOOLS=35.0.0
 ARG GRADLE_VERSION=8.14.6
 USER root
 RUN apt-get update \
- && apt-get install -y --no-install-recommends openjdk-17-jdk-headless \
+ && apt-get install -y --no-install-recommends curl unzip openjdk-21-jdk-headless \
  && rm -rf /var/lib/apt/lists/*
 USER ${USERNAME}
-ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 \
+ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 \
     ANDROID_HOME=${HOME}/android-sdk \
     ANDROID_SDK_ROOT=${HOME}/android-sdk \
     GRADLE_HOME=${HOME}/gradle-${GRADLE_VERSION}

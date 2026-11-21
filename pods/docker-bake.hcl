@@ -41,12 +41,14 @@ variable "AICLI_REF" {
   default = "0b70b5eaaec61cb55782df5d9f335ff46686ff2f"
 }
 
-variable "UBUNTU_IMAGE" {
-  default = "ubuntu:24.04"
+variable "DEBIAN_IMAGE" {
+  # the slim image of the base (aicli layer) and of the fetch stage
+  default = "debian:trixie-slim"
 }
 
 variable "ROCM_IMAGE" {
-  # Pin to a digest or ROCm version tag for reproducible builds.
+  # the image of the rocm target (Ubuntu 24.04 with ROCm). Pin to a digest or ROCm version tag
+  # for reproducible builds.
   default = "rocm/dev-ubuntu-24.04:latest"
 }
 
@@ -140,6 +142,7 @@ target "_common" {
     GID       = AGENT_GID
     AICLI_REPO = AICLI_REPO
     AICLI_REF  = AICLI_REF
+    FETCH_IMAGE = DEBIAN_IMAGE
   }
   # Load into the local image store (like "docker build --load"),
   # so "docker run" and the push can see the result.
@@ -151,7 +154,7 @@ target "base" {
   target   = "base"
   tags     = concat(["${IMAGE_REPO}:base"], AICLI_REGISTRY_HOST == "" ? [] : ["${REGISTRY}/pod-base:latest"])
   args = {
-    BASE_IMAGE = UBUNTU_IMAGE
+    ROOT_IMAGE = DEBIAN_IMAGE
   }
 }
 
@@ -161,7 +164,7 @@ target "bash" {
   target   = "base"
   tags     = concat(["${IMAGE_REPO}:bash"], AICLI_REGISTRY_HOST == "" ? [] : ["${REGISTRY}/pod-bash:latest"])
   args = {
-    BASE_IMAGE = UBUNTU_IMAGE
+    ROOT_IMAGE = DEBIAN_IMAGE
   }
 }
 
@@ -170,7 +173,7 @@ target "rocm" {
   target   = "rocm"
   tags     = concat(["${IMAGE_REPO}:rocm"], AICLI_REGISTRY_HOST == "" ? [] : ["${REGISTRY}/pod-rocm:latest"])
   args = {
-    BASE_IMAGE          = ROCM_IMAGE
+    ROOT_IMAGE          = ROCM_IMAGE
     TORCH_INDEX         = TORCH_INDEX
     TORCH_VERSION       = TORCH_VERSION
     TORCHVISION_VERSION = TORCHVISION_VERSION
@@ -183,7 +186,7 @@ target "arduino" {
   target   = "arduino"
   tags     = concat(["${IMAGE_REPO}:arduino"], AICLI_REGISTRY_HOST == "" ? [] : ["${REGISTRY}/pod-arduino:latest"])
   args = {
-    BASE_IMAGE          = UBUNTU_IMAGE
+    ROOT_IMAGE          = DEBIAN_IMAGE
     ARDUINO_CLI_VERSION = ARDUINO_CLI_VERSION
     ARDUINO_BOARD_URLS  = ARDUINO_BOARD_URLS
     ARDUINO_CORES       = ARDUINO_CORES
@@ -197,7 +200,7 @@ target "android" {
   target   = "android"
   tags     = concat(["${IMAGE_REPO}:android"], AICLI_REGISTRY_HOST == "" ? [] : ["${REGISTRY}/pod-android:latest"])
   args = {
-    BASE_IMAGE            = UBUNTU_IMAGE
+    ROOT_IMAGE            = DEBIAN_IMAGE
     ANDROID_CMDLINE_TOOLS = ANDROID_CMDLINE_TOOLS
     ANDROID_PLATFORM      = ANDROID_PLATFORM
     ANDROID_BUILD_TOOLS   = ANDROID_BUILD_TOOLS

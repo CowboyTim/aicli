@@ -556,7 +556,7 @@ broker never starts an agent: it has no devices, so the agent is started on its 
 with the devices it needs, and it connects back.
 
 ```
-ai.pl --agent --broker https://PUBLIC_DOMAIN/agents --name strix --programs arduino-cli,python3 \
+ai.pl --agent --broker https://PUBLIC_DOMAIN/ --name strix --programs arduino-cli,python3 \
       --work ~/aicli-work --token TOKEN        # or AI_AGENT_TOKEN in the environment
 ```
 
@@ -584,10 +584,15 @@ certificate; the token is the agent's whole credential.
 **Enrollment.** On the web page, "new enrollment token" shows a token once. On the agent's machine:
 
 ```
-ai.pl --enroll TOKEN --broker https://PUBLIC_DOMAIN/agents --name strix --tags arduino,gfx1151
+ai.pl --enroll TOKEN --broker https://PUBLIC_DOMAIN/ --name strix --tags arduino,gfx1151 --programs arduino-cli,python3 \
+  --work /home/agent/work
 ```
 
-The broker keeps the agent's name, its tags and the hash of its own token (not the token); the
+Without `--name` the agent is named by a random UUID; without `--tags` its tags are the names of its
+`--programs` (short lower-case words only).
+
+With `--programs` the agent runs at once after the enrollment (one command). Without it, the run ends
+after the enrollment. The broker keeps the agent's name, its tags and the hash of its own token (not the token); the
 agent keeps its token in `$AI_DIR/agent.json` (mode 0600). After that, `ai.pl --agent --programs ...`
 needs no token on its command line. The same enrollment token enrolls any number of agents, and
 a new token (the page) replaces the old one. The page lists the agents of the user, with a revoke

@@ -79,12 +79,20 @@ $::DEBUG = $::ORIG_ENV{DEBUG} || 0;
         exit($ok ? 0 : 2);
     }
     if($enroll){
-        # enroll this machine as an agent: the broker gives the agent its token, kept for --agent
-        die "--enroll is a mode of its own: not with --agent, --ui, -p, -c or --new\n"
-            if $agent or defined $ui or defined $::PROMPT or $continue or $new;
-        die "--enroll needs --broker URL, --name NAME and --tags LIST (the enrollment token is its value)\n"
-            unless length($broker // '') and length($agent_name // '') and length($tags // '');
-        $::ENROLL = {url => $broker, name => $agent_name, tags => [split /,/, $tags], token => $enroll, pin => $pin};
+        # enroll this machine as an agent: the broker gives the agent its token, kept in agent.json.
+        # With --programs the agent then runs at once (one command, enrollment and run); without
+        # it the run ends after the enrollment. Later starts need only --agent (the token is read).
+        die "--enroll is a mode of its own: not with --ui, -p, -c or --new\n"
+            if defined $ui or defined $::PROMPT or $continue or $new;
+        # the name defaults to a UUID, the tags to the programs' names (see remote_agent.pm)
+        die "--enroll needs --broker URL (the enrollment token is its value)\n"
+            unless length($broker // '');
+        die "--enroll needs --tags LIST, or --programs (their names are the tags)\n"
+            unless length($tags // '') or length($programs // '');
+        $agent = 1 if defined $programs;
+        $::ENROLL = {url => $broker, name => (length($agent_name // '') ? $agent_name : undef),
+            tags => (length($tags // '') ? [split /,/, $tags] : undef), programs => [split /,/, $programs // ''],
+            token => $enroll, pin => $pin};
     } elsif(defined $tags) {
         die "--tags is for --enroll\n";
     }
@@ -172,6 +180,12 @@ if($::ENROLL){
     # in agent.json, and this run ends
     require remote_agent;
     my $e = $::ENROLL;
+    $e->{name} //= remote_agent::new_name();
+    $e->{tags} //= [remote_agent::tags_of_programs(@{$e->{programs}})];
+    if (!@{$e->{tags}}) {
+        print STDERR "--enroll: no tags (give --tags, or programs whose names are short lower-case words)\n";
+        exit 1;
+    }
     my $r = eval { remote_agent::enroll(url => $e->{url}, token => $e->{token}, name => $e->{name}, tags => $e->{tags}, pin => $e->{pin}) };
     if (!$r) {
         my $why = ($@ // 'unknown error') =~ s/\s+\z//r;
@@ -180,7 +194,7 @@ if($::ENROLL){
     }
     remote_agent::save_credentials("$BASE_DIR/agent.json", url => $e->{url}, name => $r->{name}, token => $r->{token});
     print "enrolled $r->{name} (tags: ".join(', ', @{$r->{tags}}).") at $e->{url}; its token is in $BASE_DIR/agent.json\n";
-    exit 0;
+    exit 0 unless $::AGENT;   # with --programs the agent runs now, with the token just saved
 }
 if($::AGENT){
     # a remote agent: it asks the broker for jobs and runs them, until ctrl-C or TERM
@@ -340,6 +354,14 @@ address works too: C<::1> for the loopback, C<::> for any address (in the URL it
 is in brackets). Any other address than the loopback reaches the chat (its tools
 included) from the network: only with a token that is hard to guess, and with
 the network you trust.
+
+=item B<--enroll TOKEN>
+
+Enroll this machine as an agent of the broker (C<--broker>). C<--name> defaults to a random UUID, and C<--tags>
+defaults to the names of the C<--programs> (short lower-case words). The agent's own token
+is kept in F<$AI_DIR/agent.json> (mode 0600). With C<--programs> the agent then runs at once, in the same
+run; without it the run ends after the enrollment. The next starts need only C<--agent> (the token is read
+from that file, so a container with a volume on C<$AI_DIR> keeps it).
 
 =item B<--agent>
 

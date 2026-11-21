@@ -579,7 +579,7 @@
     agentsCall("/agent/token", {}).then(function (d) {
       agenttoken.value = d.token;
       agentenroll.hidden = false;
-      agentnote.textContent = "shown once: on the agent's machine, ai.pl --agent --enroll TOKEN --broker https://" + location.host + "/agents --name NAME --tags TAGS";
+      agentnote.textContent = "shown once: on the agent's machine, ai.pl --enroll TOKEN --broker https://" + location.host + "/ --programs PROGRAMS (the name is a UUID unless --name is given, the tags are the programs unless --tags)";
     }).catch(function (err) { agentnote.textContent = String(err); });
   });
   document.getElementById("agentcopy").addEventListener("click", function () {

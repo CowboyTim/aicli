@@ -111,7 +111,25 @@ is_deeply(ask({op => 'agents', user => 'acme'})->{agents}, [], "and it is gone")
 my $after = ask({op => 'exec', project => 'acme/alpha', tags => ['arduino'], argv => ['perl', '-v']});
 like($after->{error}, qr/no agent of acme with the tags \(arduino\) is configured/, "a job for its tags: no agent now");
 
-kill 'TERM', $agent_pid, $broker_pid;
-waitpid($_, 0) for $agent_pid, $broker_pid;
+# one command: the enrollment with --programs runs the agent at once (no second run, no --token);
+# the enrollment token enrolls any number of agents, so the same token is used again
+my $one_pid = fork();
+if (!$one_pid) {
+    %ENV = (AI_DIR => "$tmp/ai2", PATH => $ENV{PATH}, HOME => $tmp);
+    open(STDERR, '>', "$tmp/one.log");
+    open(STDOUT, '>', "$tmp/one.out");
+    exec($^X, $ai_pl, '--enroll', $token, '--broker', "http://127.0.0.1:$agent_port", '--name', 'oneshot',
+        '--tags', 'arduino', '--programs', 'perl', '--work', "$tmp/work2") or POSIX::_exit(127);
+}
+my $one;
+ok(wait_for(sub {
+    $one = ask({op => 'exec', project => 'acme/alpha', tags => ['arduino'], argv => ['perl', '-e', 'print "one command\n"']});
+    ($one->{error} // '') !~ /is connected|is configured/;
+}, 20), "the enrollment runs the agent at once");
+is(MIME::Base64::decode_base64($one->{output} // ''), "one command\n", "and its job runs");
+ok(-f "$tmp/ai2/agent.json", "its credentials are kept for the next start");
+
+kill 'TERM', $one_pid, $agent_pid, $broker_pid;
+waitpid($_, 0) for $one_pid, $agent_pid, $broker_pid;
 
 done_testing();

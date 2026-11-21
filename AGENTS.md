@@ -255,9 +255,9 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   listener is `AI_BROKER_AGENT_LISTEN` (host:port), behind nginx's `/agents/` route (no login
   there: the agent's token is its login). Enrollment: the web page asks for a user's enrollment
   token (`POST /agent/token`, through the login: nginx's `X-Aicli-User`), shown once; the broker
-  keeps its hash (`enroll`, in the state file `AI_BROKER_STATE`). `ai.pl --agent --enroll TOKEN
-  --broker URL --name NAME --tags T` posts it to `/agents/enroll`, gets the agent's own token and
-  keeps it in `$AI_DIR/agent.json` (0600); `--agent` reads that file when no token is given.
+  keeps its hash (`enroll`, in the state file `AI_BROKER_STATE`). `ai.pl --enroll TOKEN --broker URL
+  [--name NAME] [--tags T] --programs P` (name: a UUID by default; tags: the programs' names by default) posts it to `/agents/enroll`, gets the agent's own token and
+  keeps it in `$AI_DIR/agent.json` (0600); with `--programs` it runs at once, else `--agent` reads that file when no token is given.
   The page's accounts (ui.pm, `_account`, `_visible`, `_owns`, `publish_each`): a request's account
   is the account ID nginx sends (X-Aicli-Account, 32 hex digits: the login's UUID without its dashes),
   behind the gate; undef for the local operator; the lists are made per account,
@@ -631,6 +631,7 @@ Other APIs are reached through an OpenAI compatible gateway, such as LiteLLM or 
 | `t/134_history_tools.t` | the history of a session on the page: the tool calls of the chat with their results, in their place between what was said and the answers, a call without a result yet has none |
 | `t/133_favicon.t` | the icon of the pages: favicon.ico (16, 32, 48, 64, 256 pixels) and favicon.svg, a strawberry drawn for aicli (not emoji artwork); both pages link it; nginx serves it publicly; the local interface answers it without a login |
 | `t/136_api_token.t` | the API tokens of the services (`/auth/api/token`, aud=flm): issued from a login only, verified with `?aud=flm` (a login refused for it, an API token refused for the page), no renewal, a user that is not an account, a token past its time, the end at logout |
+| `t/137_agent_defaults.t` | the enrollment defaults: the name is a random UUID version 4 (each new), the tags are the programs' names (a path's last part, short lower-case words, each once) |
 | `t/132_account_id.t` | the account ID of a login in the passwd comment: the fifth subfield, the other subfields kept, made once, read back without the dashes, the UUID's form and version, a login not in the passwd refused |
 | `t/129_page_accounts.t` | the page's accounts: the login's name (none, a bad one, the local operator), what an account sees (its sessions, projects, busy list, the page's state), the events (each to its account, the models to all, a failure of a session to its account), the routes an account may not use (message, switch, delete, rename, pod, a session in another's project) |
 | `t/130_project_admin.t` | the page's projects: created in the login's account and switched to (names checked, a taken name, a login with no account), renamed only without sessions (same account), deleted with its sessions and files only on force, never the page's own project, nothing of another account touched; the local operator's account/project |

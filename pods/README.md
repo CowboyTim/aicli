@@ -12,14 +12,22 @@ container, and `entrypoint.sh` uses the same list.
 
 | file | what it is |
 |------|------------|
-| `Dockerfile` | the `base` stage: the basic tools (bash, perl, grep, find), Rust, nodejs, npm and go, and `ai.pl` with its modules |
+| `Dockerfile` | the images: `fetch` (ai.pl from GitHub), `aicli` (slim Debian, or the ROCm image, with what ai.pl needs and ai.pl), `base` and the device stages |
 | `docker-bake.hcl` | the build definition of `base` (`docker buildx bake`) |
 | `run.sh`, `entrypoint.sh`, `usb-meter-nodes.sh` | the devices of a container (see their headers) |
 | `README.md` | this file |
 
+## The base image
+
+`debian:trixie-slim` (`DEBIAN_IMAGE`) with the runtime of ai.pl and nothing else: perl and its modules
+(JSON::XS, WWW::Curl, Term::ReadLine::Gnu), bash, grep, find, ca-certificates, and sudo (the entrypoint
+makes the serial device nodes with it). No compiler, no Rust, no nodejs, no go, no rtl-sdr: those are for
+the images that need them, and the device images add their own programs (arduino, android, rocm).
+The ROCm image gets the same layer on top (`ROOT_IMAGE`), since it has perl and bash too.
+
 ## ai.pl comes from GitHub
 
-The `base` stage does not copy `ai.pl` from a build context. It downloads the repository
+The `fetch` stage does not copy `ai.pl` from a build context. It downloads the repository
 archive of one commit, `AICLI_REF`, from `AICLI_REPO` (GitHub), and installs `ai.pl`, its
 modules and `ai/` (the templates and the web page) in the layout of the main image: the
 modules at `/`, `ai/` under `/ai`. The commit is pinned in the `Dockerfile` and in
@@ -54,10 +62,10 @@ of `docker-bake.hcl`:
 
 | image | stage | what it adds |
 |-------|-------|--------------|
-| `bash` | base | the basic tools, Rust, nodejs, npm, go (the base image, under its own name) |
-| `rocm` | rocm | the ROCm image (`ROCM_IMAGE`), a Python venv with torch (TheRock's ROCm wheels for `TORCH_INDEX`), numpy, pyarrow, soundfile, pillow, transformers |
+| `bash` | base | nothing more: the base image under its own name |
+| `rocm` | rocm | on the ROCm image (`ROCM_IMAGE`, with the same ai.pl layer), a Python venv with torch (TheRock's ROCm wheels for `TORCH_INDEX`), numpy, pyarrow, soundfile, pillow, transformers |
 | `arduino` | arduino | arduino-cli with the ESP32 core, usb_logger (usb-multimeter, via pipx), nrfutil with ble-sniffer |
-| `android` | android | JDK 17, the Android SDK (platform, build tools, platform-tools), Gradle |
+| `android` | android | JDK 21, the Android SDK (platform, build tools, platform-tools), Gradle |
 
 `bake` builds one with `docker buildx bake arduino`, or all with `docker buildx bake local`.
 `run.sh --arduino`, `--android`, `--rocm` and `--bash` run them, with the devices of
