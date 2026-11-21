@@ -143,6 +143,8 @@ sub enroll {
     my $agent_token = _random_token();
     $self->{agents}{$name} = {tags => [@$tags], token_sha256 => Digest::SHA::sha256_hex($agent_token),
         user => $user, enrolled => $now};
+    # the enrollment token is used once: it enrolls this one agent, and a new one is needed for the next
+    delete $self->{enroll}{$user};
     $self->_save();
     return {ok => 1, token => $agent_token, name => $name, tags => [@$tags]};
 }

@@ -121,14 +121,20 @@ is_deeply(ask({op => 'agents', user => 'acme'})->{agents}, [], "and it is gone")
 my $after = ask({op => 'exec', project => 'acme/alpha', tags => ['arduino'], argv => ['perl', '-v']});
 like($after->{error}, qr/no agent of acme with the tags \(arduino\) is configured/, "a job for its tags: no agent now");
 
-# one command: the enrollment with --programs runs the agent at once (no second run, no --token);
-# the enrollment token enrolls any number of agents, so the same token is used again
+# the token is used up by strix: another machine with it is refused
+$out = `AI_DIR=$tmp/ai3 $^X $ai_pl --enroll $token --broker http://127.0.0.1:$agent_port --name third --tags arduino 2>&1`;
+is($? >> 8, 1, "the used token on another machine: refused");
+like($out, qr/the enrollment token is not any user/, "and says so");
+
+# one command: the enrollment with --programs runs the agent at once (no second run, no --token).
+# An enrollment token is used once, so this one has a new token of its own
+my $token2 = ask({op => 'enroll_token', user => 'acme'})->{token};
 my $one_pid = fork();
 if (!$one_pid) {
     %ENV = (AI_DIR => "$tmp/ai2", PATH => $ENV{PATH}, HOME => $tmp);
     open(STDERR, '>', "$tmp/one.log");
     open(STDOUT, '>', "$tmp/one.out");
-    exec($^X, $ai_pl, '--enroll', $token, '--broker', "http://127.0.0.1:$agent_port", '--name', 'oneshot',
+    exec($^X, $ai_pl, '--enroll', $token2, '--broker', "http://127.0.0.1:$agent_port", '--name', 'oneshot',
         '--tags', 'arduino', '--programs', 'perl', '--work', "$tmp/work2") or POSIX::_exit(127);
 }
 my $one;

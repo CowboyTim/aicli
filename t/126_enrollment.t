@@ -47,25 +47,31 @@ my $strix = $r->{token};
 ok(length($strix) >= 40, "and gets its own token");
 unlike(do { open(my $f2, '<', $file) or die; local $/; <$f2> }, qr/\Q$strix\E/, "the state has not the agent's token either");
 
-# the token is reusable: a second agent of the same user
-my $r2 = $h->enroll($alice, 'pi', ['zigbee'], 100);
-ok($r2->{ok}, "the same token enrolls a second agent");
+# a token is used once: it is gone after the enrollment, so a second agent needs a new token
+my $again_token = $h->enroll($alice, 'pi', ['zigbee'], 100);
+is($again_token->{status}, 403, "the used token enrolls no second agent: 403");
+my $alice_b = $h->issue_enroll('alice');
+my $r2 = $h->enroll($alice_b, 'pi', ['zigbee'], 100);
+ok($r2->{ok}, "a new token enrolls a second agent");
 my $pi_token = $r2->{token};
+is($h->enroll($alice_b, 'pi2', ['zigbee'], 100)->{status}, 403, "and that one is used too: 403");
 
-# refusals
+# refusals (a refused enrollment does not use the token)
+my $t = $h->issue_enroll('alice');
 my $bad = $h->enroll('not-a-token-at-all-0000', 'x', ['arduino'], 100);
 is($bad->{status}, 403, "a token that is no user's: 403");
-is($h->enroll($alice, 'strix', ['arduino'], 100)->{status}, 409, "a name taken: 409");
-is($h->enroll($alice, 'Bad Name', ['arduino'], 100)->{status}, 400, "a name with a space: 400");
-is($h->enroll($alice, 'new1', [], 100)->{status}, 400, "no tags: 400");
-is($h->enroll($alice, 'new1', ['Big'], 100)->{status}, 400, "a tag with a capital: 400");
-is($h->enroll($alice, 'new1', 'arduino', 100)->{status}, 400, "tags that are not a list: 400");
+is($h->enroll($t, 'pi', ['arduino'], 100)->{status}, 409, "a name taken: 409");
+is($h->enroll($t, 'Bad Name', ['arduino'], 100)->{status}, 400, "a name with a space: 400");
+is($h->enroll($t, 'new1', [], 100)->{status}, 400, "no tags: 400");
+is($h->enroll($t, 'new1', ['Big'], 100)->{status}, 400, "a tag with a capital: 400");
+is($h->enroll($t, 'new1', 'arduino', 100)->{status}, 400, "tags that are not a list: 400");
 is($h->enroll(undef, 'new1', ['arduino'], 100)->{status}, 403, "no token: 403");
 
 # a new token replaces the old one of that user
 my $alice2 = $h->issue_enroll('alice');
-is($h->enroll($alice, 'new1', ['arduino'], 100)->{status}, 403, "the old token of alice no longer enrolls");
+is($h->enroll($t, 'new1', ['arduino'], 100)->{status}, 403, "the old token of alice no longer enrolls");
 ok($h->enroll($alice2, 'new1', ['arduino'], 100)->{ok}, "the new one does");
+is($h->enroll($alice2, 'new2', ['arduino'], 100)->{status}, 403, "and it is used once: a second use is 403");
 
 # the agents of a user
 my $list = $h->agents_of('alice');
@@ -96,8 +102,11 @@ ok($h->agent_of_token($pi_token), "the other agents still work");
 my $again = remote_hub->new(state_file => $file);
 is_deeply([sort map {$_->{name}} @{$again->agents_of('alice')}], ['new1', 'pi'], "after a restart: the agents are there");
 is($again->agent_of_token($pi_token), 'pi', "and their tokens");
-my $r3 = $again->enroll($alice2, 'late', ['arduino'], 300);
+my $alice4 = $again->issue_enroll('alice');
+my $r3 = $again->enroll($alice4, 'late', ['arduino'], 300);
 ok($r3->{ok}, "and the enrollment token works after a restart");
+is(remote_hub->new(state_file => $file)->enroll($alice4, 'late2', ['arduino'], 300)->{status}, 403,
+    "a used token is still used after a restart: 403");
 
 # a name of the config is taken by the state too
 my $cfg = eval { remote_hub->new(state_file => $file, agents => {pi => {tags => ['x'], token_sha256 => Digest::SHA::sha256_hex('y')}}) };
