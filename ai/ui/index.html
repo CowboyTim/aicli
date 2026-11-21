@@ -36,13 +36,17 @@
   #model, #session, #project { max-width: 100% !important; }
   .projadmin { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
   .projadmin input { min-width: 0; width: 9em; }
+  /* the menu is as wide as the screen on a phone: long words (a UUID, a token, a URL) wrap here,
+     they never widen the menu (a horizontal scrollbar) */
+  #menu, #menu > * { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
   #agents { flex: 1 1 100%; font-size: 13px; color: var(--muted); }
   #agents .agenthead { margin-bottom: 4px; }
   #agents ul { list-style: none; margin: 0; padding: 0; }
   #agents li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 0; }
-  #agents button { font-size: 13px; padding: 2px 8px; }
+  #agents li > span { min-width: 0; flex: 1 1 auto; overflow-wrap: anywhere; }
+  #agents button { font-size: 13px; padding: 2px 8px; flex: 0 0 auto; }
   #agents .enroll { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
-  #agents .enroll input { flex: 1 1 auto; min-width: 0; font-family: monospace; font-size: 12px; }
+  #agents .enroll input { flex: 1 1 0; width: 0; min-width: 0; font-family: monospace; font-size: 12px; }
   #agents .enroll[hidden] { display: none; }
   #session option { max-width: 40em; }
   @media (min-width: 700px) { #menu { left: auto; width: 340px; border-left: 1px solid var(--line); } }

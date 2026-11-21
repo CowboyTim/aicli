@@ -83,6 +83,16 @@ ok(-f "$tmp/ai/agent.json", "its credentials are kept");
 is((stat("$tmp/ai/agent.json"))[2] & 07777, 0600, "in a file only the user reads");
 unlike($out, qr/\Q$token\E/, "the enrollment token is not printed");
 
+# a second enrollment on the same machine reuses its agent: no second agent, the file kept
+my $file_before = do { local $/; open(my $fh, '<', "$tmp/ai/agent.json") or die $!; <$fh> };
+$out = `AI_DIR=$tmp/ai $^X $ai_pl --enroll $token --broker http://127.0.0.1:$agent_port --name strix --tags arduino 2>&1`;
+is($? >> 8, 0, "a second enrollment on this machine: ok");
+like($out, qr/reusing strix/, "it reuses strix");
+is(do { local $/; open(my $fh, '<', "$tmp/ai/agent.json") or die $!; <$fh> }, $file_before, "agent.json is kept as it was");
+$out = `AI_DIR=$tmp/ai $^X $ai_pl --enroll $token --broker http://127.0.0.1:$agent_port --name other --tags arduino 2>&1`;
+is($? >> 8, 1, "another name on this machine: refused");
+like($out, qr/this machine's agent is strix/, "and says so");
+
 my $list = ask({op => 'agents', user => 'acme'});
 is_deeply([map {$_->{name}} @{$list->{agents}}], ['strix'], "alice's agents: strix");
 is_deeply($list->{agents}[0]{tags}, ['arduino', 'gfx1151'], "with its tags");

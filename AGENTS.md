@@ -256,7 +256,8 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   there: the agent's token is its login). Enrollment: the web page asks for a user's enrollment
   token (`POST /agent/token`, through the login: nginx's `X-Aicli-User`), shown once; the broker
   keeps its hash (`enroll`, in the state file `AI_BROKER_STATE`). `ai.pl --enroll TOKEN --broker URL
-  [--name NAME] [--tags T] --programs P` (name: a UUID by default; tags: the programs' names by default) posts it to `/agents/enroll`, gets the agent's own token and
+  [--name NAME] [--tags T] --programs P` (name: a UUID by default; tags: the programs' names by default); an enrollment on a machine that has its agent
+  already (agent.json) reuses it, a different name or broker is refused posts it to `/agents/enroll`, gets the agent's own token and
   keeps it in `$AI_DIR/agent.json` (0600); with `--programs` it runs at once, else `--agent` reads that file when no token is given.
   The page's accounts (ui.pm, `_account`, `_visible`, `_owns`, `publish_each`): a request's account
   is the account ID nginx sends (X-Aicli-Account, 32 hex digits: the login's UUID without its dashes),

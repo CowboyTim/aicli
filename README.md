@@ -595,7 +595,8 @@ With `--programs` the agent runs at once after the enrollment (one command). Wit
 after the enrollment. The broker keeps the agent's name, its tags and the hash of its own token (not the token); the
 agent keeps its token in `$AI_DIR/agent.json` (mode 0600). After that, `ai.pl --agent --programs ...`
 needs no token on its command line. The same enrollment token enrolls any number of agents, and
-a new token (the page) replaces the old one. The page lists the agents of the user, with a revoke
+a new token (the page) replaces the old one. Enrolling again on the same machine (the same volume or the same `$AI_DIR`) reuses the
+agent in `agent.json` and makes no second one; a different name or broker is refused. The page lists the agents of the user, with a revoke
 for each: a revoked agent's token stops working.
 
 The broker's state file (`AI_BROKER_STATE`, in its own volume) keeps the enrollments over a restart.

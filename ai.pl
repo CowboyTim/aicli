@@ -180,21 +180,39 @@ if($::ENROLL){
     # in agent.json, and this run ends
     require remote_agent;
     my $e = $::ENROLL;
-    $e->{name} //= remote_agent::new_name();
-    $e->{tags} //= [remote_agent::tags_of_programs(@{$e->{programs}})];
-    if (!@{$e->{tags}}) {
-        print STDERR "--enroll: no tags (give --tags, or programs whose names are short lower-case words)\n";
-        exit 1;
+    my $have = remote_agent::load_credentials("$BASE_DIR/agent.json");
+    if ($have and length($have->{token} // '')) {
+        # this machine has its agent already (agent.json, in the volume): it is reused, not enrolled
+        # again, so a run with --enroll after the first one does not make another agent
+        (my $url = $e->{url}) =~ s{/+\z}{};
+        (my $had = $have->{url} // '') =~ s{/+\z}{};
+        if (length($e->{name} // '') and $e->{name} ne ($have->{name} // '')) {
+            print STDERR "this machine's agent is $have->{name} (in $BASE_DIR/agent.json), not $e->{name}\n";
+            exit 1;
+        }
+        if ($url ne $had) {
+            print STDERR "this machine's agent is enrolled at $had, not at $url\n";
+            exit 1;
+        }
+        print "reusing $have->{name} (enrolled at $had; its token is in $BASE_DIR/agent.json)\n";
+        exit 0 unless $::AGENT;   # with --programs the agent runs now, with the token it has
+    } else {
+        $e->{name} //= remote_agent::new_name();
+        $e->{tags} //= [remote_agent::tags_of_programs(@{$e->{programs}})];
+        if (!@{$e->{tags}}) {
+            print STDERR "--enroll: no tags (give --tags, or programs whose names are short lower-case words)\n";
+            exit 1;
+        }
+        my $r = eval { remote_agent::enroll(url => $e->{url}, token => $e->{token}, name => $e->{name}, tags => $e->{tags}, pin => $e->{pin}) };
+        if (!$r) {
+            my $why = ($@ // 'unknown error') =~ s/\s+\z//r;
+            print STDERR "$why\n";
+            exit 1;
+        }
+        remote_agent::save_credentials("$BASE_DIR/agent.json", url => $e->{url}, name => $r->{name}, token => $r->{token});
+        print "enrolled $r->{name} (tags: ".join(', ', @{$r->{tags}}).") at $e->{url}; its token is in $BASE_DIR/agent.json\n";
+        exit 0 unless $::AGENT;   # with --programs the agent runs now, with the token just saved
     }
-    my $r = eval { remote_agent::enroll(url => $e->{url}, token => $e->{token}, name => $e->{name}, tags => $e->{tags}, pin => $e->{pin}) };
-    if (!$r) {
-        my $why = ($@ // 'unknown error') =~ s/\s+\z//r;
-        print STDERR "$why\n";
-        exit 1;
-    }
-    remote_agent::save_credentials("$BASE_DIR/agent.json", url => $e->{url}, name => $r->{name}, token => $r->{token});
-    print "enrolled $r->{name} (tags: ".join(', ', @{$r->{tags}}).") at $e->{url}; its token is in $BASE_DIR/agent.json\n";
-    exit 0 unless $::AGENT;   # with --programs the agent runs now, with the token just saved
 }
 if($::AGENT){
     # a remote agent: it asks the broker for jobs and runs them, until ctrl-C or TERM
