@@ -22,7 +22,7 @@ ARG FETCH_IMAGE=debian:trixie-slim
 # the modules at /, the templates and the web page under /ai. Copied into the images as /.
 FROM ${FETCH_IMAGE} AS fetch
 ARG AICLI_REPO=https://github.com/CowboyTim/aicli
-ARG AICLI_REF=0b70b5eaaec61cb55782df5d9f335ff46686ff2f
+ARG AICLI_REF=08e5f7e7eb03454c90bbfc3cc8307a59cf54e6ce
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl \
  && rm -rf /var/lib/apt/lists/*

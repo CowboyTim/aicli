@@ -38,7 +38,7 @@ variable "AICLI_REPO" {
 
 # the commit of ai.pl (a full commit id of the repository above; see Dockerfile)
 variable "AICLI_REF" {
-  default = "0b70b5eaaec61cb55782df5d9f335ff46686ff2f"
+  default = "08e5f7e7eb03454c90bbfc3cc8307a59cf54e6ce"
 }
 
 variable "DEBIAN_IMAGE" {
