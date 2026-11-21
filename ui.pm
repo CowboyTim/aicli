@@ -450,6 +450,21 @@ sub _project_dir {
     return -d $dir ? $dir : $ai::ROOT;
 }
 
+# A login's page starts in its own work: when the active session is not the account's (the last
+# login's, or none), the account's newest session becomes the active one, or a new session is made in
+# its first project. With no project of its own the page stays empty: its project menu makes one.
+# The local operator (no account) keeps what it had.
+sub _home {
+    my ($acct) = @_;
+    return unless defined $acct;
+    return if defined $active and _owns($acct, _active_rel());
+    my ($newest) = grep {_owns($acct, $_->{project})} @{ai::session_choices()};
+    return _activate($newest->{name}) if $newest;
+    my ($first) = grep {_owns($acct, $_)} @{ai::project_dirs()};
+    return _project($first) if defined $first;
+    return;
+}
+
 # the page chose a project: its newest session becomes the active one, or a new
 # session is made in it. Returns 1, or 0 with the reason in $last_error.
 sub _project {
@@ -1181,6 +1196,8 @@ sub _dispatch {
             ."Cache-Control: no-cache\r\n"
             ."X-Accel-Buffering: no\r\n"
             ."Connection: keep-alive\r\n\r\n";
+        # a login's page starts in its own work, before it is sent the state (see _home)
+        _home($acct);
         push @clients, $cn;
         _queue($cn, _frame(state => _master_state($acct)));
         _queue($cn, _frame(history => _history_data($active))) if _visible($acct, _active_rel());
