@@ -124,6 +124,16 @@ is($code, 200, "with force it goes, with its session");
 ok(!-e "$root/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/gamma", "the directory is gone");
 ok(!-d "$ai::SESSIONS_DIR/$gamma_session", "and its session");
 
+# the page is on the project that is deleted: the page moves to another project of the account first
+mkdir "$root/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/omega" or die "mkdir: $!";
+($code) = call('POST', '/project', $aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, '{"name":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/omega"}');
+is(ai::session_project($ui::active), 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/omega', "the page is on omega");
+($code, $d) = call('POST', '/project/delete', $aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, '{"name":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/omega","force":true}');
+is($code, 200, "omega, the page's own project, is deleted: the page moves first");
+ok(!-e "$root/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/omega", "and its directory is gone");
+isnt(ai::session_project($ui::active), 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/omega', "the page is on another project");
+ok(ui::_owns('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', ai::session_project($ui::active)), "of its own account");
+
 mkdir "$root/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/empty" or die "mkdir: $!";
 ($code) = call('POST', '/project/delete', $aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, '{"name":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/empty"}');
 is($code, 200, "an empty project with no session goes without force");
@@ -143,6 +153,20 @@ is($code, 409, "dave's project has the session it was made with: asked about fir
 ($code) = call('POST', '/project/delete', $local, '{"name":"dave/proj","force":true}');
 is($code, 200, "the local operator deletes dave's project with force");
 ok(!-e "$root/dave/proj", "gone");
+
+# the account's last project, the page on it: it goes with force, and the page has no session and no
+# session is left in the project (the page does not make a new one in a project that is removed)
+my $ffff = 'ffffffffffffffffffffffffffffffff';
+mkdir "$root/$ffff" or die "mkdir: $!";
+mkdir "$root/$ffff/only" or die "mkdir: $!";
+ok(ui::_project("$ffff/only"), "the page is on ffff's only project");
+my $only_session = $ui::active;
+($code) = call('POST', '/project/delete', {'x-aicli-account' => $ffff, 'x-aicli-gate' => 'gate-secret'}, '{"name":"' . $ffff . '/only","force":true}');
+is($code, 200, "the last project goes with force");
+ok(!-e "$root/$ffff/only", "gone");
+is($ui::active, undef, "the page has no session now");
+ok(!-d "$ai::SESSIONS_DIR/$only_session", "and the page's session went with it");
+is_deeply(ui::_project_sessions("$ffff/only"), [], "no session is left in the removed project");
 ok(-d "$root/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/beta", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb's project is untouched by all of that");
 
 done_testing();

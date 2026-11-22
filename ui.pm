@@ -673,22 +673,43 @@ sub _is_project {
     return defined $rel && defined $ai::ROOT && $rel =~ m{\A$ACCOUNT_RE/$PROJECT_RE\z} && -d "$ai::ROOT/$rel" && !-l "$ai::ROOT/$rel";
 }
 
+# another project of an account, for the page to move to when its own project is deleted: the one of
+# the newest session, else the first project; undef when the account has no other project
+sub _other_project {
+    my ($rel, $acct) = @_;
+    my ($newest) = grep {$_->{project} ne $rel and _owns($acct, $_->{project})} @{ai::session_choices()};
+    return $newest->{project} if $newest;
+    my ($first) = grep {$_ ne $rel and _owns($acct, $_)} @{ai::project_dirs()};
+    return $first;
+}
+
 # delete a project: its sessions go with it and its files. Refused while a session of it is busy,
-# or the page is on one of its sessions; with files or sessions in it only when $force (the page
-# asks first). Answers (status, error): 200 and no error when it is gone.
+# and with files or sessions in it only when $force (the page asks first). When the page is on one of
+# its sessions, the page moves to another project of the account first (with none, the page has no project until one is made).
+# Answers (status, error): 200 and no error when it is gone.
 sub _delete_project {
-    my ($rel, $force) = @_;
+    my ($rel, $force, $acct) = @_;
     my $sessions = _project_sessions($rel);
     for my $s (@$sessions) {
         return (409, "a session of '$rel' is busy: wait for its answer first") if $worker{$s} and $worker{$s}{busy};
     }
-    return (409, "the page is on a session of '$rel': switch the page to another project first")
-        if defined $active and (ai::session_project($active) // '') eq $rel;
     opendir(my $dh, "$ai::ROOT/$rel") or return (500, "cannot read the project: $!");
     my @files = grep {!m/\A\.\.?\z/} readdir($dh);
     closedir($dh);
     if ((@$sessions or @files) and !$force) {
         return (409, "'$rel' has ".scalar(@$sessions)." sessions and ".scalar(@files)." files in it: it is deleted with them when you confirm");
+    }
+    # the page leaves the project before its sessions go: deleting the page's session would make a
+    # new one in the project, which would stay behind when the directory is removed
+    if (defined $active and (ai::session_project($active) // '') eq $rel) {
+        my $other = _other_project($rel, $acct);
+        if (defined $other) {
+            _project($other) or return (500, $last_error || "could not switch the page to '$other'");
+        } else {
+            # the account's last project: the page has none until one is made
+            $active = undef;
+            publish_each(state => sub { _master_state($_[0]) });
+        }
     }
     for my $s (@$sessions) {
         my $err = _delete_session($s);
@@ -1284,8 +1305,18 @@ sub _dispatch {
         $rel = _active_rel() if $new and !defined $rel;
         return _json($cn, 403, {error => "there is no session or project of yours by that name"})
             unless _owns($acct, $rel);
+        # a new session may be given a name (as a project is): it is made, then named
+        my $want = $new && defined $name && !ref($name) && length($name) ? $name : undef;
+        return _json($cn, 400, {error => 'not a session name'})
+            if defined $want and !ai::valid_session_name($want);
+        return _json($cn, 409, {error => "there is a session '$want' already"})
+            if defined $want and -e "$ai::SESSIONS_DIR/$want";
         return _json($cn, 400, {error => ($last_error || 'the session cannot be used')})
             unless _activate($name, new => $new, project => (ref($d->{project}) ? undef : $d->{project}));
+        if (defined $want) {
+            my $err = _rename_session($active, $want);
+            return _json($cn, 500, {error => $err}) if defined $err;
+        }
         return _json($cn, 200, {session => _shown_active($acct)});
     }
     # the agents of the user (remote_hub.pm, through the broker): the enrollment token (shown
@@ -1374,7 +1405,7 @@ sub _dispatch {
         return _json($cn, 400, {error => 'a project name is wanted'}) unless defined $rel and !ref($rel) and length $rel;
         return _json($cn, 404, {error => 'there is no such project of yours'})
             unless _owns($acct, $rel) and _is_project($rel);
-        my ($code, $err) = _delete_project($rel, ref($d) eq 'HASH' && $d->{force} ? 1 : 0);
+        my ($code, $err) = _delete_project($rel, ref($d) eq 'HASH' && $d->{force} ? 1 : 0, $acct);
         return _json($cn, $code, $code == 200 ? {deleted => $rel} : {error => $err});
     }
     if($p eq '/project/rename' and $m eq 'POST'){

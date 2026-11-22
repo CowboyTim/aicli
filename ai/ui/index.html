@@ -28,11 +28,19 @@
   #qrbox[hidden] { display: none; }
   #qrimg { width: 220px; height: 220px; background: #fff; padding: 8px; border-radius: 6px; }
   #qrnote { font-size: 13px; color: var(--muted); }
-  #renamesession { align-self: flex-start; font: inherit; font-size: 14px; padding: 4px 10px; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
-  #delsession { align-self: flex-start; font: inherit; font-size: 14px; padding: 4px 10px; color: var(--err); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
+  /* the session's block: the select with its rename and delete; the look and the theme side by side */
+  .sessadmin, .viewrow { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; }
+  .sessadmin > label, .viewrow > label { flex: 1 1 100%; min-width: 0; }
+  @media (min-width: 700px) { .sessadmin > label, .viewrow > label { flex: 1 1 14em; } }
+  .sessadmin select, .viewrow select { min-width: 0; width: 100%; max-width: 100%; }
+  #renamesession { font: inherit; font-size: 14px; padding: 4px 10px; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
+  #delsession { font: inherit; font-size: 14px; padding: 4px 10px; color: var(--err); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
   #logout { align-self: flex-start; font: inherit; font-size: 14px; padding: 4px 10px; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
   #menu label { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 13px; }
   #menu select { flex: 1; min-width: 0; max-width: 70%; font-size: 15px; }
+  /* the fields of the menu take the theme's colours (a dark theme has no white boxes) */
+  #menu input, #menu select, #menu textarea { color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; }
+  #menu input::placeholder { color: var(--muted); opacity: 1; }
   #model, #session, #project { max-width: 100% !important; }
   .projadmin { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
   .projadmin input { min-width: 0; width: 9em; }
@@ -47,9 +55,11 @@
   #agents button { font-size: 13px; padding: 2px 8px; flex: 0 0 auto; }
   #agents .job { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0; }
   #agents .job select, #agents .job input { min-width: 0; font-size: 13px; }
+  #agents .job select { flex: 1 1 9em; }
   #agents .job input { flex: 1 1 8em; }
   #agents .job #jobcmd { flex: 2 1 12em; font-family: monospace; }
   #agents #joboutput { flex: 1 1 100%; width: 100%; margin: 0; max-height: 16em; overflow: auto; white-space: pre-wrap; font-size: 12px; border: 1px solid var(--line); padding: 6px; }
+  #agents .online, #agents .offline { flex: 0 0 auto; white-space: nowrap; }
   #agents .online { font-weight: bold; color: var(--fg); }
   #agents .offline { color: var(--muted); }
   #agents .enroll { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
@@ -139,11 +149,31 @@
       <button type="button" id="projrename">rename</button>
       <button type="button" id="projdelete">delete</button>
     </div>
-    <label>session <select id="session" aria-label="session" title="session"></select></label>
-    <label>look <select id="look" aria-label="look">
-      <option value="simple">simple</option>
-      <option value="cards">cards</option>
-    </select></label>
+    <div class="projadmin">
+      <label>new session <input id="newsession" aria-label="new session name" placeholder="name (optional)" maxlength="63" autocomplete="off"></label>
+      <button type="button" id="newsessionbtn">new session</button>
+    </div>
+    <div class="sessadmin">
+      <label>session <select id="session" aria-label="session" title="session"></select></label>
+      <button type="button" id="renamesession">rename this session</button>
+      <button type="button" id="delsession">delete this session</button>
+    </div>
+    <div class="viewrow">
+      <label>look <select id="look" aria-label="look">
+        <option value="simple">simple</option>
+        <option value="cards">cards</option>
+      </select></label>
+      <label>theme <select id="theme" aria-label="theme">
+        <option value="system">system</option>
+        <option value="light">light</option>
+        <option value="dark">dark</option>
+        <option value="amber">amber</option>
+        <option value="matrix">matrix</option>
+        <option value="solarized">solarized</option>
+        <option value="paper">paper</option>
+        <option value="neon">neon</option>
+      </select></label>
+    </div>
     <div id="agents">
       <div class="agenthead">agents <button type="button" id="agentnew">new enrollment token</button> <span id="agentnote"></span></div>
       <div class="enroll" id="agentenroll" hidden>
@@ -166,16 +196,6 @@
         <button type="button" id="apicopy">copy</button>
       </div>
     </div>
-    <label>theme <select id="theme" aria-label="theme">
-      <option value="system">system</option>
-      <option value="light">light</option>
-      <option value="dark">dark</option>
-      <option value="amber">amber</option>
-      <option value="matrix">matrix</option>
-      <option value="solarized">solarized</option>
-      <option value="paper">paper</option>
-      <option value="neon">neon</option>
-    </select></label>
     <button id="logout" type="button">log out</button>
     <button id="qrnew" type="button">log in on another device</button>
     <div id="qrbox" hidden>
@@ -183,8 +203,6 @@
       <div id="qrnote"></div>
       <button id="qrclose" type="button">close</button>
     </div>
-    <button id="renamesession" type="button">rename this session</button>
-    <button id="delsession" type="button">delete this session</button>
   </div>
 </header>
 <main>
@@ -462,10 +480,12 @@
     if (current !== undefined) { sessCur = current; sessList = list || []; sessBusy = busy || []; }
     current = sessCur; list = sessList;
     session.textContent = "";
-    var fresh = document.createElement("option");
-    fresh.value = "";
-    fresh.textContent = "new session";
-    session.appendChild(fresh);
+    // no session of the page: a placeholder (a new one is made with the name box above)
+    var none = document.createElement("option");
+    none.value = "";
+    none.textContent = "no session";
+    none.disabled = true;
+    session.appendChild(none);
     var items = list.slice();
     if (current && !items.some(function (s) { return s.name === current; })) {
       items.unshift({ name: current, first: "" });
@@ -562,13 +582,28 @@
   });
 
   session.addEventListener("change", function () {
-    var body = session.value ? { name: session.value } : { new: true };
+    if (!session.value) { return; }
+    fetch("/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: session.value })
+    }).then(function (r) {
+      if (!r.ok) { return r.json().then(function (j) { add("error", j.error || r.statusText); }); }
+    }).catch(function (err) { add("error", String(err)); });
+  });
+  // a new session, with the name in the box if one is given (as a project is made)
+  var newsession = document.getElementById("newsession");
+  document.getElementById("newsessionbtn").addEventListener("click", function () {
+    var body = { new: true };
+    var name = newsession.value.trim();
+    if (name) { body.name = name; }
     fetch("/session", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body)
     }).then(function (r) {
       if (!r.ok) { return r.json().then(function (j) { add("error", j.error || r.statusText); }); }
+      newsession.value = "";
     }).catch(function (err) { add("error", String(err)); });
   });
 
@@ -1038,7 +1073,7 @@
   });
   // the current session gets another name (letters, digits, . _ -); the page follows the server's events
   document.getElementById("renamesession").addEventListener("click", function () {
-    if (!sessCur) { return; }
+    if (!sessCur) { add("error", "there is no session to rename: make one first"); return; }
     var to = prompt("new name for this session (letters, digits, . _ -)", sessCur);
     if (to === null || to === "" || to === sessCur) { return; }
     fetch("/session/rename", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
@@ -1048,7 +1083,7 @@
   });
   // the current session goes, with its conversation: asked first; the page follows the server's events
   document.getElementById("delsession").addEventListener("click", function () {
-    if (!sessCur) { return; }
+    if (!sessCur) { add("error", "there is no session to delete"); return; }
     if (!confirm("delete this session and its conversation? It cannot be undone.")) { return; }
     fetch("/session/delete", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: sessCur }) }).then(function (r) {
