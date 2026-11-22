@@ -6,38 +6,38 @@
    theme, or data-theme on <html> when set. */
 :root {
   --bg: #ffffff; --fg: #1c1c1a; --muted: #6b6b66; --line: #d9d9d3;
-  --user-bg: #e8f0fb; --err: #b3261e; --accent: #1c1c1a;
+  --user-bg: #e8f0fb; --blue: #1a5fb4; --err: #b3261e; --accent: #1c1c1a;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #101010; --fg: #d8d8d4; --muted: #8a8a84; --line: #333330;
-    --user-bg: #1f2a36; --err: #ff8a80; --accent: #d8d8d4;
+    --user-bg: #1f2a36; --blue: #7fb0ff; --err: #ff8a80; --accent: #d8d8d4;
   }
 }
 :root[data-theme="dark"] {
   --bg: #101010; --fg: #d8d8d4; --muted: #8a8a84; --line: #333330;
-  --user-bg: #1f2a36; --err: #ff8a80; --accent: #d8d8d4;
+  --user-bg: #1f2a36; --blue: #7fb0ff; --err: #ff8a80; --accent: #d8d8d4;
 }
 /* the fun ones: the names are the list of ai.pm (@THEMES), the model picks among them */
 :root[data-theme="amber"] {
   --bg: #140c00; --fg: #ffb000; --muted: #b57a00; --line: #4a3000;
-  --user-bg: #2a1c00; --err: #ff6a3d; --accent: #ffcc55;
+  --user-bg: #2a1c00; --blue: #7fb8ff; --err: #ff6a3d; --accent: #ffcc55;
 }
 :root[data-theme="matrix"] {
   --bg: #000800; --fg: #33ff66; --muted: #1d9e42; --line: #0d3d1a;
-  --user-bg: #06240f; --err: #ff5555; --accent: #9dffb8;
+  --user-bg: #06240f; --blue: #7fb0ff; --err: #ff5555; --accent: #9dffb8;
 }
 :root[data-theme="solarized"] {
   --bg: #002b36; --fg: #93a1a1; --muted: #657b83; --line: #073642;
-  --user-bg: #073642; --err: #dc322f; --accent: #eee8d5;
+  --user-bg: #073642; --blue: #268bd2; --err: #dc322f; --accent: #eee8d5;
 }
 :root[data-theme="paper"] {
   --bg: #f4ecd8; --fg: #3b2f1e; --muted: #7a6a50; --line: #d6c7a5;
-  --user-bg: #e8dcc0; --err: #a0301e; --accent: #3b2f1e;
+  --user-bg: #e8dcc0; --blue: #1a5fb4; --err: #a0301e; --accent: #3b2f1e;
 }
 :root[data-theme="neon"] {
   --bg: #0b0716; --fg: #f0e6ff; --muted: #8f7fb8; --line: #2a1f4a;
-  --user-bg: #1d1238; --err: #ff3e9a; --accent: #00f0ff;
+  --user-bg: #1d1238; --blue: #4dc3ff; --err: #ff3e9a; --accent: #00f0ff;
 }

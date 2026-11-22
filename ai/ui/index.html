@@ -109,6 +109,10 @@
   /* the tag of an answer: its usage, and a revert (the exchange goes out of the chat) */
   .tag { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin: 6px 0 0; font-size: 12px; color: var(--muted); }
   .tag button { font: inherit; font-size: 12px; padding: 1px 8px; color: var(--muted); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
+  .tag button.armed { color: var(--err); border-color: var(--err); }
+  .tag button.cancel { color: var(--blue); border-color: var(--blue); }
+  .tag button.cancel[hidden] { display: none; }
+  .tag button:disabled { color: var(--line); border-color: var(--line); cursor: default; opacity: 0.6; }
   /* waiting: a spinner and the seconds while a request has no answer yet */
   .wait { color: var(--muted); font-size: 13px; margin: 0 0 8px; }
 
@@ -776,8 +780,9 @@
       var node = add("answer", "");
       node.raw = m.text;
       drawAnswer(node);
-      if (m.usage) { addTag(node, m.usage); }
+      addTag(node, m.usage || ""); // every answer has its line, with the revert of the last one
     });
+    refreshReverts();
     window.scrollTo(0, document.body.scrollHeight);
   });
   // thinking: a block with a spinner and the count of characters while it
@@ -900,7 +905,6 @@
   }
   function revertFrom(answer) {
     var n = exchangesFrom(answer);
-    if (!confirm(n === 1 ? "take this exchange out of the chat?" : "take this exchange and the " + (n - 1) + " after it out of the chat?")) { return; }
     fetch("/rewind", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ n: n }) }).then(function (r) {
         if (!r.ok) { return r.json().catch(function () { return {}; }).then(function (d) { add("error", d.error || "not taken out"); }); }
@@ -911,12 +915,48 @@
     tag.className = "tag";
     span.textContent = text;
     btn.type = "button";
+    btn.className = "revert";
     btn.textContent = "revert";
-    btn.title = "take this exchange out of the chat";
-    btn.addEventListener("click", function () { revertFrom(answer); });
+    btn.title = "take this exchange out of the chat (only the last answer can be reverted)";
+    // two clicks, no dialog: the first asks ("sure?" on the button, and a blue "cancel" next to
+    // it), the second within 4 s reverts; cancel or the time out takes the question back
+    var armed = null, cancel = el("button");
+    cancel.type = "button";
+    cancel.className = "cancel";
+    cancel.textContent = "cancel";
+    cancel.hidden = true;
+    function disarm() {
+      clearTimeout(armed); armed = null;
+      btn.textContent = "revert"; btn.classList.remove("armed");
+      cancel.hidden = true;
+    }
+    btn.addEventListener("click", function () {
+      if (!armed) {
+        btn.textContent = "sure?";
+        btn.classList.add("armed");
+        cancel.hidden = false;
+        armed = setTimeout(disarm, 4000);
+        return;
+      }
+      disarm();
+      try { revertFrom(answer); }
+      catch (err) { add("error", "revert failed: " + (err && err.message ? err.message : String(err))); }
+    });
+    cancel.addEventListener("click", disarm);
     tag.appendChild(span);
     tag.appendChild(btn);
+    tag.appendChild(cancel);
     answer.appendChild(tag);
+    refreshReverts();
+  }
+  // only the last answer of the chat can be reverted: its button is the only one enabled (not while
+  // a turn runs). A revert takes its exchange out, so the answer before it becomes the last one.
+  function refreshReverts() {
+    var answers = log.querySelectorAll(":scope > .answer");
+    var last = answers.length ? answers[answers.length - 1] : null;
+    Array.prototype.forEach.call(log.querySelectorAll(".tag > button.revert"), function (b) {
+      b.disabled = !last || b.parentNode.parentNode !== last || send.disabled;
+    });
   }
   es.addEventListener("usage", function (e) {
     var text = JSON.parse(e.data).text;
@@ -948,6 +988,7 @@
     var st = JSON.parse(e.data).state;
     send.disabled = st === "start";
     abort.disabled = st !== "start";
+    refreshReverts();
     waitHide();
     thinkEnd();
     current = null;
