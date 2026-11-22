@@ -26,7 +26,7 @@ our $voice;     # the speech recognizer: undef (not checked yet), 'ok', 'none' (
 our %conn;      # fileno => connection
 our @clients;   # connections that read the event stream
 our @queue;     # messages waiting for chat_loop
-our ($active, %worker, %model_of, $models, $OUTBOX, $IDLE, $last_error, $BROKER_SOCKET, $BROKER_ASK); # the master, see below
+our ($active, %worker, %model_of, %pending_rename, %pending_switch, $models, $OUTBOX, $IDLE, $last_error, $BROKER_SOCKET, $BROKER_ASK); # the master, see below
 
 # a project's name in its account's directory: a letter or digit, then letters, digits, '.', '_' or '-'
 our $PROJECT_RE = qr/[A-Za-z0-9][A-Za-z0-9._-]{0,62}/;
@@ -318,6 +318,9 @@ sub _master_state {
         busy    => ($w && $w->{busy}) ? \1 : \0,
         queued  => $w ? $w->{pending} : 0,
         voice   => $voice // 'unknown',
+        # a rename the model asked for, done when its answer is over (the page shows it at a refresh)
+        (defined $pending_rename{$name} ? (rename => $pending_rename{$name}) : ()),
+        (defined $pending_switch{$name} ? (switch => $pending_switch{$name}) : ()),
     };
 }
 
@@ -531,11 +534,26 @@ sub _worker_event {
     my $type = $ev->{event} // return;
     my $data = ref($ev->{data}) eq 'HASH' ? $ev->{data} : {};
     my $is_active = defined $active && $name eq $active;
+    if ($type eq 'switch') {
+        # the model's switch of the page to another session of its project, done when the turn is over
+        my $to = $data->{to} // '';
+        $pending_switch{$name} = $to if length $to;
+        publish(state => _master_state()) if $is_active;
+        return;
+    }
+    if ($type eq 'rename') {
+        # the model's rename: kept until the session's turn is over (see _apply_rename)
+        my $to = $data->{to} // '';
+        $pending_rename{$name} = $to if length $to;
+        publish(state => _master_state()) if $is_active;
+        return;
+    }
     if ($type eq 'turn') {
         my $start = ($data->{state} // '') eq 'start';
         $w->{busy} = $start ? 1 : 0;
         $w->{pending}-- if $start and $w->{pending} > 0;
         publish_each(busy => sub { {list => _busy_list($_[0])} });
+        _apply_pending($name) if !$start and !$w->{pending};
     } elsif ($type eq 'state') {
         $model_of{$name} = $data->{model} // '';
     } elsif ($type eq 'model') {
@@ -555,6 +573,7 @@ sub _worker_event {
 sub _worker_gone {
     my ($name) = @_;
     my $w = delete $worker{$name} or return;
+    _apply_pending($name) unless $w->{closing};
     if ($w->{fh}) {
         loop::unwatch($w->{fh});
         close($w->{fh});
@@ -564,6 +583,40 @@ sub _worker_gone {
     publish(turn => {state => 'end'}) if $w->{busy} and $is_active;
     publish(failed => {text => "the session '$name' stopped"}, session => $name) unless $w->{closing};
     publish_each(busy => sub { {list => _busy_list($_[0])} });
+    return;
+}
+
+# what the model asked for its session, when the session's turn is over: the page switches to
+# the other session if the page is still on this one; then the rename (the page follows it)
+sub _apply_pending {
+    my ($name) = @_;
+    if (defined(my $to = delete $pending_switch{$name})) {
+        if (defined $active and $name eq $active) {
+            if (_activate($to)) {
+                log::audit("session $name: the page switched to $to");
+            } else {
+                log::audit("session $name: switch to $to refused ($last_error)");
+                publish(failed => {text => "the switch to $to did not happen: $last_error"}, session => $name);
+            }
+        }
+    }
+    _apply_rename($name);
+}
+
+# the model's rename of its session, when the session has no turn and no queued input: the
+# session is renamed (the worker is ended first; the page follows). A refusal is a failure
+# of the session, shown on the page and kept in the audit lines.
+sub _apply_rename {
+    my ($name) = @_;
+    my $to = delete $pending_rename{$name};
+    return unless defined $to;
+    my $err = _rename_session($name, $to);
+    if (defined $err) {
+        log::audit("session $name: rename to $to refused ($err)");
+        publish(failed => {text => "the rename to $to did not happen: $err"}, session => $name);
+        return;
+    }
+    log::audit("session $name renamed to $to");
     return;
 }
 

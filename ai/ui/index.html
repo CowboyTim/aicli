@@ -142,6 +142,10 @@
   html[data-look] button.icon { border: none; background: none; padding: 0 0; }
   html[data-look] button.icon:hover:not(:disabled) { background: var(--user-bg); }
   @media (max-width: 600px) { header { padding: 8px 12px; } main { padding: 12px; } }
+  /* the two-click actions of the menu (no dialog): "sure?" in red, "cancel" in blue beside it */
+  #menu button.armed { color: var(--err); border-color: var(--err); }
+  #menu button.cancel { color: var(--blue); border-color: var(--blue); }
+  #menu button.cancel[hidden] { display: none; }
 </style>
 </head>
 <body>
@@ -161,6 +165,7 @@
         <button type="button" id="projcreate">create</button>
         <button type="button" id="projrename">rename</button>
         <button type="button" id="projdelete">delete</button>
+        <button type="button" id="projdelete-cancel" class="cancel" hidden>cancel</button>
       </div>
     </div>
     <div class="group">
@@ -170,6 +175,7 @@
         <button type="button" id="newsessionbtn">create</button>
         <button type="button" id="renamesession">rename</button>
         <button type="button" id="delsession">delete</button>
+        <button type="button" id="delsession-cancel" class="cancel" hidden>cancel</button>
       </div>
     </div>
     <div class="group viewrow">
@@ -573,24 +579,26 @@
       else { projFail(res); }
     }).catch(function (err) { add("error", String(err)); });
   });
+  // rename: the new name is in the box of the project row (no dialog), then rename
   document.getElementById("projrename").addEventListener("click", function () {
     if (!project.value) { add("error", "the root is no project: select one"); return; }
-    var to = window.prompt("new name for " + project.value, "");
-    if (!to) { return; }
-    projAsk("/project/rename", { name: project.value, to: to.trim() }).then(function (res) {
-      if (res.ok) { add("usage", "project renamed to " + res.data.project); } else { projFail(res); }
+    var to = document.getElementById("newproject").value.trim();
+    if (!to) { add("error", "type the new name in the box above, then rename"); return; }
+    projAsk("/project/rename", { name: project.value, to: to }).then(function (res) {
+      if (res.ok) { document.getElementById("newproject").value = ""; add("usage", "project renamed to " + res.data.project); }
+      else { projFail(res); }
     }).catch(function (err) { add("error", String(err)); });
   });
-  document.getElementById("projdelete").addEventListener("click", function () {
+  // delete: "sure?" and a blue "cancel" (no dialog). A project with sessions or files is deleted
+  // with them: the sure click is the confirmation, so the page sends the force the server asks for
+  twoClick(document.getElementById("projdelete"), document.getElementById("projdelete-cancel"), "delete", function () {
     var name = project.value;
     if (!name) { add("error", "the root is no project: select one"); return; }
-    if (!window.confirm("delete the project " + name + "?")) { return; }
     projAsk("/project/delete", { name: name }).then(function (res) {
       if (res.ok) { add("usage", "project " + name + " deleted"); return; }
       if (res.status === 409 && /sessions and/.test(res.data.error || "")) {
-        if (!window.confirm(res.data.error + ". Delete all of it?")) { return; }
         return projAsk("/project/delete", { name: name, force: true }).then(function (r2) {
-          if (r2.ok) { add("usage", "project " + name + " deleted"); } else { projFail(r2); }
+          if (r2.ok) { add("usage", "project " + name + " deleted with its sessions and files"); } else { projFail(r2); }
         });
       }
       projFail(res);
@@ -734,6 +742,9 @@
     setCurrent(s.model);
     // the session, with its project in front: account/project/session (the root has no account)
     status.textContent = s.session ? "session " + (s.project ? s.project + "/" : "") + s.session : "";
+    // a rename the model asked for, done when its answer is over (kept on a refresh too)
+    if (s.session && s.rename) { status.textContent += " (renamed to " + s.rename + " when this answer is over)"; }
+    if (s.session && s.switch) { status.textContent += " (switching to " + s.switch + " when this answer is over)"; }
     setVoice(s.voice);
   }
 
@@ -909,6 +920,27 @@
       body: JSON.stringify({ n: n }) }).then(function (r) {
         if (!r.ok) { return r.json().catch(function () { return {}; }).then(function (d) { add("error", d.error || "not taken out"); }); }
       }).catch(function () { add("error", "the chat does not answer"); });
+  }
+  // a two-click action without a dialog: the first click says "sure?" (red) and shows a blue
+  // "cancel"; the second within 4 s runs act; cancel or the time out takes the question back
+  function twoClick(btn, cancel, label, act) {
+    var timer = null;
+    function disarm() {
+      clearTimeout(timer); timer = null;
+      btn.textContent = label; btn.classList.remove("armed");
+      cancel.hidden = true;
+    }
+    btn.addEventListener("click", function () {
+      if (!timer) {
+        btn.textContent = "sure?"; btn.classList.add("armed");
+        cancel.hidden = false;
+        timer = setTimeout(disarm, 4000);
+        return;
+      }
+      disarm();
+      act();
+    });
+    cancel.addEventListener("click", disarm);
   }
   function addTag(answer, text) {
     var tag = el("div"), span = el("span"), btn = el("button");
@@ -1125,19 +1157,21 @@
     }).catch(function () { add("error", "the chat does not answer"); });
   });
   // the current session gets another name (letters, digits, . _ -); the page follows the server's events
+  // rename: the new name is in the box of the session row (no dialog), then rename
   document.getElementById("renamesession").addEventListener("click", function () {
     if (!sessCur) { add("error", "there is no session to rename: make one first"); return; }
-    var to = prompt("new name for this session (letters, digits, . _ -)", sessCur);
-    if (to === null || to === "" || to === sessCur) { return; }
+    var to = newsession.value.trim();
+    if (!to) { add("error", "type the new name in the box above, then rename"); return; }
+    if (to === sessCur) { add("error", "that is its name already"); return; }
     fetch("/session/rename", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: sessCur, to: to }) }).then(function (r) {
-        if (!r.ok) { return r.json().catch(function () { return {}; }).then(function (d) { add("error", d.error || "not renamed"); }); }
+        if (r.ok) { newsession.value = ""; return; }
+        return r.json().catch(function () { return {}; }).then(function (d) { add("error", d.error || "not renamed"); });
       }).catch(function () { add("error", "the chat does not answer"); });
   });
-  // the current session goes, with its conversation: asked first; the page follows the server's events
-  document.getElementById("delsession").addEventListener("click", function () {
+  // delete: "sure?" (red) and a blue "cancel" beside it, no dialog; the second click within 4 s goes
+  twoClick(document.getElementById("delsession"), document.getElementById("delsession-cancel"), "delete", function () {
     if (!sessCur) { add("error", "there is no session to delete"); return; }
-    if (!confirm("delete this session and its conversation? It cannot be undone.")) { return; }
     fetch("/session/delete", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: sessCur }) }).then(function (r) {
         if (!r.ok) { return r.json().catch(function () { return {}; }).then(function (d) { add("error", d.error || "not deleted"); }); }

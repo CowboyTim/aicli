@@ -71,7 +71,7 @@ sub tool {
 }
 
 is(ai::sandbox_state(), 'on', "the sandbox is on (kernel ABI ".sandbox::abi().")");
-like(ai::system_prompt(), qr/The file tools only work inside this directory\.\nbash, perl and grep can read everything, but only write in this directory and in \Q$tmp\E\/t\.\n/, "the model is told");
+like(ai::system_prompt(), qr/The file tools take paths relative to it and only work inside it\.\nbash, perl and grep can read everything, but only write in this directory and in \Q$tmp\E\/t\.\n/, "the model is told");
 
 # bash
 {

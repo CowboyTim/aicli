@@ -4819,6 +4819,34 @@ EOb
         # a look of the web page: the terminal has none, and a sub-agent is not asked
         available => sub {($EVENT_SINK and !$IN_AGENT) ? 1 : 0},
     },
+    rename_session => {
+        description => "rename this session (its name in the web interface's list). It is done when this answer is over, not at once. Only in the web interface",
+        syntax => "///RENAME_SESSION_8f2c+EO_6e3a\n{{name}}\nEO_6e3a[LENGTH({{name}})]\nRENAME_SESSION_8f2c",
+        properties  => {
+            "name" => {type => "string", description => "The new name: letters, digits, '.', '_' or '-', starting with a letter, a digit or '_'; not the name of another session"},
+        },
+        required => ["name"],
+        # the page's list is the master's: a sub-agent does not rename the session it works in
+        available => sub {($EVENT_SINK and !$IN_AGENT) ? 1 : 0},
+    },
+    list_sessions => {
+        description => "list the sessions of this session's project (the newest first), with their age and the first thing said in each; this one is marked. Give a filter, a regular expression for the names, to narrow it. Only in the web interface",
+        syntax => "///LIST_SESSIONS_3b7d+EO_0e8a\n{{filter}}\nEO_0e8a[LENGTH({{filter}})]\nLIST_SESSIONS_3b7d",
+        properties  => {
+            "filter" => {type => "string", description => "A regular expression for the names; empty for all"},
+        },
+        required => [],
+        available => sub {($EVENT_SINK and !$IN_AGENT) ? 1 : 0},
+    },
+    switch_session => {
+        description => "switch the page to another session of this project (one listed by list_sessions). It is done when this answer is over, not at once. Only in the web interface",
+        syntax => "///SWITCH_SESSION_5a1f+EO_9c3b\n{{name}}\nEO_9c3b[LENGTH({{name}})]\nSWITCH_SESSION_5a1f",
+        properties  => {
+            "name" => {type => "string", description => "The name of the session, as list_sessions shows it"},
+        },
+        required => ["name"],
+        available => sub {($EVENT_SINK and !$IN_AGENT) ? 1 : 0},
+    },
     models => {
         description => "list the models the provider of this chat has (all of them, page by page), with the context size when it is known, the current one marked. Give a filter, a regular expression for the ids, to narrow it: the lists are long. Use it to find a model by name, then switch with model",
         syntax => "///MODELS_3c9a+EO_6d0f\n{{filter}}\nEO_6d0f[LENGTH({{filter}})]\nMODELS_3c9a",
@@ -5483,6 +5511,57 @@ sub theme_5c2e {
         unless grep {$_ eq $name} @ai::THEMES;
     ai::emit(theme => {text => $name});
     return "the web interface is now $name\n";
+}
+
+# rename_session: the page renames this session when its answer is over (the master does it:
+# the session's worker must have ended its turn first). Checked here for the name and for a
+# session of that name, so the model hears of a refusal at once.
+sub rename_session_8f2c {
+    my ($t_args) = @_;
+    my $to = utils::trim($t_args->[0] // '');
+    die "a session name is wanted\n" unless length $to;
+    die "the name '$to': letters, digits, '.', '_' or '-', starting with a letter, a digit or '_'\n"
+        unless ai::valid_session_name($to);
+    die "this session is '$ai::AI_SESSION' already\n" if defined $ai::AI_SESSION and $to eq $ai::AI_SESSION;
+    die "there is a session '$to' already\n" if -e "$ai::SESSIONS_DIR/$to";
+    ai::emit(rename => {to => $to});
+    return "this session will be renamed to $to when this answer is over\n";
+}
+
+# list_sessions: the sessions of this session's project, as the page's list would show them (an
+# empty one is left out, except this one), the newest first
+sub list_sessions_3b7d {
+    my ($t_args) = @_;
+    my $filter = utils::trim($t_args->[0] // '');
+    my $rx = length($filter) ? (eval {qr/$filter/} // die "the filter is not a regular expression: $filter\n") : undef;
+    my $rel = defined $ai::AI_SESSION ? ai::session_project($ai::AI_SESSION) : '';
+    my @shown = grep {
+        ($_->{project} // '') eq ($rel // '')
+        and (!$rx or $_->{name} =~ $rx)
+    } @{ai::session_choices()};
+    return "no session of this project matches '$filter'\n" unless @shown;
+    my @lines = map {
+        my $first = length($_->{first}) ? "  ".$_->{first} : '';
+        $_->{name}.($_->{name} eq $ai::AI_SESSION ? "  (this one)" : "").
+            "  ".ai::format_age($_->{age}).$first
+    } @shown;
+    splice(@lines, 100) if @lines > 100;
+    return join("\n", @lines)."\n";
+}
+
+# switch_session: the page switches to another session of this project when this answer is over
+# (the master does it; a switch of the page away from this session in the meantime is not undone)
+sub switch_session_5a1f {
+    my ($t_args) = @_;
+    my $to = utils::trim($t_args->[0] // '');
+    die "a session name is wanted\n" unless length $to;
+    die "there is no session '$to'\n" unless ai::valid_session_name($to) and -d "$ai::SESSIONS_DIR/$to";
+    die "this session is '$to' already\n" if $to eq ($ai::AI_SESSION // '');
+    my $rel = defined $ai::AI_SESSION ? ai::session_project($ai::AI_SESSION) : '';
+    die "'$to' is in another project: the page switches within this one\n"
+        unless (ai::session_project($to) // '') eq ($rel // '');
+    ai::emit(switch => {to => $to});
+    return "the page will switch to $to when this answer is over\n";
 }
 
 # models: the models of every provider of the chat, as provider/id
