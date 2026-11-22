@@ -117,8 +117,10 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   event: what was said (`load_messages()`), the answers, and the tool calls of the chat with their
   results, drawn as the live lines are (`_history_data`, `_tool_item`: a tool call's line from its
   arguments, its result clipped; a summary is not shown)). Tested with the socket pairs, `ai.pl --ui` as a child, and
-  curl; not yet in a browser (no Chromium here this time).
-  Not yet tested in a browser: both looks and themes, the microphone, the
+  curl, and since then in a headless Firefox (Playwright, see "Testing the page in a
+  browser"): the revert buttons, the session and project menu (rename, delete with "sure?"
+  and "cancel", create), the dark theme's fields, the menu's layout, the session select.
+  Not yet in a real desktop browser: both looks and themes, the microphone, the
   thinking block, the TLS trust prompt. Not built yet: file downloads and
   inline pictures, uploads to `./uploads/`, slash commands over `POST /command`
   (refused with 400 for now).
@@ -663,6 +665,46 @@ The tests are run by hand, twice: with the Debian packages (`prove -I. t`,
 
 `TestAI::mock_http` scripts the main agent (`utils::http`),
 `TestAI::mock_agent_http` answers the sub-agents (`loop::http`).
+
+## Testing the page in a browser
+
+There is a headless browser here: Firefox, through Playwright. Chromium is not installed
+here (its install did not finish in this sandbox), so use Firefox. Playwright is installed globally
+(`/usr/local/lib/node_modules/playwright`); its Firefox is in `/opt/ms-playwright/firefox-*`.
+Check it with `node -e "require('playwright').firefox.launch().then(b => b.close())"` from
+any directory with `NODE_PATH=$(npm root -g)`.
+
+The checks are in `tools/ui-check/`:
+
+- `start-server.sh`: starts `ai.pl --ui` on port 8770 (`AICLI_CHECK_PORT` changes it) with
+  the session `s1` (two exchanges, no model needed) and a project root with the account
+  `acme`. It prints the address, the token (`abc123`), the state dir and the log. It saves the
+  server's PID in the state dir, so stop it with `kill -INT $(cat <state>/server.pid)`.
+- `revert.js`: the revert button of the chat. Only the last answer's is enabled; the first
+  click shows "sure?", the second reverts it. Prints the buttons, the chat file and the page errors.
+- `menu.js`: the session menu (rename from the name box, delete with "sure?" and "cancel")
+  and the project menu (create, rename, delete). It changes the state dir.
+- `common.js`: the shared part (the address, the token, Firefox, the page errors).
+
+Run them from `tools/ui-check/` with the server's settings:
+
+```
+AICLI_CHECK_STATE=$(mktemp -d) sh tools/ui-check/start-server.sh
+# the script prints the state dir; then, from tools/ui-check:
+AICLI_URL=http://127.0.0.1:8770 AICLI_STATE=<state dir> NODE_PATH=$(npm root -g) node revert.js
+AICLI_URL=http://127.0.0.1:8770 AICLI_STATE=<state dir> NODE_PATH=$(npm root -g) node menu.js
+```
+
+A new state dir for each run: `menu.js` renames and deletes the fixture. What they do not
+cover: a turn (no model here, so nothing is sent to a model), the login through nginx, the
+looks in a desktop browser, and the microphone. To check the model's own tools (rename, list,
+switch, create a session), the server needs a model: `AI_LOCAL_SERVER` or a cloud key. The
+tool calls and the sub-agents then show in the page's chat as usual.
+
+Writing a new check: `common.js` opens the page (`open()`) and gives the page's errors, the
+state dir's sessions and projects, and the chat file. Use `waitForFunction` for what the page
+draws, not fixed waits, and look at the element with `document.elementFromPoint` when a click
+does nothing: that tells whether something covers the button.
 
 ## Known gaps
 

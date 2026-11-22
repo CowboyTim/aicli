@@ -116,15 +116,22 @@ torch and the ROCm wheels). rtl-sdr and nrf are not images yet. Their run option
   commits (removed from the tree). Rewriting `main` is undecided.
 - **Flaky test:** `t/100_ui.t` ("the slow turn starts") failed once in a full
   run and passed on its own and on the next run. Not investigated.
+- **Logs.** The dev setup keeps the nginx access and error logs, the squid log and the
+  searxng cache in small RAM mounts (a fixed size, gone at a restart), and caps each
+  container's docker log (10 MB, 3 files). The squid tmpfs mounts belong to uid 13
+  (`proxy`), which the image's own directories had. For a prod-like setup, logs go to the
+  host's log process (syslog), not to Docker or the containers. The images' declared
+  volumes are named or RAM, so compose makes no anonymous volumes; the old anonymous ones on
+  a host are removed by hand (`docker volume rm`).
 
 ## Open: web interface
 
 - **Projects and `--root`** are built and tested with a fake docker and the
   socket tests, and the page's project and session controls were checked in a
-  headless Chromium against a local `ai.pl --ui` (create, switch, delete of a project,
-  the last one included; new session with a name; rename; the menu's layout at 360 and
-  1000 px). Not yet: a real `aicli.sh --root` run with the image, and the login path
-  (nginx, auth, the account of a request) in a browser.
+  headless Firefox (Playwright) against a local `ai.pl --ui` (create, switch, delete of a project,
+  the last one included; new session with a name; rename from the name box; delete with "sure?" and
+  "cancel"; the menu's layout at 360 and 1000 px). Not yet: a real `aicli.sh --root` run with the
+  image, and the login path (nginx, auth, the account of a request) in a browser.
 - **Not started:** file downloads and inline pictures for what the model
   generates (`GET /files`, `tools::_path()`, `Content-Disposition: attachment`
   for downloads, `file` events from `tools::_changing`).
@@ -137,12 +144,12 @@ torch and the ROCm wheels). rtl-sdr and nrf are not images yet. Their run option
   `think` events for both forms (`reasoning_content` and `<think>` tags) in
   tests, and the page has a thinking block now. Not reproduced in a browser.
   Check: `/thinking` (a session setting can turn it off), the browser console.
-- **Not run in a real browser:** the replayed history (only tested with the socket pairs, the
-  child process and curl), the page in both looks, the microphone and the speech warnings, the TLS
-  trust prompt for a self-signed. (The dark theme's fields, the menu's layout and the session select
-  were checked in a headless Chromium; not the looks in a real desktop browser.)
-  certificate. The QR code and the page on a phone work (checked); the desktop
-  browser cookie with `SameSite=Lax` is not checked on its own.
+- **Not run in a real desktop browser:** the page in both looks, the microphone and the speech
+  warnings, the TLS trust prompt for a self-signed certificate, and the desktop browser cookie with
+  `SameSite=Lax` (the QR code and the page on a phone work, checked). Checked in headless Firefox
+  (Playwright): the history with its revert buttons (only the last answer's enabled; a click on it
+  shows "sure?" and a second click reverts it), the session and project menu, the dark theme's
+  fields, the menu's layout and the session select.
 - **TLS:** tested with a generated certificate and `openssl s_client`. Not
   yet: a certificate from a real CA, the key read after the privilege drop.
 
@@ -262,14 +269,27 @@ account in its path. Renaming a login does not move its projects.
   renames or opens checks the project's account (403, or 404 where a session must not be shown).
   One active session is shared by the page: an account that switches takes it over, the other
   account's page sees no session until it switches back.
-- **Built, projects on the page:** create (in the login's account), rename (without sessions),
-  delete (with its sessions and files on confirmation). The page has the controls next to the
-  project select. Rename with sessions is refused on purpose: their conversations name the old
-  path, and a conversation's start is not rewritten. Renaming those would need the sessions
-  to be moved or ended first, which is a choice for later.
+- **Built, projects on the page:** create (in the login's account), rename (from the name box;
+  its sessions come along, their workers are ended first, a busy one refuses), delete (with its
+  sessions and files; "sure?" and "cancel" on the page, no dialog). The page has the controls next to
+  the project select. A session's stored prompt keeps the old project path after a rename (a
+  conversation's start is not rewritten); the workspace line of new sessions names no path, so new
+  sessions do not carry one.
 - **Open:** several active sessions at once (one per account) would need the active session per
   page connection instead of one for the master; moving the existing flat projects of the host
   into `AI_PROJECTS/<account>/` (a host step, done by the user).
+
+## Open: sub-agents
+
+- **An empty reply.** A sub-agent sometimes ends with `finish reason: stop` and no text and no tool
+  call, after a search result (seen with the weather question). The cause is not known. Built: an
+  empty reply is asked once more, plainly; a second empty one is an error that gives the finish
+  reason, the reasoning length and the bytes streamed. The retry fixed one run; the error will show
+  the cause the next time it happens: many bytes and no text is a streaming bug (the parser lost the
+  text), a reasoning length above zero is an answer that stayed in the reasoning (not used yet), few
+  bytes is the model ending its reply. Tests t/80.
+- **Loops.** The default limit is 20 tool turns (`AI_AGENT_MAX_TURNS`); the failing run used one.
+  Not checked: what a long sub-agent does near the limit.
 
 ## Open: devel and hardware
 
@@ -325,3 +345,9 @@ account in its path. Renaming a login does not move its projects.
   `tui.pm`. More panes side by side only if they are ever needed.
 - **Bedrock and other providers one by one.** Use LiteLLM or OpenRouter as the
   OpenAI compatible endpoint for those.
+- **A model tool that deletes a session.** A deletion cannot be undone, and the model reads
+  untrusted content (fetched pages, tool output), so an injected instruction could remove a
+  conversation. The model gets create, list, switch and rename; delete stays on the page, behind
+  "sure?". A deferred delete would still lose the conversation.
+- **Browser dialogs in the page** (`confirm`, `prompt`). They did not show in the user's browser, so
+  the page asks in its own buttons ("sure?" and "cancel", a name box) instead.
