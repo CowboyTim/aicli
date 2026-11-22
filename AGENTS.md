@@ -225,8 +225,7 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   `.build-trigger` appears (`touch .build-trigger` starts one). The output goes
   to the terminal and to `build-watch.log`; `tail build-watch.log` shows the
   result (`== ... done, exit N`). Both files are git-ignored.
-  **docker-bake.hcl** builds that image (`docker buildx bake`; `image-ci`
-  adds the GitHub Actions cache). CI still uses `docker build`.
+  **docker-bake.hcl** builds that image (`docker buildx bake`).
   The Dockerfile has three stages: `system` (the apt installs both images
   share), `base` (ai.pl and the basic unix tools) and `dev` (the default
   target: python3, the C/C++ toolchain, ImageMagick, ffmpeg, PDL, lame, the devel lists;
@@ -651,9 +650,9 @@ Other APIs are reached through an OpenAI compatible gateway, such as LiteLLM or 
 | `t/85_web.t` | proxy selection, HTML to text, fetch, search (mocked HTTP layer), a real fetch, `/retry`, `/rewind` |
 | `t/90_prompt_display_undo.t` | project file and date in the prompt, byte-stable request prefix, brief display, diffs, `/undo` |
 
-CI (`.github/workflows/tests.yml`) runs them twice on every push to `main`:
-with the Debian packages (`WWW::Curl`) and inside the image of the Dockerfile
-(Ubuntu 24.04, dev stage, `WWW::Curl`), there as a normal user.
+The tests are run by hand, twice: with the Debian packages (`prove -I. t`,
+`WWW::Curl`), and inside the image of the Dockerfile (Ubuntu 24.04, dev stage,
+`WWW::Curl`) as a normal user. There is no CI (no GitHub Actions workflow).
 
 `TestAI::mock_http` scripts the main agent (`utils::http`),
 `TestAI::mock_agent_http` answers the sub-agents (`loop::http`).

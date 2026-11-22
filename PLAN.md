@@ -11,8 +11,6 @@ user's view) and AGENTS.md (the code, and "Status" for the history), not here.
   meter in a real terminal. The thresholds (speech and silence at peak 100,
   about -50 dBFS) were lowered after a quiet test recording; the same mic at
   full source gain then gave a clear one (peak -7 dBFS).
-- **First CI runs** (`.github/workflows/tests.yml`). The image job is the
-  first run of the tests with `Net::Curl`.
 - **Privilege drop as a user other than 1000** (`AI_UID`, `AI_GID`,
   `AI_GROUPS`) in the docker wrapper. Only the plan is tested.
 - **Proxies and search against the real thing:** `AI_PROXY`, `AI_WEB_PROXY`,
