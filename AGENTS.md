@@ -266,10 +266,12 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   an event goes to the clients that may see its project (publish's `session`/`project` options, the
   active session by default), and each route that uses a session or project checks `_owns`.
   Projects on the page: `POST /project/new` (made in the login's account, then switched to; the
-  local operator names account/project), `/project/rename` (refused while the project has sessions:
-  their prompts name the old path, and a conversation's start is not rewritten), `/project/delete`
-  (its sessions and files only with `force`, which the page asks for; never the page's own project,
-  never a busy one). `_delete_session` keeps the replacement session in the same project.
+  local operator names account/project), `/project/rename` (the project's sessions come along:
+  their workers are ended first, a busy one refuses; the directory moves and each session's `cwd`
+  follows; a session's stored prompt keeps the old path, a conversation's start is not rewritten),
+  `/project/delete` (its sessions and files only with `force`, which the page asks for; a busy
+  session refuses; when the page is on one of its sessions, the page moves to another project of
+  the login first, or to none). `_delete_session` keeps the replacement session in the same project.
   The icon: `ai/ui/favicon.svg` is the drawing (plain shapes, made for aicli: no emoji artwork, which
   belongs to its makers), `ai/ui/favicon.ico` is the same at 16, 32, 48, 64 and 256 pixels (rendered with
   rsvg-convert, packed with PIL). nginx serves both publicly; the local interface serves them too.
@@ -644,7 +646,7 @@ Other APIs are reached through an OpenAI compatible gateway, such as LiteLLM or 
 | `t/138_login_home.t` | a login's page starts in its own work: the stream's connect makes the account's newest session active (or a new one in its first project) when the active one is not its own; the local operator and an account with no project keep what they had |
 | `t/132_account_id.t` | the account ID of a login in the passwd comment: the fifth subfield, the other subfields kept, made once, read back without the dashes, the UUID's form and version, a login not in the passwd refused |
 | `t/129_page_accounts.t` | the page's accounts: the login's name (none, a bad one, the local operator), what an account sees (its sessions, projects, busy list, the page's state), the events (each to its account, the models to all, a failure of a session to its account), the routes an account may not use (message, switch, delete, rename, pod, a session in another's project) |
-| `t/130_project_admin.t` | the page's projects: created in the login's account and switched to (names checked, a taken name, a login with no account), renamed only without sessions (same account), deleted with its sessions and files only on force, never the page's own project, nothing of another account touched; the local operator's account/project |
+| `t/130_project_admin.t` | the page's projects: created in the login's account and switched to (names checked, a taken name, a login with no account), renamed with their sessions (same account; a busy session refuses), deleted with its sessions and files only on force, the page moves off a project it is on first, nothing of another account touched; the local operator's account/project |
 | `t/125_agent_pin.t` | the agent's arguments: a pin of the form sha256//BASE64 (others refused), the token (a short one, none refused) |
 | `t/123_remote_hub.t` | the hub without sockets: the config of the agents (names, tags, token hashes), the bearer tokens that get in (403, a token of no agent, no token, not a bearer token), a held poll and a job for its tags, the answer (from the right agent only, once), busy polls (409), bad answers (400, 404), no agent for the tags, no agent connected, held polls ending (204), a job no agent takes, an agent that does not answer, an output over the cap |
 | `t/107_broker.t` | the broker without sockets (its dispatch): not JSON and unknown operations refused (the pod ones are gone), a job's checks (tags, argv, timeout, project names), a job for an agent that is not connected or of another account refused, the user's enrollment token and agents |
