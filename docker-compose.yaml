@@ -11,8 +11,17 @@
 #   ./deploy.sh                          the IPv6 network, then docker compose up -d --build
 #   the page: https://PUBLIC_DOMAIN/?token=... (the token is in its log: docker compose logs agent)
 name: aicli-broker
+# the log of each container (docker's json-file driver, on the host's disk): rotated, so a chatty
+# service (nginx writes its access log to stdout) cannot fill the disk. docker logs still shows it.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   broker:
+    logging: *logging
     build:
       context: .
       dockerfile: Dockerfile.broker
@@ -45,6 +54,7 @@ services:
   # (AI_API_KEY, AI_PROVIDER, AI_MODEL, AI_LOCAL_SERVER, AI_UI_TOKEN, ...) go in
   # .agent.env, next to this file (deploy.sh writes it); it is optional.
   agent:
+    logging: *logging
     build:
       context: .
       target: dev
@@ -97,6 +107,7 @@ services:
   #   docker compose exec -it auth perl /usr/local/lib/aicli/auth.pl user add NAME aicli-user)
   # and the JWT that nginx checks (auth_request). No port is published: nginx reaches it on aicli-net.
   auth:
+    logging: *logging
     build:
       context: .
       dockerfile: Dockerfile.auth
@@ -125,6 +136,7 @@ services:
   # flm: FastFlowLM, the speech recognizer on the AMD NPU (flm/README.md). Its device is the
   # host's /dev/accel/accel0 (the amdxdna driver is on the host); memlock unlimited, as the NPU needs.
   flm:
+    logging: *logging
     build:
       context: ./flm
     image: local/ai/flm:latest
@@ -138,30 +150,36 @@ services:
       - aicli
     restart: unless-stopped
   searxng:
+    logging: *logging
     image: searxng/searxng:latest
     networks:
       - aicli
     environment:
       SEARXNG_SECRET: ${SEARXNG_SECRET:?set SEARXNG_SECRET (openssl rand -hex 32)}
       SEARXNG_BASE_URL: https://${PUBLIC_DOMAIN:?set PUBLIC_DOMAIN}/searxng/
-    # the image declares its config and cache directories as volumes: named here, so compose
-    # does not make anonymous ones for them
+    # the image declares its config and cache directories as volumes: the config is named (no
+    # anonymous volume), the cache is RAM (it is rebuilt when needed, nothing to keep)
     volumes:
       - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
       - aicli-searxng-config:/etc/searxng
-      - aicli-searxng-cache:/var/cache/searxng
+    tmpfs:
+      - /var/cache/searxng:size=16m
     restart: unless-stopped
 
   # proxy: squid, the agent's way to the web (fetch and search); see proxy/squid.conf
   proxy:
+    logging: *logging
     image: ubuntu/squid:latest
     networks:
       - aicli
-    # the image declares its log and spool directories as volumes: named here (no anonymous ones)
+    # the image declares its log and spool directories as volumes: both are RAM with a fixed
+    # size, so the logs cannot fill the disk (they are gone at a restart; squid.conf has no
+    # cache_dir, so nothing else is kept there)
     volumes:
       - ./proxy/squid.conf:/etc/squid/squid.conf:ro
-      - aicli-squid-log:/var/log/squid
-      - aicli-squid-spool:/var/spool/squid
+    tmpfs:
+      - /var/log/squid:size=16m
+      - /var/spool/squid:size=8m
     restart: unless-stopped
 
   # nginx: the public address, TLS on port 443 with the certificate of certbot. The
@@ -169,6 +187,7 @@ services:
   # its own container: it answers the HTTP challenge on port 80). nginx waits for the
   # certificate, and reloads when the config changes (renewal).
   nginx:
+    logging: *logging
     image: nginx:stable
     networks:
       dmz:
@@ -199,6 +218,10 @@ services:
       # the static files: the login page and its stylesheet (the other pages are the agent's)
       - ./ai/ui:/etc/nginx/ui:ro
       - ./nginx/security-headers.conf:/etc/nginx/security-headers.conf:ro
+    # the logs in RAM, small: a dev setup keeps no logs on disk (in prod they go to the host's log
+    # process, not here). The image's links of these files to stdout are hidden by the mount.
+    tmpfs:
+      - /var/log/nginx:size=16m
     restart: unless-stopped
 
 
@@ -233,14 +256,8 @@ volumes:
     name: aicli-auth
   aicli-flm:
     name: aicli-flm
-  # the directories the searxng and squid images declare as volumes
+  # the directories the searxng and squid images declare as volumes (the rest are tmpfs above)
   aicli-searxng-config:
     name: aicli-searxng-config
-  aicli-searxng-cache:
-    name: aicli-searxng-cache
-  aicli-squid-log:
-    name: aicli-squid-log
-  aicli-squid-spool:
-    name: aicli-squid-spool
   letsencrypt:
     name: aicli-letsencrypt
