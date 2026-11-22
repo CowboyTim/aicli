@@ -174,12 +174,13 @@ services:
       - aicli
     # the image declares its log and spool directories as volumes: both are RAM with a fixed
     # size, so the logs cannot fill the disk (they are gone at a restart; squid.conf has no
-    # cache_dir, so nothing else is kept there)
+    # cache_dir, so nothing else is kept there). They belong to squid's user (proxy, uid 13 on
+    # Ubuntu): a named volume got that from the image, a tmpfs needs it said here.
     volumes:
       - ./proxy/squid.conf:/etc/squid/squid.conf:ro
     tmpfs:
-      - /var/log/squid:size=16m
-      - /var/spool/squid:size=8m
+      - /var/log/squid:size=16m,uid=13,gid=13,mode=0755
+      - /var/spool/squid:size=8m,uid=13,gid=13,mode=0755
     restart: unless-stopped
 
   # nginx: the public address, TLS on port 443 with the certificate of certbot. The
