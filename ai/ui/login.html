@@ -18,6 +18,10 @@
   button { background: var(--user-bg); color: var(--accent); cursor: pointer; }
   #err { color: var(--err); min-height: 1.2em; font-size: 14px; }
   #qrask { max-width: 320px; margin: 10vh auto; } #qrask .row { display: flex; gap: 8px; }
+  /* the password with its eye: the button sits on the input's line, as tall as the input */
+  .pw { display: flex; gap: 6px; align-items: stretch; } .pw label { flex: 1; min-width: 0; }
+  #peek { display: flex; align-items: center; padding: 6px 8px; color: var(--muted); }
+  #peek svg { width: 18px; height: 18px; } #peek[aria-pressed="true"] { color: var(--accent); }
 </style>
 </head>
 <body>
@@ -27,7 +31,12 @@
 </div>
 <form id="f" method="post" action="/auth/login">
   <label>User <input name="user" autocomplete="off" required autofocus></label>
-  <label>Password <input name="password" type="password" autocomplete="off" required></label>
+  <div class="pw">
+    <label>Password <input id="pw" name="password" type="password" autocomplete="off" required></label>
+    <button type="button" id="peek" aria-label="show password" title="show password" aria-pressed="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>
+    </button>
+  </div>
   <button>Log in</button>
   <div id="err" role="alert"></div>
 </form>
@@ -72,6 +81,22 @@ document.getElementById("qrno").addEventListener("click", function () {
   document.getElementById("qrask").hidden = true;
   document.getElementById("f").hidden = false;
 });
+// the eye: the password shows as text for three seconds, then it is hidden again (or at once
+// when the form is sent, or the page is left)
+(function () {
+  var pw = document.getElementById("pw"), peek = document.getElementById("peek"), timer = null;
+  function hide() {
+    clearTimeout(timer); timer = null;
+    pw.type = "password"; peek.setAttribute("aria-pressed", "false");
+  }
+  peek.addEventListener("click", function () {
+    if (timer) { hide(); return; }
+    pw.type = "text"; peek.setAttribute("aria-pressed", "true");
+    timer = setTimeout(hide, 3000);
+  });
+  document.getElementById("f").addEventListener("submit", hide);
+  window.addEventListener("pagehide", hide);
+})();
 document.getElementById("f").addEventListener("submit", function (ev) {
   ev.preventDefault();
   var d = new URLSearchParams(new FormData(ev.target));
