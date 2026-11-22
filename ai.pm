@@ -4132,7 +4132,7 @@ sub request {
         my ($kind) = @_;
         $self->{activity} = $kind eq 'think' ? 'thinking' : 'answering';
     });
-    my $info = {t_start => Time::HiRes::time()};
+    my $info = {t_start => Time::HiRes::time(), streamed => 0};
     loop::http(
         method  => 'post',
         url     => $ai::AI_URL,
@@ -4142,6 +4142,7 @@ sub request {
             my ($ch, $raw) = @_;
             $raw //= $ch; # WWW::Curl::Easy: <data>, <user_ref>, Net::Curl::Easy: <handle>, <data>
             $info->{t_first} //= Time::HiRes::time();
+            $info->{streamed} += length($raw); # what the server sent, for a reply with nothing in it
             &{$st->{feed}}($raw);
             return length($raw);
         },
@@ -4153,6 +4154,7 @@ sub request {
             my ($err, $c) = ai::completion_result($st, defined $req->{error}, $req->{error}, $req->{code}, $req->{headers});
             $info->{$_} = $c->{$_} for keys %$c;
             $info->{tool_calls} = ai::stream_tool_calls($st);
+            $info->{finish} = $st->{finish_reason}; # why the model stopped, for a reply with nothing in it
             $self->response($st->{content}, $err, $info);
         },
     );
@@ -4184,7 +4186,16 @@ sub response {
     }
     $self->{attempt} = 0;
     my $native = $info->{tool_calls} // []; # the calls the server made
-    return $self->finish(undef, "the model gave no answer") unless length($answer) or @$native;
+    if (!length($answer) and !@$native) {
+        # nothing came back: the model is asked once more, plainly, before it is an error
+        if (!$self->{nudged}++) {
+            push @{$self->{msgs}}, {role => 'user', content => 'Reply now with your final answer as plain text, without a tool call.'};
+            return $self->request();
+        }
+        return $self->finish(undef, "the model gave no answer (finish reason: ".($info->{finish} // 'none')
+            .", reasoning ".length($info->{reasoning} // '')." characters, ".($info->{streamed} // 0)." bytes streamed)");
+    }
+    $self->{nudged} = 0;
     my %m = (role => 'assistant', content => $answer);
     $m{tool_calls} = [map {+{id => $_->{id}, type => 'function',
         function => {name => $_->{name}, arguments => $_->{arguments}}}} @$native]
@@ -4823,7 +4834,7 @@ EOb
         description => "rename this session (its name in the web interface's list). It is done when this answer is over, not at once. Only in the web interface",
         syntax => "///RENAME_SESSION_8f2c+EO_6e3a\n{{name}}\nEO_6e3a[LENGTH({{name}})]\nRENAME_SESSION_8f2c",
         properties  => {
-            "name" => {type => "string", description => "The new name: letters, digits, '.', '_' or '-', starting with a letter, a digit or '_'; not the name of another session"},
+            "name" => {type => "string", description => "The new name: no spaces, use '-' or '_' (e.g. test-session); letters, digits, '.', '_' or '-', starting with a letter, a digit or '_'; not the name of another session"},
         },
         required => ["name"],
         # the page's list is the master's: a sub-agent does not rename the session it works in
@@ -4838,11 +4849,20 @@ EOb
         required => [],
         available => sub {($EVENT_SINK and !$IN_AGENT) ? 1 : 0},
     },
+    create_session => {
+        description => "make an empty session in this session's project, for a new topic; it is listed at once, and switch_session goes to it in a later answer. Give a name (letters, digits, '.', '_' or '-', not the name of another session), or leave it empty for a generated one. Only in the web interface",
+        syntax => "///CREATE_SESSION_9d4e+EO_b7c2\n{{name}}\nEO_b7c2[LENGTH({{name}})]\nCREATE_SESSION_9d4e",
+        properties  => {
+            "name" => {type => "string", description => "The name of the new session: no spaces, use '-' or '_' (e.g. test-session); empty for a generated one"},
+        },
+        required => [],
+        available => sub {($EVENT_SINK and !$IN_AGENT) ? 1 : 0},
+    },
     switch_session => {
         description => "switch the page to another session of this project (one listed by list_sessions). It is done when this answer is over, not at once. Only in the web interface",
         syntax => "///SWITCH_SESSION_5a1f+EO_9c3b\n{{name}}\nEO_9c3b[LENGTH({{name}})]\nSWITCH_SESSION_5a1f",
         properties  => {
-            "name" => {type => "string", description => "The name of the session, as list_sessions shows it"},
+            "name" => {type => "string", description => "The name of the session, as list_sessions shows it (names have no spaces)"},
         },
         required => ["name"],
         available => sub {($EVENT_SINK and !$IN_AGENT) ? 1 : 0},
@@ -5549,17 +5569,37 @@ sub list_sessions_3b7d {
     return join("\n", @lines)."\n";
 }
 
+# create_session: the name is made here (the master checks it and makes the session); a session
+# made in this answer is known here, so switch_session can name it at once
+our %CREATED; # name => project, of the sessions this worker asked the master to make
+sub create_session_9d4e {
+    my ($t_args) = @_;
+    my $name = utils::trim($t_args->[0] // '');
+    if (length $name) {
+        die "the name '$name': letters, digits, '.', '_' or '-', starting with a letter, a digit or '_'\n"
+            unless ai::valid_session_name($name);
+        die "there is a session '$name' already\n" if -e "$ai::SESSIONS_DIR/$name" or exists $CREATED{$name};
+    } else {
+        $name = "session-".ai::new_session_id();
+    }
+    $CREATED{$name} = ai::session_project($ai::AI_SESSION) // '';
+    ai::emit(create => {name => $name});
+    return "session $name is made in this project (switch_session goes to it, rename_session names it)\n";
+}
+
 # switch_session: the page switches to another session of this project when this answer is over
 # (the master does it; a switch of the page away from this session in the meantime is not undone)
 sub switch_session_5a1f {
     my ($t_args) = @_;
     my $to = utils::trim($t_args->[0] // '');
     die "a session name is wanted\n" unless length $to;
-    die "there is no session '$to'\n" unless ai::valid_session_name($to) and -d "$ai::SESSIONS_DIR/$to";
+    die "there is no session '$to'\n"
+        unless ai::valid_session_name($to) and (-d "$ai::SESSIONS_DIR/$to" or exists $CREATED{$to});
     die "this session is '$to' already\n" if $to eq ($ai::AI_SESSION // '');
     my $rel = defined $ai::AI_SESSION ? ai::session_project($ai::AI_SESSION) : '';
+    my $theirs = exists $CREATED{$to} ? $CREATED{$to} : (ai::session_project($to) // '');
     die "'$to' is in another project: the page switches within this one\n"
-        unless (ai::session_project($to) // '') eq ($rel // '');
+        unless $theirs eq ($rel // '');
     ai::emit(switch => {to => $to});
     return "the page will switch to $to when this answer is over\n";
 }

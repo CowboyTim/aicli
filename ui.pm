@@ -534,6 +534,11 @@ sub _worker_event {
     my $type = $ev->{event} // return;
     my $data = ref($ev->{data}) eq 'HASH' ? $ev->{data} : {};
     my $is_active = defined $active && $name eq $active;
+    if ($type eq 'create') {
+        # the model's new session in its project: made now (the name is the worker's)
+        _create_session($name, $data->{name} // '');
+        return;
+    }
     if ($type eq 'switch') {
         # the model's switch of the page to another session of its project, done when the turn is over
         my $to = $data->{to} // '';
@@ -584,6 +589,24 @@ sub _worker_gone {
     publish(failed => {text => "the session '$name' stopped"}, session => $name) unless $w->{closing};
     publish_each(busy => sub { {list => _busy_list($_[0])} });
     return;
+}
+
+# a session the model asked for: made in the project of the session that asked, with the
+# project's files as a new session has them (the name is checked; a taken one is refused)
+sub _create_session {
+    my ($from, $new) = @_;
+    my $rel = ai::session_project($from) // '';
+    if (!ai::valid_session_name($new) or -e "$ai::SESSIONS_DIR/$new") {
+        log::audit("session $from: making a session '$new' refused (the name is not free)");
+        return 0;
+    }
+    my $dir = ai::project_path($rel);
+    $ai::AUTO_SESSION{$new} = 1; # ours: removed at the end when nothing was said
+    ai::in_project($dir, sub { ai::init_session($new) });
+    ai::spew("$ai::SESSIONS_DIR/$new/cwd", "$dir\n");
+    log::audit("session $from: made $new in ".(length($rel) ? $rel : 'the root'));
+    publish_each(sessions => sub { _sessions_data($_[0]) });
+    return 1;
 }
 
 # what the model asked for its session, when the session's turn is over: the page switches to

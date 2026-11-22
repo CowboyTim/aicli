@@ -324,5 +324,28 @@ sub run_calls {
     unlike($s, qr/\n/, "status: never a newline, it stays on one line");
 }
 
+# an empty reply (no text, no tool call) is asked once more, plainly; twice empty is an error that
+# says how many bytes came in
+{
+    my $tmp = File::Temp::tempdir(CLEANUP => 1);
+    chdir($tmp) or die $!;
+    TestAI::mock_agent_http(sub {
+        my ($msgs) = @_;
+        return $say->("") if @$msgs == 2; # the first reply: nothing
+        return $say->("the plain answer") if $msgs->[-1]{content} =~ m/Reply now/;
+        return $say->("");
+    });
+    my ($r) = run_calls($agent->("find it"));
+    is($r->[0]{content}, "[AGENT_f2a8 RESULT_d170\nthe plain answer\nRESULT_d170]", "an empty reply: asked once more, and the answer counts");
+    is(scalar(@TestAI::AGENT_REQUESTS), 2, "two requests: the empty one and the nudge");
+    like($TestAI::AGENT_REQUESTS[1]{messages}[-1]{content}, qr/Reply now with your final answer/, "the nudge is plain");
+
+    TestAI::mock_agent_http(sub { $say->("") });
+    my ($e) = run_calls($agent->("find nothing"));
+    like($e->[0]{content}, qr/the model gave no answer \(finish reason: \w+, reasoning 0 characters, \d+ bytes streamed\)/, "twice empty: an error with the reason and the bytes");
+    is(scalar(@TestAI::AGENT_REQUESTS), 2, "twice empty: two requests, then it stops");
+    chdir("/");
+}
+
 chdir("/");
 done_testing();
