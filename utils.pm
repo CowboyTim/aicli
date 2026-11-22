@@ -201,6 +201,13 @@ sub info {
     return;
 }
 
+# an audit line: always written (to AI_LOG, else stderr), not only with debug
+sub audit {
+    my ($message) = @_;
+    _write("AUDIT: [$$]: ".scalar(localtime()).": $message\n", 1);
+    return;
+}
+
 our $on_error; # the web interface (ui.pm) also gets the errors, as text
 sub error {
     my ($message) = @_;

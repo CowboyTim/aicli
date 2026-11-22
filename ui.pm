@@ -667,6 +667,16 @@ sub _project_sessions {
     return [grep {(ai::session_project($_) // '') eq $rel} @{ai::get_sessions()}];
 }
 
+# audit line for a project request: who (the account, or the local operator), what, the project,
+# and the answer (a refusal with its reason too)
+sub _audit_project {
+    my ($acct, $action, $name, $code, $err) = @_;
+    my $who = defined $acct ? "account $acct" : 'local operator';
+    my $what = $name // '-';
+    log::audit("project $action $what by $who: ".($code == 200 ? 'ok' : "refused $code".(defined $err ? " ($err)" : '')));
+    return $code;
+}
+
 # is there a project of this name (a directory of the root, an account's project)?
 sub _is_project {
     my ($rel) = @_;
@@ -724,15 +734,30 @@ sub _delete_project {
     return (200, undef);
 }
 
-# rename a project in its account: no session may be in it (their prompts name the old path,
-# and the start of a conversation is not rewritten)
+# rename a project in its account. Its sessions come along: their workers are stopped (a busy one
+# refuses the rename), each session's cwd file is pointed at the new directory, and the page
+# goes back to its session when that one was in the project. A session's stored system prompt
+# keeps the old name: a conversation's start is never rewritten (the prompt cache).
 sub _rename_project {
     my ($old, $new) = @_;
-    return (409, "'$old' has sessions: delete them first (their conversations name the old path)")
-        if @{_project_sessions($old)};
+    my $sessions = _project_sessions($old);
+    for my $s (@$sessions) {
+        return (409, "a session of '$old' is busy: wait for its answer first") if $worker{$s} and $worker{$s}{busy};
+    }
     return (409, "there is a project '$new' already") if -e "$ai::ROOT/$new";
+    my $was_active = (defined $active and grep {$_ eq $active} @$sessions) ? $active : undef;
+    for my $s (@$sessions) { _stop_worker($s) }
     if (!rename("$ai::ROOT/$old", "$ai::ROOT/$new")) {
         return (500, "could not rename '$old': $!");
+    }
+    for my $s (@$sessions) {
+        my $file = "$ai::SESSIONS_DIR/$s/cwd";
+        if (open(my $fh, '>', $file)) { print {$fh} "$ai::ROOT/$new\n"; close($fh) }
+        else { log::error("cannot point session $s at $new: $!") }
+    }
+    if (defined $was_active) {
+        $active = undef;
+        _activate($was_active) or return (500, $last_error || "the page could not go back to '$was_active'");
     }
     log::info("project $old renamed to $new");
     publish_each(sessions => sub { _sessions_data($_[0]) });
@@ -1387,7 +1412,10 @@ sub _dispatch {
             $rel = "$acct/$name";
         }
         return _json($cn, 503, {error => 'no root for the projects'}) unless defined $ai::ROOT and -d $ai::ROOT;
-        return _json($cn, 409, {error => "there is a project '$rel' already"}) if -e "$ai::ROOT/$rel";
+        if (-e "$ai::ROOT/$rel") {
+            _audit_project($acct, 'create', $rel, 409, 'exists');
+            return _json($cn, 409, {error => "there is a project '$rel' already"});
+        }
         my ($account) = $rel =~ m{\A([^/]+)/};
         if (!-d "$ai::ROOT/$account" and !mkdir("$ai::ROOT/$account")) {
             return _json($cn, 500, {error => "cannot make the account's directory: $!"});
@@ -1395,7 +1423,7 @@ sub _dispatch {
         if (!mkdir("$ai::ROOT/$rel")) {
             return _json($cn, 500, {error => "cannot make the project: $!"});
         }
-        log::info("project $rel made");
+        _audit_project($acct, 'create', $rel, 200);
         _project($rel); # the page switches to it: a session of its own (or the newest one)
         return _json($cn, 200, {project => $rel, session => _shown_active($acct) // ''});
     }
@@ -1403,9 +1431,13 @@ sub _dispatch {
         my $d = eval {$::JSON->decode($body // '')};
         my $rel = ref($d) eq 'HASH' ? $d->{name} : undef;
         return _json($cn, 400, {error => 'a project name is wanted'}) unless defined $rel and !ref($rel) and length $rel;
-        return _json($cn, 404, {error => 'there is no such project of yours'})
-            unless _owns($acct, $rel) and _is_project($rel);
-        my ($code, $err) = _delete_project($rel, ref($d) eq 'HASH' && $d->{force} ? 1 : 0, $acct);
+        unless (_owns($acct, $rel) and _is_project($rel)) {
+            _audit_project($acct, 'delete', $rel, 404, 'no such project of this login');
+            return _json($cn, 404, {error => 'there is no such project of yours'});
+        }
+        my $force = ref($d) eq 'HASH' && $d->{force} ? 1 : 0;
+        my ($code, $err) = _delete_project($rel, $force, $acct);
+        _audit_project($acct, $force ? 'delete (forced)' : 'delete', $rel, $code, $err);
         return _json($cn, $code, $code == 200 ? {deleted => $rel} : {error => $err});
     }
     if($p eq '/project/rename' and $m eq 'POST'){
@@ -1413,13 +1445,17 @@ sub _dispatch {
         my ($old, $to) = ref($d) eq 'HASH' ? ($d->{name}, $d->{to}) : ();
         return _json($cn, 400, {error => 'a project name and the new name are wanted'})
             unless defined $old and !ref($old) and length $old and defined $to and !ref($to) and length $to;
-        return _json($cn, 404, {error => 'there is no such project of yours'})
-            unless _owns($acct, $old) and _is_project($old);
+        unless (_owns($acct, $old) and _is_project($old)) {
+            _audit_project($acct, 'rename', $old, 404, 'no such project of this login');
+            return _json($cn, 404, {error => 'there is no such project of yours'});
+        }
         my ($account) = $old =~ m{\A([^/]+)/};
         my $new;
         if (!defined $acct) {
+            # the local operator: account/project, or a bare name kept in the project's account
             ($new) = $to =~ m{\A($ACCOUNT_RE/$PROJECT_RE)\z};
-            return _json($cn, 400, {error => 'the new name is account/project'}) unless defined $new;
+            ($new) = "$account/$to" =~ m{\A($ACCOUNT_RE/$PROJECT_RE)\z} unless defined $new;
+            return _json($cn, 400, {error => 'the new name is a project name (or account/project)'}) unless defined $new;
         } else {
             return _json($cn, 400, {error => 'a project name is letters, digits, "." "_" or "-"'})
                 unless $to =~ m/\A$PROJECT_RE\z/;
@@ -1428,6 +1464,7 @@ sub _dispatch {
         return _json($cn, 400, {error => 'a project keeps its account'})
             unless $new =~ m{\A\Q$account\E/};
         my ($code, $err) = _rename_project($old, $new);
+        _audit_project($acct, "rename to $new", $old, $code, $err);
         return _json($cn, $code, $code == 200 ? {project => $new} : {error => $err});
     }
     if($p eq '/project' and $m eq 'POST'){

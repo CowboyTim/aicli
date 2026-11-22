@@ -85,9 +85,12 @@ ok(-d "$root/dave/proj", "and it is made");
 is($code, 400, "the local operator without an account: 400");
 
 # --- rename ---------------------------------------------------------------------------
-($code) = call('POST', '/project/rename', $aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, '{"name":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/gamma","to":"delta"}');
-is($code, 409, "gamma has a session: not renamed (its conversation names the path)");
-ok(-d "$root/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/gamma", "and it is still there");
+($code, $d) = call('POST', '/project/rename', $aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, '{"name":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/gamma","to":"delta"}');
+is($code, 200, "gamma has a session: renamed with it");
+is($d->{project}, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/delta', "to delta");
+ok(-d "$root/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/delta" && !-e "$root/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/gamma", "the directory moved");
+($code) = call('POST', '/project/rename', $aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, '{"name":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/delta","to":"gamma"}');
+is($code, 200, "and back to gamma");
 
 mkdir "$root/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/eps" or die "mkdir: $!";
 ($code, $d) = call('POST', '/project/rename', $aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, '{"name":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/eps","to":"zeta"}');
@@ -99,7 +102,12 @@ is($code, 400, "a new name with a slash: 400");
 ($code) = call('POST', '/project/rename', $local, '{"name":"dave/proj","to":"other/proj"}');
 is($code, 400, "a project keeps its account: 400");
 ($code) = call('POST', '/project/rename', $aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, '{"name":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/zeta","to":"gamma"}');
-is($code, 409, "a name taken: 409") ;
+is($code, 409, "a name taken: 409");
+($code, $d) = call('POST', '/project/rename', $aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, '{"name":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/zeta","to":"zeta2"}');
+is($code, 200, "a bare new name is kept in the account");
+is($d->{project}, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/zeta2', "to zeta2");
+($code) = call('POST', '/project/rename', $aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, '{"name":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/zeta2","to":"zeta"}');
+is($code, 200, "and back to zeta");
 ($code) = call('POST', '/project/rename', $bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, '{"name":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/zeta","to":"stolen"}');
 is($code, 404, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb cannot rename aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa's project");
 ok(-d "$root/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/zeta", "and it is still there");

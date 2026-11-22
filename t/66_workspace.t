@@ -41,7 +41,8 @@ my $out_rx = qr/outside of the workspace \(\Q$tmp\E\/ws\): /;
     eval {ai::set_workspace("$tmp/nope")};
     like($@, qr/workspace is not a directory/, "set: must be a directory");
     is($ai::WORKSPACE, "$tmp/ws", "set: a failed set changes nothing");
-    like(ai::system_prompt(), qr/\n\nWorkspace: \Q$tmp\E\/ws\nThe file tools only work inside this directory\.\n/, "the model is told where it is");
+    like(ai::system_prompt(), qr/\n\nWorkspace: the directory of this session\. The file tools take paths relative to it and only work inside it\.\n/, "the model is told where it is");
+    unlike(ai::system_prompt(), qr/\Q$tmp\E/, "and not by the path (a directory can be renamed)");
 }
 
 # what is inside

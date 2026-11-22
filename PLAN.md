@@ -38,9 +38,12 @@ user's view) and AGENTS.md (the code, and "Status" for the history), not here.
 Built (code and docs; tests t/107, t/110, t/124, t/127, t/129, t/131, t/135): the pod kinds, the
 engine and the pod tools are gone; the broker is the control plane of the remote agents only; the page
 has no pods panel; `aicli.sh --broker` mounts the broker's socket and needs no `--root`.
-Still to decide: the `pods/` directory (its base image is no longer built or used; the `dev` stage of
-the Dockerfile is the `ai.pl` container), and how a session's job reaches a remote agent (the broker's
-`exec` is there, nothing sends it yet).
+The `pods/` directory is the image of the tools: a slim Debian base with ai.pl and what it needs
+(perl and its modules, bash, grep, find, sudo for the device nodes, CA certificates), built by
+`docker buildx bake` from `pods/`, with ai.pl fetched from GitHub at a pinned commit. The device
+images (arduino, android, rocm) are built on it. A session's job reaches a remote agent through the
+page (`POST /agent/job`, for a project of the login) or the broker's `exec`; the agent runs it in its
+own work directory, with no checkout yet.
 
 There are no pods. The unit that holds the tools is an `ai.pl` container (the agent of
 the web interface, or a remote agent). The minimal image has the standard tools
@@ -94,8 +97,11 @@ the BLE sniffer).
 
 Built: the thin `dev` stage and the wrapper without device flags (`aicli.sh` has no
 --rocm, --arduino, --usb, --rtlsdr, --nrf-sniffer or --bluetooth; `aicli-devices.sh` is gone).
-Not built: the device images, which go in their own repository. Their repository and the
-run options per device are for that repository.
+Built, not yet run on hardware: the device images are in `pods/` (not a separate repository), each a
+stage on the slim base (`rocm` on the ROCm image, with the same ai.pl layer): arduino (arduino-cli,
+usb_logger, nrfutil with ble-sniffer), android (JDK 21, the SDK, Gradle), rocm (a Python venv with
+torch and the ROCm wheels). rtl-sdr and nrf are not images yet. Their run options per device are in
+`pods/run.sh`, which still has the pods-era device flags (see the open list below).
 
 ## Open: the stack (pods, registry, auth, deploy)
 
@@ -116,8 +122,11 @@ run options per device are for that repository.
 ## Open: web interface
 
 - **Projects and `--root`** are built and tested with a fake docker and the
-  socket tests. Not yet: a real `aicli.sh --root` run with the image, and a
-  browser check of the project select.
+  socket tests, and the page's project and session controls were checked in a
+  headless Chromium against a local `ai.pl --ui` (create, switch, delete of a project,
+  the last one included; new session with a name; rename; the menu's layout at 360 and
+  1000 px). Not yet: a real `aicli.sh --root` run with the image, and the login path
+  (nginx, auth, the account of a request) in a browser.
 - **Not started:** file downloads and inline pictures for what the model
   generates (`GET /files`, `tools::_path()`, `Content-Disposition: attachment`
   for downloads, `file` events from `tools::_changing`).
@@ -130,9 +139,10 @@ run options per device are for that repository.
   `think` events for both forms (`reasoning_content` and `<think>` tags) in
   tests, and the page has a thinking block now. Not reproduced in a browser.
   Check: `/thinking` (a session setting can turn it off), the browser console.
-- **Not run in a real browser:** the session select and the replayed history
-  (only tested with the socket pairs, the child process and curl), the page in both looks and both themes, the
-  microphone and the speech warnings, the TLS trust prompt for a self-signed
+- **Not run in a real browser:** the replayed history (only tested with the socket pairs, the
+  child process and curl), the page in both looks, the microphone and the speech warnings, the TLS
+  trust prompt for a self-signed. (The dark theme's fields, the menu's layout and the session select
+  were checked in a headless Chromium; not the looks in a real desktop browser.)
   certificate. The QR code and the page on a phone work (checked); the desktop
   browser cookie with `SameSite=Lax` is not checked on its own.
 - **TLS:** tested with a generated certificate and `openssl s_client`. Not
@@ -143,14 +153,18 @@ run options per device are for that repository.
 Built so far: the polls, the jobs for the tags, the answers, the times, the agent's program list,
 the agent's working directory, the bearer token (the broker keeps its SHA-256), the optional
 public key pin, the enrollment (a user's token from the page, `ai.pl --enroll`, the state file,
-the revocation). Tests t/123 to t/128. Not built: the owner check of a job, and the checkout of
-the project on the agent (see the parts below).
+the revocation). Also built: an enrollment token is used once; an enrollment on a machine that
+has its agent (`agent.json` in `$AI_DIR`, in a volume) reuses it; `--enroll` with `--programs`
+runs the agent at once; `--name` defaults to a random UUID and `--tags` to the programs' names;
+the page shows each agent online or offline (a poll held or lately) and sends a job of one of
+the login's projects (`POST /agent/job`, the output back as text). Tests t/123 to t/128, t/126,
+t/127, t/137. Not built: the checkout of the project on the agent (see the parts below), and the
+job's owner check beyond the account of the project.
 
 Decided: the hardware is reached through agents that call in. The broker never starts
 an agent (it has no /dev); the user starts it on the machine that has the devices, and it
-calls back. The agent images rocm, arduino and android are built and run outside this
-project. The base pod is gone: the agent container holds the tools (see "Decided: the tools
-run in the agent's container"). An agent is the
+calls back. The device images are built in `pods/` (see "Decided: a thin ai.pl image"), and
+their run is outside this project. An agent is the
 unit that does the work: `ai.pl --agent`, a mode of ai.pl that loads no chat and
 holds no model key, on a machine (a Raspberry Pi with a Zigbee stick, a DGX Spark,
 a Strix Halo box, a laptop, or the broker's own host). It runs jobs in its own
@@ -167,15 +181,15 @@ as any client does; no client certificate). The agent's credential is its token.
 - **Agent credential:** the token of each agent (`Authorization: Bearer`). The broker
   keeps only the SHA-256 (`token_sha256` in `broker.json`).
 - **Enrollment:** each logged-in user has an enrollment token on the main page, with
-  a copy button. Any number of agents can enroll with it: `ai.pl --agent --enroll TOKEN
-  --name NAME` on each machine gets that agent its own token (the broker stores its
-  SHA-256), kept locally. The token is not the session cookie and is kept as a hash. Roles
+  a copy button. `ai.pl --enroll TOKEN --broker URL --programs P` on a machine gets its agent
+  its own token (the broker stores its SHA-256), kept in `agent.json` in `$AI_DIR`. The token is not the session cookie and is kept as a hash. Roles
   (admins of projects and users) are not designed yet, so every logged-in user has one.
   The token is revocable and can be rotated on the page; rotating or revoking it stops
   new enrollments and leaves the enrolled agents as they are. Each agent can be revoked
   on its own (its token's hash is removed from the broker). The page lists the enrolled agents and when
-  each enrolled. The token is reusable, so it is a secret that can add machines: it is
-  shown only to its user, and it is not logged.
+  each enrolled. The token is used once: the enrollment deletes it, so a new one is needed for
+  each agent, and a used or revoked one enrolls nothing. It is shown only to its user, and it is
+  not logged.
 - **Long poll, not a WebSocket:** the agent asks for work (`GET /agents/poll`),
   the broker answers with a job or with a timeout, the agent posts the result
   (`POST /agents/result/<id>`). Plain HTTP through nginx, no Upgrade handling, and
@@ -263,9 +277,15 @@ account in its path. Renaming a login does not move its projects.
 
 - **Devel probe counts:** `devel` reports `lua: 0` and `python: 1` on the
   test machine. Check what the probes count and whether they are right.
-- **Hardware:** the device images (in their own repository) are not built yet; the
-  devices were last run through the removed `aicli.sh` flags, so they have not been checked
-  since the move.
+- **Hardware:** the device images in `pods/` build with `docker buildx bake` (the base and
+  arduino, android and rocm were built on the slim base; the rocm stage was not run on a GPU).
+  Not run: the devices themselves (the serial and USB nodes of `pods/run.sh` and
+  `entrypoint.sh`, the `pods/run.sh` device flags `--usb`, `--rtlsdr`, `--nrf-sniffer`,
+  `--bluetooth`, `--serial`, which still belong to the pods era), rtl-sdr and nrf images, and
+  an agent started from a device image with its tags.
+- **Images:** the base's Rust, nodejs, go and rtl-sdr were removed from the base image;
+  a device image that needs one adds it itself. The android stage uses JDK 21 (Debian trixie has no
+  JDK 17); not yet checked against the Android Gradle Plugin it would build with.
 
 ## Ideas, not started
 

@@ -47,7 +47,8 @@ my $name = $ui::active;
 is(ai::session_project($name), 'acme/alpha', "the session is in alpha");
 is(slurp("$ai::SESSIONS_DIR/$name/cwd"), "$root/acme/alpha\n", "and records it");
 like(slurp("$ai::SESSIONS_DIR/$name/chat"), qr/ALPHA-RULES/, "its prompt has the AGENTS.md of the project");
-like(slurp("$ai::SESSIONS_DIR/$name/chat"), qr/Workspace: \Q$root\E\/acme\/alpha/, "and names the project as its workspace");
+like(slurp("$ai::SESSIONS_DIR/$name/chat"), qr/Workspace: the directory of this session\./, "and says its workspace is its directory");
+unlike(slurp("$ai::SESSIONS_DIR/$name/chat"), qr/\Q$root\E\/acme\/alpha/, "not by the path");
 is($ai::ROOT, $root, "the master is still at the root");
 
 ok(ui::_project('acme/beta'), "the page switches to beta");

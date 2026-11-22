@@ -144,8 +144,12 @@ services:
     environment:
       SEARXNG_SECRET: ${SEARXNG_SECRET:?set SEARXNG_SECRET (openssl rand -hex 32)}
       SEARXNG_BASE_URL: https://${PUBLIC_DOMAIN:?set PUBLIC_DOMAIN}/searxng/
+    # the image declares its config and cache directories as volumes: named here, so compose
+    # does not make anonymous ones for them
     volumes:
       - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+      - aicli-searxng-config:/etc/searxng
+      - aicli-searxng-cache:/var/cache/searxng
     restart: unless-stopped
 
   # proxy: squid, the agent's way to the web (fetch and search); see proxy/squid.conf
@@ -153,8 +157,11 @@ services:
     image: ubuntu/squid:latest
     networks:
       - aicli
+    # the image declares its log and spool directories as volumes: named here (no anonymous ones)
     volumes:
       - ./proxy/squid.conf:/etc/squid/squid.conf:ro
+      - aicli-squid-log:/var/log/squid
+      - aicli-squid-spool:/var/spool/squid
     restart: unless-stopped
 
   # nginx: the public address, TLS on port 443 with the certificate of certbot. The
@@ -226,5 +233,14 @@ volumes:
     name: aicli-auth
   aicli-flm:
     name: aicli-flm
+  # the directories the searxng and squid images declare as volumes
+  aicli-searxng-config:
+    name: aicli-searxng-config
+  aicli-searxng-cache:
+    name: aicli-searxng-cache
+  aicli-squid-log:
+    name: aicli-squid-log
+  aicli-squid-spool:
+    name: aicli-squid-spool
   letsencrypt:
     name: aicli-letsencrypt

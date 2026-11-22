@@ -2262,7 +2262,8 @@ sub prompt_context {
     # the web page draws markdown (ui.pm, ai/ui/index.html): the answers are written so
     $r .= "\n\nWrite your answers in Markdown: headings, lists, code blocks and links are shown as such.\n" if defined $::UI;
     if(defined $WORKSPACE and $WORKSPACE ne '/'){
-        $r .= "\n\nWorkspace: $WORKSPACE\nThe file tools only work inside this directory.\n";
+        # no path here: a project's directory can be renamed, and the stored prompt is not rewritten
+        $r .= "\n\nWorkspace: the directory of this session. The file tools take paths relative to it and only work inside it.\n";
         $r .= "bash, perl and grep can ".($::ORIG_ENV{AI_SANDBOX_READ} ? "only read the system and this directory" : "read everything")
              .", but only write in this directory and in ".tmpdir().".\n"
             if sandbox_state() eq 'on';
