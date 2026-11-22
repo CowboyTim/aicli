@@ -28,13 +28,19 @@
   #qrbox[hidden] { display: none; }
   #qrimg { width: 220px; height: 220px; background: #fff; padding: 8px; border-radius: 6px; }
   #qrnote { font-size: 13px; color: var(--muted); }
-  /* the session's block: the select with its rename and delete; the look and the theme side by side */
-  .sessadmin, .viewrow { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; }
-  .sessadmin > label, .viewrow > label { flex: 1 1 100%; min-width: 0; }
-  @media (min-width: 700px) { .sessadmin > label, .viewrow > label { flex: 1 1 14em; } }
-  .sessadmin select, .viewrow select { min-width: 0; width: 100%; max-width: 100%; }
-  #renamesession { font: inherit; font-size: 14px; padding: 4px 10px; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
-  #delsession { font: inherit; font-size: 14px; padding: 4px 10px; color: var(--err); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
+  /* the menu in groups, each with a line above it: the select on its own full-width line, the name box
+     and its buttons on the line below (never wrapped into the select's line); look and theme side by side */
+  #menu .group { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px solid var(--line); }
+  #menu .group:first-child { border-top: none; padding-top: 0; }
+  #menu .group > label { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; white-space: nowrap; }
+  #menu .group > label > select { flex: 1 1 0; width: 100%; min-width: 0; max-width: none; }
+  #menu .admin { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; }
+  #menu .admin > input { flex: 1 1 auto; min-width: 0; width: 0; }
+  #menu .admin > button { flex: 0 0 auto; white-space: nowrap; }
+  #menu .viewrow { flex-direction: row; gap: 12px; }
+  .viewrow > label { flex: 1 1 0; min-width: 0; display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+  .viewrow select { flex: 1 1 auto; min-width: 0; width: 100%; }
+  #delsession { color: var(--err); }
   #logout { align-self: flex-start; font: inherit; font-size: 14px; padding: 4px 10px; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
   #menu label { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 13px; }
   #menu select { flex: 1; min-width: 0; max-width: 70%; font-size: 15px; }
@@ -141,24 +147,28 @@
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18v2H3zM3 11h18v2H3zM3 16h18v2H3z"/></svg>
   </button>
   <div id="menu">
-    <label>model <select id="model" aria-label="model" title="model"></select></label>
-    <label>project <select id="project" aria-label="project" title="project"></select></label>
-    <div class="projadmin">
-      <label>new project <input id="newproject" aria-label="new project name" placeholder="name" maxlength="63" autocomplete="off"></label>
-      <button type="button" id="projcreate">create</button>
-      <button type="button" id="projrename">rename</button>
-      <button type="button" id="projdelete">delete</button>
+    <div class="group">
+      <label>model <select id="model" aria-label="model" title="model"></select></label>
     </div>
-    <div class="projadmin">
-      <label>new session <input id="newsession" aria-label="new session name" placeholder="name (optional)" maxlength="63" autocomplete="off"></label>
-      <button type="button" id="newsessionbtn">new session</button>
+    <div class="group">
+      <label>project <select id="project" aria-label="project" title="project"></select></label>
+      <div class="admin projadmin">
+        <input id="newproject" aria-label="new project name" placeholder="new project name" maxlength="63" autocomplete="off">
+        <button type="button" id="projcreate">create</button>
+        <button type="button" id="projrename">rename</button>
+        <button type="button" id="projdelete">delete</button>
+      </div>
     </div>
-    <div class="sessadmin">
+    <div class="group">
       <label>session <select id="session" aria-label="session" title="session"></select></label>
-      <button type="button" id="renamesession">rename this session</button>
-      <button type="button" id="delsession">delete this session</button>
+      <div class="admin sessadmin">
+        <input id="newsession" aria-label="new session name" placeholder="new session name (optional)" maxlength="63" autocomplete="off">
+        <button type="button" id="newsessionbtn">create</button>
+        <button type="button" id="renamesession">rename</button>
+        <button type="button" id="delsession">delete</button>
+      </div>
     </div>
-    <div class="viewrow">
+    <div class="group viewrow">
       <label>look <select id="look" aria-label="look">
         <option value="simple">simple</option>
         <option value="cards">cards</option>
@@ -174,7 +184,7 @@
         <option value="neon">neon</option>
       </select></label>
     </div>
-    <div id="agents">
+    <div id="agents" class="group">
       <div class="agenthead">agents <button type="button" id="agentnew">new enrollment token</button> <span id="agentnote"></span></div>
       <div class="enroll" id="agentenroll" hidden>
         <input id="agenttoken" readonly aria-label="enrollment token">
@@ -196,12 +206,14 @@
         <button type="button" id="apicopy">copy</button>
       </div>
     </div>
-    <button id="logout" type="button">log out</button>
-    <button id="qrnew" type="button">log in on another device</button>
-    <div id="qrbox" hidden>
-      <img id="qrimg" alt="QR code: scan it with the phone">
-      <div id="qrnote"></div>
-      <button id="qrclose" type="button">close</button>
+    <div class="group">
+      <button id="logout" type="button">log out</button>
+      <button id="qrnew" type="button">log in on another device</button>
+      <div id="qrbox" hidden>
+        <img id="qrimg" alt="QR code: scan it with the phone">
+        <div id="qrnote"></div>
+        <button id="qrclose" type="button">close</button>
+      </div>
     </div>
   </div>
 </header>
