@@ -85,6 +85,9 @@ services:
       AI_ASR_URL: ${AI_ASR_URL:-http://flm:52625/v1/audio/transcriptions}
       AI_ASR_MODEL: ${AI_ASR_MODEL:-whisper-v3:turbo}
       AI_SEARXNG_PROXY: ""
+      # the image service of the generate_image tool (its address with the /rocm prefix; empty: no tool). Compose reads
+      # it from the shell or .env (deploy.sh moves it there from .agent.env), see deploy.sh
+      AI_IMAGE_URL: ${AI_IMAGE_URL:-}
       UID: ${BROKER_UID:-1000}
       GID: ${BROKER_GID:-1000}
       HOME: /workspace

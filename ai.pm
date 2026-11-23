@@ -4784,6 +4784,20 @@ EOb
         # only with a SearXNG instance to ask
         available => sub {length($::ORIG_ENV{AI_SEARXNG_URL} // '') ? 1 : 0},
     },
+    generate_image => {
+        description => "generate an image from a text prompt with the local image model (Z-Image-Turbo): the PNG is written to the output name in the workspace; about 30 seconds for 1024 x 1024. The same prompt, size, steps and seed give the same image",
+        syntax => "///GENERATE_IMAGE_3a7c+EO_1d0e+EO_5b2f+EO_8c44+EO_6e91+EO_a2d7\n{{prompt}}\nEO_1d0e[LENGTH({{prompt}})]\n{{output}}\nEO_5b2f[LENGTH({{output}})]\n{{size}}\nEO_8c44[LENGTH({{size}})]\n{{steps}}\nEO_6e91[LENGTH({{steps}})]\n{{seed}}\nEO_a2d7[LENGTH({{seed}})]\nGENERATE_IMAGE_3a7c",
+        properties  => {
+            "prompt" => {type => "string", description => "What the image shows"},
+            "output" => {type => "string", description => "The PNG file to write in the workspace; empty for image_<seed>.png"},
+            "size"   => {type => "string", description => "WIDTHxHEIGHT, multiples of 16 from 64 to 1024; empty for 1024x1024"},
+            "steps"  => {type => "string", description => "Sampler steps, 1 to 50; empty for 9"},
+            "seed"   => {type => "string", description => "A whole number; empty for 42"},
+        },
+        required => ["prompt"],
+        # only with the image service to ask (AI_IMAGE_URL: its address, with the /rocm prefix where nginx serves it)
+        available => sub {length($::ORIG_ENV{AI_IMAGE_URL} // '') ? 1 : 0},
+    },
     list => {
         description => "list a directory: type (d, f, l), size and name of every entry",
         syntax => "///LIST_a41d+EO_6c08\n{{path}}\nEO_6c08[LENGTH({{path}})]\nLIST_a41d",
@@ -5092,6 +5106,43 @@ sub search_d4a7 {
         } @results);
     }, url => "$base/search?q=$q&format=json", proxy => $proxy, follow => 2,
        headers => ["Accept: application/json", "User-Agent: aicli"]);
+}
+
+# generate_image: text to image through the rocm-inference service (AI_IMAGE_URL): POST /v1/images/generations, the PNG
+# written to the workspace. The server makes one image at a time; a 1024 x 1024 image takes about 30 seconds.
+sub generate_image_3a7c {
+    my ($t_args) = @_;
+    my ($prompt, $out, $size, $steps, $seed) = map {utils::trim($t_args->[$_] // '')} 0 .. 4;
+    die "no prompt\n" unless length $prompt;
+    my $base = $::ORIG_ENV{AI_IMAGE_URL} // '';
+    die "no image service is set up (AI_IMAGE_URL)\n" unless length $base;
+    $base =~ s{/+\z}{};
+    my %body = (model => 'z-image-turbo', prompt => $prompt, response_format => 'b64_json');
+    $body{size}  = $size if length $size;    # the server checks the size
+    $body{steps} = $steps + 0 if length $steps;
+    $body{seed}  = (length $seed ? $seed : 42) + 0;
+    $body{size} //= '1024x1024';
+    $out = "image_$body{seed}.png" unless length $out;
+    die "the output must be a .png file\n" unless $out =~ m/\.png\z/i;
+    my $path = _path($out);
+    my $data = JSON::XS->new->utf8->canonical->encode(\%body);
+    my $proxy = $::ORIG_ENV{AI_IMAGE_PROXY} // '';   # the service is near: no proxy, unless AI_IMAGE_PROXY says so
+    $proxy = '' if $proxy =~ m/^(?:none|off|direct|no)$/i;
+    return _http(sub {
+        my ($r) = @_;
+        _http_check($r);
+        my $reply = eval {JSON::XS->new->utf8->decode($r->{body})};
+        my $b64 = ref($reply) eq 'HASH' && ref($reply->{data}) eq 'ARRAY' && ref($reply->{data}[0]) eq 'HASH'
+            ? $reply->{data}[0]{b64_json} : undef;
+        die "the image service sent no image\n" unless length($b64 // '');
+        my $png = MIME::Base64::decode_base64($b64);
+        open my $fh, '>:raw', $path or die "cannot write $out: $!\n";
+        print {$fh} $png or die "cannot write $out: $!\n";
+        close $fh or die "cannot write $out: $!\n";
+        return ai::to_bytes("wrote $out: $body{size}, seed $body{seed}, ".length($png)." bytes\n");
+    }, url => "$base/v1/images/generations", method => 'post', data => $data, proxy => $proxy,
+       timeout => $::ORIG_ENV{AI_IMAGE_TIMEOUT} // 3600, max_size => 64_000_000, follow => 0,
+       headers => ["Content-Type: application/json", "Accept: application/json", "User-Agent: aicli"]);
 }
 
 # agent: a sub-agent works on the task, see package agent. (Several calls in

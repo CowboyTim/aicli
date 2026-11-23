@@ -524,6 +524,14 @@ The program runs in a forked child with no shell, and with the policy in
 F<ai/imagemagick/policy.xml>: only these formats are read or written, and
 PostScript, PDF, SVG and the like, programs and the network are not used.
 
+=item B<generate_image>
+
+Generate an image from a text prompt with the local image service (B<AI_IMAGE_URL>,
+Z-Image-Turbo): the PNG is written to the output name in the workspace. Arguments:
+the prompt, the output (default C<image_<seed>.png>), the size (WIDTHxHEIGHT,
+default 1024x1024), the steps (default 9) and the seed (default 42). The same
+prompt, size, steps and seed give the same image. Only with B<AI_IMAGE_URL> set.
+
 =item B<agent>
 
 Give a task to a sub-agent, see B<SUB-AGENTS>.
@@ -929,6 +937,17 @@ always use the text. Calls written in the text are run in both modes.
 Set to 1 to offer the B<image> tool. Only for a model that takes pictures: a
 text model refuses the request, and the picture then stays in the conversation.
 Default: off.
+
+=item B<AI_IMAGE_URL>
+
+The address of the image service for the B<generate_image> tool, with the
+prefix where its nginx serves it (for example C<http://host:8000/rocm>). The
+tool is only offered when it is set.
+
+=item B<AI_IMAGE_TIMEOUT>
+
+Seconds to wait for an image (default 3600: the service makes one image at a
+time).
 
 =item B<AI_IMAGE_MAX>
 

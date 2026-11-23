@@ -112,6 +112,16 @@ else
     v=$(pick "$agent_f" AI_ASR_URL)
     [ -n "$v" ] && set_key "$env_f" AI_ASR_URL "$v"
 fi
+# the image service of the generate_image tool (AI_IMAGE_URL, with the /rocm prefix). As the recognizer above: compose
+# reads it from the shell or .env, so a URL that .agent.env has moves to .env. AI_IMAGE_URL= (set and empty) clears it:
+# no image tool.
+if [ "${AI_IMAGE_URL+x}" = x ] && [ -z "$AI_IMAGE_URL" ]; then
+    del_key "$env_f" AI_IMAGE_URL
+    del_key "$agent_f" AI_IMAGE_URL
+else
+    v=$(pick "$agent_f" AI_IMAGE_URL)
+    [ -n "$v" ] && set_key "$env_f" AI_IMAGE_URL "$v"
+fi
 set_key "$agent_f" AI_MODEL "$(pick "$agent_f" AI_MODEL "Qwen3.5-4B-ROCMFP4")"
 
 if [ "${AICLI_ENV_ONLY:-0}" = 1 ]; then
