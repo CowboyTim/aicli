@@ -231,7 +231,7 @@ sub sys_prompt {
     }
     my @printed;
     ai::handle_llm_response(\$edit =~ s/2c\nTWO/1c\nONE/r, sub {push @printed, $_[0]});
-    is(scalar(@printed), 2, "shown: a printer of the caller gets call and result, no diff");
+    is(scalar(@printed), 3, "shown: a printer of the caller gets call, result and the time, no diff");
     is(scalar(@tools::CHANGES), 0, "shown: changes are not kept around");
 }
 

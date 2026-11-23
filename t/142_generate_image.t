@@ -85,13 +85,20 @@ ok(tools::available('generate_image'), "available: the image service is set");
     @tools::CHANGES = ();
 }
 
-# an existing file is replaced, and its old bytes are kept for undo
+# a file of that name already there is kept as it is: the picture goes to the first free name, and
+# the result names it (the chat shows each picture as it was made)
 {
     spew("$ws/cube.png", "old bytes");
     my ($res, $err) = ai::execute_tool('generate_image', 'GENERATE_IMAGE_3a7c', ['a red cube', 'cube.png', '512x512', '4', '7']);
-    ok(!$err, "an existing file is made again") or diag($err);
-    is($tools::CHANGES[-1]{old}, 'old bytes', "the old file is kept for undo");
-    is(slurp("$ws/cube.png"), $PNG, "and replaced by the new picture");
+    ok(!$err, "a name already taken is made again") or diag($err);
+    like($res, qr/\Awrote cube-2\.png: 512x512, seed 7/, "the picture goes to cube-2.png, and the result names it");
+    is(slurp("$ws/cube.png"), "old bytes", "the file that was there stays as it was");
+    is(slurp("$ws/cube-2.png"), $PNG, "the new picture is the new file");
+    is($tools::CHANGES[-1]{path}, 'cube-2.png', "the change is the new file");
+    ok(!defined $tools::CHANGES[-1]{old}, "a new file: no old content for undo");
+    ($res, $err) = ai::execute_tool('generate_image', 'GENERATE_IMAGE_3a7c', ['a blue cube', 'cube.png', '512x512', '4', '7']);
+    like($res // '', qr/\Awrote cube-3\.png/, "and the next one goes to the next free name, cube-3.png");
+    is(slurp("$ws/cube-2.png"), $PNG, "cube-2.png is not touched by it");
     @tools::CHANGES = ();
 }
 
@@ -120,7 +127,6 @@ ok(tools::available('generate_image'), "available: the image service is set");
         [['a', 'x.png', '', '51'],         qr/steps: a whole number from 1 to 50/, "steps 51"],
         [['a', 'x.png', '', 'many'],       qr/steps: a whole number from 1 to 50/, "steps not a number"],
         [['a', 'x.png', '', '', 'x1'],     qr/seed: a whole number/,              "a seed that is not a number"],
-        [['a', 'a_dir.png'],               qr/link or a directory/,                "an output that is a directory"],
         [['a', '../x.png'],                qr/outside of the workspace/,           "an output outside the workspace"],
     );
     for my $case (@refuse) {
@@ -131,6 +137,16 @@ ok(tools::available('generate_image'), "available: the image service is set");
     }
     is(scalar(@REQ), $asked, "no request went to the service for any of them");
     ok(!-e "$ws/x.png" && !-e "$ws/x.jpg", "and nothing was written");
+}
+
+# a name taken by a folder is taken too: the picture goes to the next free name, the folder stays
+{
+    my $before = scalar @REQ;
+    my ($res, $err) = ai::execute_tool('generate_image', 'GENERATE_IMAGE_3a7c', ['a', 'a_dir.png']);
+    ok(!$err, "a folder of that name: the picture is made") or diag($err);
+    like($res // '', qr/\Awrote a_dir-2\.png/, "it goes to a_dir-2.png");
+    ok(-d "$ws/a_dir.png", "and the folder stays");
+    is(scalar(@REQ), $before + 1, "one request for it");
 }
 
 # no service set up: the sub itself refuses (the tool is not offered then, see available)
@@ -163,14 +179,17 @@ ok(tools::available('generate_image'), "available: the image service is set");
 # ---------------------------------------------------------------------------
 # the file a call made is offered to the page: its name with the defaults, when it is there
 
-is(tools::offered_file('generate_image', ['a', 'cube.png', '', '', ''], $ws), 'cube.png',
-    "the file of the call is offered");
-is(tools::offered_file('generate_image', ['a', '', '', '', '3'], $ws), 'image_3.png',
-    "the default name is offered too");
-ok(!defined tools::offered_file('generate_image', ['a', 'missing.png'], $ws),
+# (the name is the one the result gives: a name that was taken gets another)
+is(tools::offered_file('generate_image', ['a', 'cube.png', '', '', ''], $ws, "wrote cube-2.png: 1024x1024, seed 42, 9 bytes\n"),
+    'cube-2.png', "the file the result names is offered");
+is(tools::offered_file('generate_image', ['a', '', '', '', '3'], $ws, "wrote image_3.png: 1024x1024, seed 3, 9 bytes\n"),
+    'image_3.png', "the default name too");
+ok(!defined tools::offered_file('generate_image', ['a', 'missing.png'], $ws, "wrote missing.png: 1024x1024, seed 42, 9 bytes\n"),
     "a file that is not there is not offered");
-ok(!defined tools::offered_file('generate_image', ['a', '../outside.png'], $ws),
+ok(!defined tools::offered_file('generate_image', ['a', '../outside.png'], $ws, "wrote ../outside.png: 1024x1024, seed 42, 9 bytes\n"),
     "a file outside the workspace is not offered");
+ok(!defined tools::offered_file('generate_image', ['a', 'cube.png'], $ws, "[ERROR] problem running tool 'generate_image': HTTP status 500\n"),
+    "a failed call offers no file");
 ok(!defined tools::offered_file('bash', ['ls'], $ws), "a tool that writes no file offers nothing");
 
 # ---------------------------------------------------------------------------

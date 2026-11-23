@@ -531,7 +531,8 @@ PostScript, PDF, SVG and the like, programs and the network are not used.
 =item B<generate_image>
 
 Generate an image from a text prompt with the local image service (B<AI_IMAGE_URL>,
-Z-Image-Turbo): the PNG is written to the output name in the workspace. Arguments:
+Z-Image-Turbo): the PNG is written to the output name in the workspace; a file of that name already
+there is kept, and the picture goes to the first free name (C<name-2.png>, ...). Arguments:
 the prompt, the output (default C<image_<seed>.png>), the size (WIDTHxHEIGHT,
 default 1024x1024), the steps (default 9) and the seed (default 42). The same
 prompt, size, steps and seed give the same image. The picture is written whole:
@@ -693,8 +694,9 @@ move, mkdir), C<list> shows the changes that can be undone.
 
 =item B</usage> [reset]
 
-Show the token usage and the context size of the session, C<reset> starts
-counting again.
+Show the token usage and the context size of the session, and its tool calls: how
+many of each tool, how many failed, and the time they took in all and on average.
+C<reset> starts counting again.
 
 =item B</retry>
 
@@ -947,7 +949,8 @@ Default: off.
 =item B<speech>
 
 Speak a text with the local speech model (Qwen3-TTS, the server's C<--models-dir>
-or C<--tts>): the WAV file is written to the output name in the workspace. Arguments:
+or C<--tts>): the WAV file is written to the output name in the workspace; a file of that name already
+there is kept, and the sound goes to the first free name (C<name-2.wav>, ...). Arguments:
 the text, the voice (the name of a voice directory of the server), the output
 (default C<speech_<voice>.wav>), the language (default english) and the seed. Only
 with B<AI_SPEECH_URL> set.

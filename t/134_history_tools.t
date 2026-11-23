@@ -62,4 +62,23 @@ is($m[1]{full}, "BASH\n  code: echo hi", "the whole call of a bash call: its nam
         "a value over several lines: its further lines are indented under it");
 }
 
+# an id may come again in a later answer: each call gets the result of its own answer
+{
+    my $name3 = 'history-ids-test';
+    mkdir "$ai::SESSIONS_DIR/$name3" or die "mkdir: $!";
+    open(my $fh3, '>', "$ai::SESSIONS_DIR/$name3/chat") or die $!;
+    print {$fh3} map {$J->encode($_)."\n"} (
+        {role => 'assistant', content => '', tool_calls => [{id => 'call_0', type => 'function',
+            function => {name => 'bash', arguments => $J->encode({code => 'echo first'})}}]},
+        {role => 'tool', tool_call_id => 'call_0', content => "first\n"},
+        {role => 'assistant', content => '', tool_calls => [{id => 'call_0', type => 'function',
+            function => {name => 'bash', arguments => $J->encode({code => 'echo second'})}}]},
+        {role => 'tool', tool_call_id => 'call_0', content => "second\n"},
+    );
+    close $fh3;
+    my @t = grep {$_->{role} eq 'tool'} @{ui::_history_data($name3)->{messages}};
+    is($t[0]{result}, "  first\n", "a call gets the result of its own answer, though a later answer has the same id");
+    is($t[1]{result}, "  second\n", "and the later call gets its own result");
+}
+
 done_testing();

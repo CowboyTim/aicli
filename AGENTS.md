@@ -460,7 +460,11 @@ pops and reverts one entry. A new tool that changes files must call
 
 `usage` file per session (`load_usage`/`save_usage`): requests, prompt and
 completion tokens, `chars_per_token` (learned from what the API reports, used
-by `estimate_tokens()`). `context_limit()`: `AI_CONTEXT_TOKENS`, else
+by `estimate_tokens()`). Also `tools`: per tool its calls, errors and seconds
+(`tool_stat()`, for the chat's calls and the sub-agents' ones; an agent's time runs
+from its start to its end). Each call shows its time after its result (`took`), the
+header of the page has the session's totals (the `stats` event and the state's
+`tools`, `_tool_totals()`), and `/usage` lists them. `context_limit()`: `AI_CONTEXT_TOKENS`, else
 `%MODEL_CONTEXT` (model list) or `$SERVER_CONTEXT` (llama.cpp `/props`), else
 0 = unknown. `compact_context()` summarizes the older part in pieces that fit a request (`summarize_messages()`, each piece updates the summary so far; a piece that fails keeps what there is). It keeps the first request of the conversation (the file
 `first_request`) word for word in its summary, and records every compaction in
@@ -509,8 +513,8 @@ How they run:
 | bash | temp file, `_run` → `exec bash <file>` |
 | perl | `_run` → `eval` in package `aicli::tool`, or `Safe->reval` (`AI_PERL_SAFE`) |
 | fetch, search | `tools::_http` → `loop::http` (web proxy, timeout, size limit, redirects) |
-| generate_image | `tools::_http` → `loop::http` to `AI_IMAGE_URL`; the PNG is written by `_write_whole` (the old file goes to the undo journal through `_changing`, the bytes to a temp name, renamed when whole). `image_output()` names the file (the default too), `offered_file()` tells the page. Only with `AI_IMAGE_URL` |
-| speech | the same for the speech service (`AI_SPEECH_URL`): the WAV, named by `speech_output()`, written by `_write_whole`; the answer must start with RIFF. Only with `AI_SPEECH_URL` |
+| generate_image | `tools::_http` → `loop::http` to `AI_IMAGE_URL`; the PNG is written by `_write_whole` (the old file goes to the undo journal through `_changing`, the bytes to a temp name, renamed when whole). `image_output()` names the file (the default too); `free_name()` gives the first free name when that one is taken (a picture is never replaced), and `offered_file()` reads the name from the result line (`wrote NAME: ...`). Only with `AI_IMAGE_URL` |
+| speech | the same for the speech service (`AI_SPEECH_URL`): the WAV, named by `speech_output()` (a taken name gets `free_name()`'s next one), written by `_write_whole`; the answer must start with RIFF; `offered_file()` reads the name from the result. Only with `AI_SPEECH_URL` |
 | agent | `agent::launch` + `agent::wait` |
 
 Tools are called natively by default: the request has their JSON schemas (from
@@ -644,13 +648,14 @@ Other APIs are reached through an OpenAI compatible gateway, such as LiteLLM or 
 | `t/127_enroll_e2e.t` | the enrollment end to end: a broker with its state file, the user's token and list over the socket, `ai.pl --enroll` (a wrong token refused, the right one keeps agent.json 0600, the token not printed), `ai.pl --agent` with that file and no token on its command line runs a job, a revocation stops it |
 | `t/126_enrollment.t` | the enrollment without sockets: a user's token (only its hash kept, a new one replaces it, used once: a second use is refused), agents enrolled with it (own token, hash only), the names and tags checked, the list of a user, revocation (owner only, the token stops), the state file over a restart |
 | `t/135_error_display.t` | the errors of a tool read whole on the page (a line is not cut at the terminal width there; an error has up to 40 lines, a result 8) |
-| `t/134_history_tools.t` | the whole call of a tool line (`full`: each argument in full, a multi-line value indented), the history of a session on the page: the tool calls of the chat with their results, in their place between what was said and the answers, a call without a result yet has none |
+| `t/134_history_tools.t` | the whole call of a tool line (`full`: each argument in full, a multi-line value indented), a result is the one of its own answer (an id may come again), the history of a session on the page: the tool calls of the chat with their results, in their place between what was said and the answers, a call without a result yet has none |
 | `t/133_favicon.t` | the icon of the pages: favicon.ico (16, 32, 48, 64, 256 pixels) and favicon.svg, a strawberry drawn for aicli (not emoji artwork); both pages link it; nginx serves it publicly; the local interface answers it without a login |
 | `t/136_api_token.t` | the API tokens of the services (`/auth/api/token`, aud=flm): issued from a login only, verified with `?aud=flm` (a login refused for it, an API token refused for the page), no renewal, a user that is not an account, a token past its time, the end at logout |
 | `t/137_agent_defaults.t` | the enrollment defaults: the name is a random UUID version 4 (each new), the tags are the programs' names (a path's last part, short lower-case words, each once) |
 | `t/144_web_files.t` | the files of a session on the page: `GET /file` (a picture or a sound inline, the rest an attachment, sandboxed; a login sees the projects of its own account only; a link or `..` out of the project, an absolute path, a bad session name and a folder refused; the size limit; only GET), the history's `files` (a call that wrote a file still there, not a failed call, not one without its result), the master's `file` event (the active session only, with its session) |
-| `t/143_speech.t` | the speech tool: the WAV written whole (the old file in the undo journal, a temp name renamed when whole), the request, the default name, the refusals (no request made), an answer that is not a WAV leaves no file, the file offered |
-| `t/142_generate_image.t` | the generate_image tool: the PNG written whole and journaled the same way, the request (the URL's slash, the size, steps and seed), the default names, refusals (no request made), the service's errors leave no file, the file offered, a chat turn sends the `file` event, a failed call none |
+| `t/143_speech.t` | the speech tool: the WAV written whole (a temp name renamed when whole), a name taken goes to the next free one and the file there stays, the request, the default name, the refusals (no request made), an answer that is not a WAV leaves no file, the file offered |
+| `t/142_generate_image.t` | the generate_image tool: the PNG written whole and journaled, a name taken (a folder too) goes to the next free one and the file there stays, the request (the URL's slash, the size, steps and seed), the default names, refusals (no request made), the service's errors leave no file, the file offered, a chat turn sends the `file` event, a failed call none |
+| `t/145_multi_calls.t` | several tool calls in one answer: the same index for all of them, none, or one each, and interleaved argument pieces, are separate calls (`stream_call()`), each answered with its own id, in order; a failing call leaves the others to run; the calls are kept in one assistant message; each call's time and the totals in the usage (also the sub-agent's calls), `/usage` lists them |
 | `t/141_create_session.t` | the model makes a session: the name made by the worker, the master makes it in the asking session's project and lists it, a switch to it in the same answer is accepted, the same name or a bad one is refused, not for a sub-agent or the terminal |
 | `t/140_switch_session.t` | the model lists its project's sessions (this one marked, the empty ones and other projects left out, a filter) and switches the page: checked (same project, exists, not this one), kept by the master, the page's state has it, done when the turn is over only if the page is still on this session, refused as a failure when the target is gone |
 | `t/139_rename_session.t` | the model's session rename: the tool (web only, not for a sub-agent; the name checked, its own name and a taken one refused), the master keeps the request, the page's state has it (a refresh too), it is done when the turn is over and nothing is queued, a name taken by then is refused and the page is told |
@@ -698,8 +703,9 @@ The checks are in `tools/ui-check/`:
 - `menu.js`: the session menu (rename from the name box, delete with "sure?" and "cancel")
   and the project menu (create, rename, delete). It changes the state dir.
 - `common.js`: the shared part (the address, the token, Firefox, the page errors).
-- `fake-services.py`: a fake chat (it asks for `generate_image` once, then answers in text) and a fake image service (a 256 pixel PNG), so a turn runs without a model.
-- `files.js`: a picture a tool wrote is shown inline and downloads, live and after a reload; a tool line opens to the whole call. It needs the fake services and a server started with `AICLI_CHECK_LLM` and `AICLI_CHECK_IMAGE` (the first lines of the file say how).
+- `fake-services.py`: a fake chat (it asks for `generate_image` for each new message of the user, and answers in text after a tool result) and a fake image service (a 256 pixel PNG), so a turn runs without a model.
+- `files.js`: a picture a tool wrote is shown inline and downloads, live and after a reload; a tool line opens to the whole call; a follow-up picture goes to a new name and each entry keeps its own.
+- `multi.js`: "draw two cubes" makes the fake model answer with two calls at index 0: two tool lines, two pictures, each result's time, the header's totals (the times are live, not kept with the chat). It needs the fake services and a server started with `AICLI_CHECK_LLM` and `AICLI_CHECK_IMAGE` (the first lines of the file say how).
 
 Run them from `tools/ui-check/` with the server's settings:
 

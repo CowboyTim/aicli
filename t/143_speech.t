@@ -64,13 +64,16 @@ ok(tools::available('speech'), "available: the speech service is set");
     @tools::CHANGES = ();
 }
 
-# an existing file is replaced, its old bytes kept for undo
+# a file of that name already there is kept as it is: the sound goes to the first free name, and the
+# result names it
 {
     spew("$ws/morning.wav", "old sound");
     my ($res, $err) = ai::execute_tool('speech', 'SPEECH_7e2b', ['Good evening.', 'ana', 'morning.wav']);
-    ok(!$err, "an existing file is made again") or diag($err);
-    is($tools::CHANGES[-1]{old}, 'old sound', "the old file is kept for undo");
-    is(slurp("$ws/morning.wav"), $WAV, "and replaced");
+    ok(!$err, "a name already taken is made again") or diag($err);
+    like($res, qr/\Awrote morning-2\.wav: /, "the sound goes to morning-2.wav, and the result names it");
+    is(slurp("$ws/morning.wav"), "old sound", "the file that was there stays as it was");
+    is(slurp("$ws/morning-2.wav"), $WAV, "the new sound is the new file");
+    is($tools::CHANGES[-1]{path}, 'morning-2.wav', "the change is the new file");
     @tools::CHANGES = ();
 }
 
@@ -111,9 +114,12 @@ ok(tools::available('speech'), "available: the speech service is set");
     $REPLY = sub { {code => 200, error => undef, headers => {}, body => $WAV} };
 }
 
-# the file a call made is offered, with the defaults
-is(tools::offered_file('speech', ['hi', 'ana', 'morning.wav', '', ''], $ws), 'morning.wav', "the file of the call is offered");
-is(tools::offered_file('speech', ['hi', 'ben', '', '', ''], $ws), 'speech_ben.wav', "the default name is offered");
-ok(!defined tools::offered_file('speech', ['hi', 'ana', 'nothere.wav'], $ws), "a file that is not there is not offered");
+# the file a call made is offered: the name the result gives (a name taken gets another)
+is(tools::offered_file('speech', ['hi', 'ana', 'morning.wav', '', ''], $ws, "wrote morning-2.wav: 44 bytes of WAV (voice ana)\n"),
+    'morning-2.wav', "the file the result names is offered");
+is(tools::offered_file('speech', ['hi', 'ben', '', '', ''], $ws, "wrote speech_ben.wav: 44 bytes of WAV (voice ben)\n"),
+    'speech_ben.wav', "the default name too");
+ok(!defined tools::offered_file('speech', ['hi', 'ana', 'nothere.wav'], $ws, "wrote nothere.wav: 44 bytes of WAV (voice ana)\n"),
+    "a file that is not there is not offered");
 
 done_testing();

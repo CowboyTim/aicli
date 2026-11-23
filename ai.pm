@@ -633,6 +633,28 @@ our $ONE_SHOT = 0; # set by one_shot(): -p
 our $IN_AGENT = 0; # set while a sub-agent builds its request
 # the calls the server made itself, from the stream: each has an id (its result
 # refers to it), the arguments are complete
+# The call a streamed delta of tool_calls belongs to. A delta with an id is that call's (a server may
+# send the same index for every call, or none, so the index alone would merge them into one). A delta
+# without one continues the last call that came at its index: the arguments come in pieces.
+sub stream_call {
+    my ($st, $tc) = @_;
+    my $calls = $st->{tool_calls} //= [];
+    my $index = $tc->{index} // 0;
+    my $id = $tc->{id};
+    my $e;
+    if (defined $id and length $id) {
+        ($e) = grep {defined $_->{id} and $_->{id} eq $id} @$calls;
+    } else {
+        $e = $st->{call_at}{$index};
+    }
+    if (!$e) {
+        $e = {};
+        push @$calls, $e;
+    }
+    $st->{call_at}{$index} = $e;
+    return $e;
+}
+
 sub stream_tool_calls {
     my ($st) = @_;
     my $n = 0;
@@ -730,13 +752,8 @@ sub handle_llm_response {
         $say_tool->("${colors::yellow_color1}\x{e2}\x{97}\x{8f} $c->{k}${colors::reset_color} ".tool_summary($c)."\n", 'tool', call_full($c));
     };
     my $answer = sub {
-        my ($i, $c, $result, $had_error) = @_;
+        my ($i, $c, $result, $had_error, $secs) = @_;
         $errs[$i] = (defined $had_error and length $had_error) ? $had_error : undef;
-        # a file the tool wrote is offered on the web page: a download, and a picture or a sound inline
-        if($EVENT_SINK and !$had_error){
-            my $file = eval {tools::offered_file($c->{k}, $c->{args}, $WORKSPACE)};
-            emit(file => {path => $file}) if defined $file;
-        }
         my $tool_response = tool_response($c->{tool}, $result, $had_error);
         # a call of the server is answered with a tool message, as its API wants
         $rt[$i] = $c->{id}
@@ -753,7 +770,22 @@ sub handle_llm_response {
             # (a file change shows its diff instead)
             $say_tool->($colors::green_color.clip_lines($result, $::ORIG_ENV{AI_TOOL_LINES} // 8, "  ").$colors::reset_color, 'result');
         }
-        show_changes($printer_sub == $say ? $say : undef);
+        show_changes($printer_sub == $say ? $say : undef); # the diff of a file change, then the time
+        # how long the call took (not for one that did not run)
+        if(defined $secs){
+            my $took = "  took ".fmt_secs($secs);
+            if($brief){
+                $say_tool->($colors::cyan_color.$took.$colors::reset_color, 'result');
+            } else {
+                &{$printer_sub}("${colors::cyan_color}$took${colors::reset_color}\n");
+            }
+        }
+        # a file the tool wrote is offered on the web page, after its result: a download, and a picture
+        # or a sound inline
+        if($EVENT_SINK and !$had_error){
+            my $file = eval {tools::offered_file($c->{k}, $c->{args}, $WORKSPACE, $result)};
+            emit(file => {path => $file}) if defined $file;
+        }
     };
     foreach my $c (@$native ? map {native_call($_)} @$native : parse_tool_calls($msg)){
         my $i = scalar(@rt);
@@ -769,9 +801,12 @@ sub handle_llm_response {
             push @agents, [$i, $c, agent::launch($c->{args}[0])];
         } else {
             $TUI->set('tool', $c->{k});
-            my @r = execute_tool($c->{k}, $c->{tool}, $c->{args});
+            my $t0 = Time::HiRes::time();
+            my ($result, $had_error) = execute_tool($c->{k}, $c->{tool}, $c->{args});
+            my $secs = Time::HiRes::time() - $t0;
             $TUI->unset('tool');
-            &{$answer}($i, $c, @r);
+            tool_stat($c->{k}, $secs, $had_error);
+            &{$answer}($i, $c, $result, $had_error, $secs);
         }
     }
     if(@agents){
@@ -780,7 +815,11 @@ sub handle_llm_response {
         foreach my $e (@agents){
             my ($i, $c, $a) = @$e;
             &{$say}("${colors::yellow_color1}\x{e2}\x{97}\x{8f} agent $a->{id}${colors::reset_color} answered\n") if $brief;
-            &{$answer}($i, $c, agent_result($a));
+            # an agent's time is from its start to its end (the wait for the others is not its)
+            my $secs = ($a->{t1} // Time::HiRes::time()) - ($a->{t0} // Time::HiRes::time());
+            my ($result, $had_error) = agent_result($a);
+            tool_stat('agent', $secs, $had_error);
+            &{$answer}($i, $c, $result, $had_error, $secs);
         }
     }
 
@@ -977,7 +1016,7 @@ sub new_stream {
             for my $tc (@{$d->{tool_calls}}){
                 next unless ref($tc) eq 'HASH';
                 log::info("SERVER TOOL CALL DELTA: ".$::JSON->encode($tc));
-                my $e = $st->{tool_calls}[$tc->{index} // 0] //= {};
+                my $e = stream_call($st, $tc);
                 my $f = ref($tc->{function}) eq 'HASH' ? $tc->{function} : {};
                 $e->{id}   //= $tc->{id};
                 $e->{name} //= $f->{name};
@@ -1679,6 +1718,33 @@ sub record_usage {
     $u->{last_completion_tokens} = $out;
     save_usage($u);
     return ($in, $out, $est);
+}
+
+# Account one tool call of the session: its count, the errors, the seconds it took (the usage file
+# keeps the totals per tool; /usage shows them). Sub-agents' calls count too.
+sub tool_stat {
+    my ($name, $secs, $err) = @_;
+    return unless length($name // '') and defined $secs;
+    # no session directory (a test, a one-off run): nothing to keep the count in
+    return unless defined $AI_SESSION_DIR and -d $AI_SESSION_DIR;
+    my $u = load_usage();
+    my $s = $u->{tools}{$name} //= {calls => 0, errors => 0, seconds => 0};
+    $s->{calls}++;
+    $s->{errors}++ if defined $err and length $err;
+    $s->{seconds} = sprintf("%.3f", $s->{seconds} + $secs) + 0;
+    # the count must not stop the chat: a usage file that cannot be written is only logged
+    eval {save_usage($u); 1} or log::info("tool stats not kept: $@");
+    # the page shows the session's totals in its header (the state, and each change)
+    my ($calls, $all) = (0, 0);
+    for my $t (values %{$u->{tools}}) { $calls += $t->{calls}; $all += $t->{seconds} }
+    emit(stats => {tools => $calls, seconds => sprintf("%.3f", $all) + 0});
+    return;
+}
+
+# a time of a tool call as the chat shows it: 0.42 s, 12.3 s
+sub fmt_secs {
+    my ($s) = @_;
+    return $s < 10 ? sprintf("%.2f s", $s) : sprintf("%.1f s", $s);
 }
 
 sub usage_line {
@@ -3023,6 +3089,16 @@ our @COMMANDS;
                 $::ORIG_ENV{AI_TOKEN_BUDGET} ? " of $::ORIG_ENV{AI_TOKEN_BUDGET} (AI_TOKEN_BUDGET)" : "";
             printf "context:    ~%d tokens in %d messages%s\n", estimate_tokens(@msgs), scalar(@msgs),
                 $limit ? sprintf(", %d%% of %d", 100 * estimate_tokens(@msgs) / $limit, $limit) : ", window size unknown (AI_CONTEXT_TOKENS)";
+            # the tool calls of the session: how many, how many failed, how long they took (the slowest first)
+            my $tools = $u->{tools} // {};
+            if(%$tools){
+                print "tools:\n";
+                for my $name (sort {$tools->{$b}{seconds} <=> $tools->{$a}{seconds} || $a cmp $b} keys %$tools){
+                    my $s = $tools->{$name};
+                    printf "  %-16s %4d calls, %d errors, %s in all, %s on average\n", $name, $s->{calls}, $s->{errors} // 0,
+                        fmt_secs($s->{seconds}), fmt_secs($s->{calls} ? $s->{seconds} / $s->{calls} : 0);
+                }
+            }
             return 0;
         },
         complete => sub {return +{reset => sub {0}}},
@@ -4104,6 +4180,7 @@ sub new {
 sub launch {
     my ($task) = @_;
     my $self = agent->new($task);
+    $self->{t0} = Time::HiRes::time();
     ai::agent_view("agent $self->{id}", "started: ".($task // ""));
     $ai::TUI->set("agent $self->{id}", sub {$self->status()});
     my $max = ai::max_agents();
@@ -4277,8 +4354,10 @@ sub compact {
 sub next_tool {
     my ($self) = @_;
     while(my $c = shift @{$self->{queue}}){
+        my $t0; # set when the call runs: its time is kept then
         my $got = sub {
             my ($result, $err) = @_;
+            ai::tool_stat($c->{k}, Time::HiRes::time() - $t0, $err) if defined $t0;
             # a call of the server is answered with a tool message, as its API wants
             push @{$self->{msgs}}, $c->{id}
                 ? {role => 'tool', tool_call_id => $c->{id}, content => ai::to_text($err // $result // '')}
@@ -4298,6 +4377,7 @@ sub next_tool {
         ai::agent_view("agent $self->{id}", ai::tool_summary($c));
         # in-process tools answer at once, forked ones later from the loop
         my ($in_call, $answered) = (1, 0);
+        $t0 = Time::HiRes::time();
         ai::execute_tool_async($c->{k}, $c->{tool}, $c->{args}, sub {
             &{$got}(@_);
             return $answered = 1 if $in_call;
@@ -4328,6 +4408,7 @@ sub finish {
     my ($self, $result, $err) = @_;
     return if $self->{done};
     @{$self}{qw(done result error activity)} = (1, $result, $err, 'done');
+    $self->{t1} = Time::HiRes::time();
     delete $RUNNING{$self->{id}};
     $ai::TUI->unset("agent $self->{id}");
     $self->save();
@@ -4813,7 +4894,7 @@ EOb
         syntax => "///GENERATE_IMAGE_3a7c+EO_1d0e+EO_5b2f+EO_8c44+EO_6e91+EO_a2d7\n{{prompt}}\nEO_1d0e[LENGTH({{prompt}})]\n{{output}}\nEO_5b2f[LENGTH({{output}})]\n{{size}}\nEO_8c44[LENGTH({{size}})]\n{{steps}}\nEO_6e91[LENGTH({{steps}})]\n{{seed}}\nEO_a2d7[LENGTH({{seed}})]\nGENERATE_IMAGE_3a7c",
         properties  => {
             "prompt" => {type => "string", description => "What the image shows"},
-            "output" => {type => "string", description => "The PNG file to write in the workspace; empty for image_<seed>.png"},
+            "output" => {type => "string", description => "The PNG file to write in the workspace; empty for image_<seed>.png. A file of that name already there is kept: the picture goes to the first free name (name-2.png, ...), and the result names it"},
             "size"   => {type => "string", description => "WIDTHxHEIGHT, multiples of 16 from 64 to 1024; empty for 1024x1024"},
             "steps"  => {type => "string", description => "Sampler steps, 1 to 50; empty for 9"},
             "seed"   => {type => "string", description => "A whole number; empty for 42"},
@@ -4828,7 +4909,7 @@ EOb
         properties  => {
             "text"     => {type => "string", description => "What to say"},
             "voice"    => {type => "string", description => "The name of the voice (a voice directory of the server)"},
-            "output"   => {type => "string", description => "The WAV file to write in the workspace; empty for speech_<voice>.wav"},
+            "output"   => {type => "string", description => "The WAV file to write in the workspace; empty for speech_<voice>.wav. A file of that name already there is kept: the sound goes to the first free name (name-2.wav, ...), and the result names it"},
             "language" => {type => "string", description => "A language name such as english; empty for english"},
             "seed"     => {type => "string", description => "A whole number; empty for 0"},
         },
@@ -5161,24 +5242,43 @@ sub speech_output {
 # the tools that write a file as a whole, and the argument that names it
 our %WRITES = (write => 'path', convert => 'output', generate_image => 'output', speech => 'output');
 
-# The workspace file a call of these tools wrote, relative to the workspace $base, with the defaults
-# of the tool's arguments worked out. undef when the call names no file, or the file is not there
-# (outside the workspace, or gone). What the page offers for download (and shows, for a picture).
+# The workspace file a call of these tools wrote, relative to the workspace $base. undef when the call
+# names no file, or the file is not there (outside the workspace, or gone). What the page offers for
+# download (and shows, for a picture). A generated file's name is the one its result gives ("wrote
+# NAME: ..."), since a name already taken gets another (see free_name); the others are the arguments.
+our %NAMED_BY_RESULT = (generate_image => 1, speech => 1);
 sub offered_file {
-    my ($k, $args, $base) = @_;
+    my ($k, $args, $base, $result) = @_;
     return unless $WRITES{$k} and ref($args) eq 'ARRAY' and length($base // '');
     my $t = $TOOLS->{$k} or return;
-    my @names = arg_names($t);
-    my %v;
-    @v{@names} = map {utils::trim($_ // '')} @$args;
-    my $file = $k eq 'generate_image' ? image_output($v{output}, $v{seed})
-        : $k eq 'speech'              ? speech_output($v{output}, $v{voice})
-        :                               $v{$WRITES{$k}};
+    my $file;
+    if ($NAMED_BY_RESULT{$k}) {
+        ($file) = ($result // '') =~ m/\Awrote (.+?): /;
+    } else {
+        my @names = arg_names($t);
+        my %v;
+        @v{@names} = map {utils::trim($_ // '')} @$args;
+        $file = $v{$WRITES{$k}};
+    }
     return unless length($file // '');
     utils::load_cpan("File::Spec");
     my $rel = File::Spec->abs2rel(File::Spec->rel2abs($file, $base), $base);
     return if $rel =~ m{\A\.\.(?:/|\z)};
     return -f "$base/$rel" ? $rel : undef;
+}
+
+# The name a generated file is written under: the name asked for when no file of it is there, else the
+# first free one of name-2.png, name-3.png, ... A picture made before is never replaced by a new one
+# (the chat shows the earlier one, and it stays as it was).
+sub free_name {
+    my ($name) = @_;
+    return $name unless -e $name or -l $name;
+    my ($stem, $ext) = $name =~ m/\A(.*)(\.[^.\/]+)\z/s or return $name;
+    for my $n (2 .. 9999) {
+        my $try = "$stem-$n$ext";
+        return $try unless -e $try or -l $try;
+    }
+    die "no free name next to $name\n";
 }
 
 # A file a tool writes whole: the old content goes to the undo journal first (_changing), the new
@@ -5219,8 +5319,7 @@ sub generate_image_3a7c {
     $body{size} //= '1024x1024';
     my $name = image_output($out, $seed);
     die "the output must be a .png file\n" unless $name =~ m/\.png\z/i;
-    my $path = _path($name);
-    die "can not write $name: it is a link or a directory\n" if -l $path or -d $path;
+    _path($name); # refused here, before anything is asked, when it is outside the workspace
     my $data = JSON::XS->new->utf8->canonical->encode(\%body);
     my $proxy = $::ORIG_ENV{AI_IMAGE_PROXY} // '';   # the service is near: no proxy, unless AI_IMAGE_PROXY says so
     $proxy = '' if $proxy =~ m/^(?:none|off|direct|no)$/i;
@@ -5233,8 +5332,12 @@ sub generate_image_3a7c {
         die "the image service sent no image\n" unless length($b64 // '');
         my $png = MIME::Base64::decode_base64($b64);
         die "the image service sent no PNG\n" unless (_image_type($png) // '') eq 'image/png';
-        _write_whole($path, $png, 'generate_image', $name);
-        return ai::to_bytes("wrote $name: $body{size}, seed $body{seed}, ".length($png)." bytes\n");
+        # the name is taken now, as the picture is written: a picture of that name already there stays
+        my $to = free_name($name);
+        my $path = _path($to);
+        die "can not write $to: it is a link or a directory\n" if -l $path or -d $path;
+        _write_whole($path, $png, 'generate_image', $to);
+        return ai::to_bytes("wrote $to: $body{size}, seed $body{seed}, ".length($png)." bytes\n");
     }, url => "$base/v1/images/generations", method => 'post', data => $data, proxy => $proxy,
        timeout => $::ORIG_ENV{AI_IMAGE_TIMEOUT} // 3600, max_size => 64_000_000, follow => 0,
        headers => ["Content-Type: application/json", "Accept: application/json", "User-Agent: aicli"]);
@@ -5257,8 +5360,7 @@ sub speech_7e2b {
     my %body = (input => $text, voice => $voice, response_format => 'wav');
     $body{language} = $lang if length $lang;
     $body{seed} = $seed + 0 if length $seed;
-    my $path = _path($name);
-    die "can not write $name: it is a link or a directory\n" if -l $path or -d $path;
+    _path($name); # refused here, before anything is asked, when it is outside the workspace
     my $data = JSON::XS->new->utf8->canonical->encode(\%body);
     my $proxy = $::ORIG_ENV{AI_SPEECH_PROXY} // '';   # the service is near: no proxy, unless AI_SPEECH_PROXY says so
     $proxy = '' if $proxy =~ m/^(?:none|off|direct|no)$/i;
@@ -5267,8 +5369,11 @@ sub speech_7e2b {
         _http_check($r);
         my $wav = $r->{body} // '';
         die "the speech service sent no WAV\n" unless substr($wav, 0, 4) eq 'RIFF';
-        _write_whole($path, $wav, 'speech', $name);
-        return ai::to_bytes("wrote $name: ".length($wav)." bytes of WAV (voice $voice)\n");
+        my $to = free_name($name); # as for the picture: a file of that name already there stays
+        my $path = _path($to);
+        die "can not write $to: it is a link or a directory\n" if -l $path or -d $path;
+        _write_whole($path, $wav, 'speech', $to);
+        return ai::to_bytes("wrote $to: ".length($wav)." bytes of WAV (voice $voice)\n");
     }, url => "$base/v1/audio/speech", method => 'post', data => $data, proxy => $proxy,
        timeout => $::ORIG_ENV{AI_SPEECH_TIMEOUT} // 3600, max_size => 268_435_456, follow => 0,
        headers => ["Content-Type: application/json", "Accept: audio/wav", "User-Agent: aicli"]);

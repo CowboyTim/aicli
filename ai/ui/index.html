@@ -807,13 +807,25 @@
     model.value = current;
   }
 
+  // the header: the session, then the tool calls of the session and the time they took (from the state,
+  // and each stats event), then what the model asked for when it is done
+  var headerBase = "", toolStats = null;
+  function headerShow() {
+    var stats = "";
+    if (headerBase && toolStats && toolStats.tools) {
+      stats = " · " + toolStats.tools + (toolStats.tools === 1 ? " tool call" : " tool calls") + ", " + toolStats.seconds.toFixed(1) + " s";
+    }
+    status.textContent = headerBase + stats;
+  }
   function setState(s) {
     setCurrent(s.model);
+    toolStats = s.tools || null;
     // the session, with its project in front: account/project/session (the root has no account)
-    status.textContent = s.session ? "session " + (s.project ? s.project + "/" : "") + s.session : "";
+    headerBase = s.session ? "session " + (s.project ? s.project + "/" : "") + s.session : "";
     // a rename the model asked for, done when its answer is over (kept on a refresh too)
-    if (s.session && s.rename) { status.textContent += " (renamed to " + s.rename + " when this answer is over)"; }
-    if (s.session && s.switch) { status.textContent += " (switching to " + s.switch + " when this answer is over)"; }
+    if (s.session && s.rename) { headerBase += " (renamed to " + s.rename + " when this answer is over)"; }
+    if (s.session && s.switch) { headerBase += " (switching to " + s.switch + " when this answer is over)"; }
+    headerShow();
     setVoice(s.voice);
   }
 
@@ -821,6 +833,8 @@
   es.onopen = function () { status.textContent = "connected"; };
   es.onerror = function () { status.textContent = "disconnected, retrying…"; };
   es.addEventListener("state", function (e) { setState(JSON.parse(e.data)); });
+  // the session's tool calls and their time, after each call
+  es.addEventListener("stats", function (e) { toolStats = JSON.parse(e.data); headerShow(); });
   // the model changed the look: a name of the list, applied for this page only
   es.addEventListener("theme", function (e) { setTheme(JSON.parse(e.data).text, false); });
   // the model the chat uses now (a switch made in a turn takes effect at the next one)

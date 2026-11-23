@@ -3,7 +3,8 @@
 // services (see "Testing the page in a browser" in AGENTS.md):
 //   python3 tools/ui-check/fake-services.py 8780 8781 &
 //   AICLI_CHECK_LLM=http://127.0.0.1:8780/v1 AICLI_CHECK_IMAGE=http://127.0.0.1:8781/rocm sh tools/ui-check/start-server.sh
-// The model asks for generate_image("a cube", live.png) once; the picture is 256 x 256.
+// The model asks for generate_image("a cube", live.png) on the first message; the picture is 256 x 256. A
+// follow-up message asks again, and that picture goes to live-2.png (the first stays).
 const fs = require('fs');
 const { open, state, url } = require('./common');
 
@@ -69,6 +70,34 @@ const check = (ok, what) => { console.log((ok ? 'ok   ' : 'FAIL ') + what); if (
   await line().click();
   check(await p.locator('#log .tool-full').first().isVisible(), 'and the history\'s tool line opens too');
   await p.screenshot({ path: state + '/files.png' });
+
+  // a follow-up change: the new picture goes to a new name and is shown as the new one; the first
+  // stays as it was, live and after a reload (the pictures' own colour tells them apart)
+  const pictures = () => p.evaluate(() => Array.from(document.querySelectorAll('#log .msg.file img')).map(img => {
+    const c = document.createElement('canvas');
+    c.width = img.naturalWidth; c.height = img.naturalHeight;
+    const ctx = c.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+    return { src: img.getAttribute('src').replace(/^.*path=/, ''), blue: ctx.getImageData(0, 0, 1, 1).data[2] };
+  }));
+  const ready = n => p.waitForFunction(n => {
+    const imgs = Array.from(document.querySelectorAll('#log .msg.file img'));
+    return imgs.length >= n && imgs.every(i => i.complete && i.naturalWidth > 0);
+  }, n, { timeout: 30000 });
+  await p.fill('#text', 'make it blue');
+  await p.click('#send');
+  await ready(2);
+  let pics = await pictures();
+  check(pics.length === 2 && pics[0].src === 'live.png' && pics[1].src === 'live-2.png',
+    'a follow-up picture goes to live-2.png, the first stays live.png (' + JSON.stringify(pics.map(x => x.src)) + ')');
+  check(pics.length === 2 && pics[0].blue !== pics[1].blue,
+    'and the page shows the new picture, not the first one again (blue ' + JSON.stringify(pics.map(x => x.blue)) + ')');
+  check(fs.existsSync(state + '/root/live-2.png'), 'the new file is in the project');
+  await p.reload();
+  await p.waitForFunction(() => document.getElementById('status').textContent.startsWith('session'), null, { timeout: 15000 });
+  await ready(2);
+  const again = await pictures();
+  check(JSON.stringify(again) === JSON.stringify(pics), 'after a reload each entry shows its own picture again');
 
   check(errors.length === 0, 'no page errors: ' + JSON.stringify(errors));
   console.log('screenshot: ' + state + '/files.png');

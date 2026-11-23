@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # Fake services for the browser checks (no model, no GPU): an OpenAI compatible chat that asks for
-# the generate_image tool once, and then answers in text, and an image service (AI_IMAGE_URL) that
+# the generate_image tool for each new message of the user, and answers in text after a tool result, and an
+# image service (AI_IMAGE_URL) that
 # answers with a 256 x 256 picture, a gradient, as PNG. Both are for the files check (files.js).
 #   python3 tools/ui-check/fake-services.py LLM_PORT IMAGE_PORT
 # Point the server at them with start-server.sh (AICLI_CHECK_LLM, AICLI_CHECK_IMAGE).
@@ -8,12 +9,12 @@ import base64, json, struct, sys, threading, zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-def png(w, h):
+def png(w, h, blue=160):
     rows = []
     for y in range(h):
         row = bytearray([0])  # the filter byte of the row
         for x in range(w):
-            row += bytes((x * 255 // (w - 1), y * 255 // (h - 1), 160))
+            row += bytes((x * 255 // (w - 1), y * 255 // (h - 1), blue))
         rows.append(bytes(row))
 
     def chunk(kind, data):
@@ -39,10 +40,23 @@ class Llm(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))) or b'{}')
         messages = body.get('messages', [])
         events = []
-        if body.get('tools') and not any(m.get('role') == 'tool' for m in messages):
-            args = {'prompt': 'a cube', 'output': 'live.png', 'size': '256x256', 'steps': '2'}
-            events.append({'choices': [{'delta': {'tool_calls': [{'index': 0, 'id': 'call_live', 'type': 'function',
-                'function': {'name': 'generate_image', 'arguments': json.dumps(args)}}]}}]})
+        # a tool call for each new message of the user (a message after a tool result is answered in text)
+        if body.get('tools') and messages and messages[-1].get('role') != 'tool':
+            # "two" in the message asks for two pictures in one answer: both calls at index 0, as some
+            # servers send them, with an id each
+            last = next((m.get('content') or '' for m in reversed(messages) if m.get('role') == 'user'), '')
+            n = 1 + sum(1 for m in messages if m.get('role') == 'tool')
+            if 'two' in last:
+                outputs = ['pair-1.png', 'pair-2.png']
+            else:
+                outputs = ['live.png']
+            calls = []
+            for k, output in enumerate(outputs):
+                args = {'prompt': 'a cube', 'output': output, 'size': '256x256', 'steps': '2'}
+                calls.append({'index': 0, 'id': 'call_%d_%d' % (n, k), 'type': 'function',
+                              'function': {'name': 'generate_image', 'arguments': json.dumps(args)}})
+            for c in calls:
+                events.append({'choices': [{'delta': {'tool_calls': [c]}}]})
             events.append({'choices': [{'delta': {}, 'finish_reason': 'tool_calls'}]})
         else:
             events.append({'choices': [{'delta': {'content': 'Here is the picture.'}}]})
@@ -55,9 +69,12 @@ class Llm(BaseHTTPRequestHandler):
 
 
 class Image(BaseHTTPRequestHandler):
+    count = 0  # each picture has its own blue, so two pictures can be told apart
+
     def do_POST(self):
         self.rfile.read(int(self.headers.get('Content-Length', 0)))
-        reply = {'data': [{'b64_json': base64.b64encode(png(256, 256)).decode()}]}
+        Image.count += 1
+        reply = {'data': [{'b64_json': base64.b64encode(png(256, 256, 40 + (Image.count * 50) % 200)).decode()}]}
         send(self, 200, 'application/json', json.dumps(reply).encode())
 
     def log_message(self, *a):

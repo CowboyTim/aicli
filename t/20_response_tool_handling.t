@@ -196,7 +196,7 @@ EOp
 RESULT_d170]',
         'role' => 'user'
     }], 'r: 0') or print Dumper($r);
-    is_deeply(\@oklist, [
+    is_deeply([grep {!/took \d/} @oklist], [
         "${colors::yellow_color1}\[TOOL WRITE_edf5(...))]${colors::reset_color}\n",
         "${colors::green_color}\[WRITE_edf5 RESULT_d170
 [OK] written to README.md
@@ -357,7 +357,7 @@ total 0
 RESULT_d170]',
         'role' => 'user'
     }], 'r: 0') or print Dumper($r);
-    is_deeply(\@oklist, [
+    is_deeply([grep {!/took \d/} @oklist], [
         "${colors::yellow_color1}\[TOOL PERL_d8d2(...))]${colors::reset_color}\n",
         "${colors::green_color}\[PERL_d8d2 RESULT_d170
 total 0
@@ -414,7 +414,7 @@ PERL_d8d2
 RESULT_d170]',
         'role' => 'user'
     }], 'r: 0') or print Dumper($r);
-    is_deeply(\@oklist, [
+    is_deeply([grep {!/took \d/} @oklist], [
         "${colors::yellow_color1}\[TOOL PERL_d8d2(...))]${colors::reset_color}\n",
         "${colors::green_color}\[PERL_d8d2 RESULT_d170
 
@@ -454,7 +454,7 @@ stubbed
 RESULT_d170]',
         'role' => 'user',
     }], 'r: write + bash') or print Dumper($r);
-    is(scalar(@oklist), 4, "2 tools announced and answered");
+    is(scalar(grep {!/took \d/} @oklist), 4, "2 tools announced and answered (not counting the times)");
     is_deeply(\@bash_args, ["perl find_biggest_with_mount.pl 20"], "bash got the script");
     my $written = do {open(my $wfh, '<', "find_biggest_with_mount.pl") or die $!; local $/; <$wfh>};
     like($written, qr{\A#!/usr/bin/env perl\n}, "written file starts as sent");

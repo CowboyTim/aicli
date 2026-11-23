@@ -49,7 +49,8 @@ sub run_calls {
     unlike($m->[2]{content}, qr/think/, "one: thinking is not kept");
     like($m->[4]{content}, qr/\A\[BASH_7c48 RESULT_d170\nbash:from the agent/, "one: forked tool result");
     is($printed->[0], "${colors::yellow_color1}[TOOL AGENT_f2a8(...))]${colors::reset_color}\n", "one: announced like a tool");
-    is(scalar(@$printed), 2, "one: nothing of the agent itself is printed");
+    is(scalar(@$printed), 3, "one: nothing of the agent itself is printed (its call's time is, after its answer)");
+    like($printed->[2], qr/took \d/, "one: the agent call's time");
     is(TestAI::roles(ai::load_messages()), "system", "one: its conversation is not in the chat of the session");
     my ($t) = glob("$tmp/aicli/sessions/test/agents/*.chat");
     ok($t, "one: transcript saved");

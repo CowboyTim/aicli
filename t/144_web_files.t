@@ -218,4 +218,20 @@ my %theirs = ('x-aicli-gate' => 'gate-files', 'x-aicli-account' => $B);
     is(scalar(@pub), 0, "an empty path sends nothing");
 }
 
+# the session's tool calls and their time: in the state (the page's header, on a refresh too), and the
+# stats of each call go to the page while the session is the active one
+{
+    my $usage = {tools => {bash => {calls => 2, errors => 0, seconds => 0.5}, write => {calls => 1, errors => 1, seconds => 1.25}}};
+    put("$ai::SESSIONS_DIR/mine/usage", JSON::XS->new->canonical(1)->encode($usage));
+    local $ui::active = 'mine';
+    local %ui::worker = (mine => {busy => 0, pending => 0});
+    my $st = ui::_master_state(undef);
+    is_deeply($st->{tools}, {tools => 3, seconds => 1.75}, "the state has the session's tool calls and their time");
+    my @pub;
+    no warnings 'redefine';
+    local *ui::publish = sub { push @pub, [@_] };
+    ui::_worker_event('mine', {event => 'stats', data => {tools => 4, seconds => 2.0}});
+    is_deeply(\@pub, [['stats', {tools => 4, seconds => 2.0}]], "a stats event goes to the page of the active session");
+}
+
 done_testing();

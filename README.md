@@ -183,7 +183,7 @@ the model:
 | `/model [provider/id]` | list the models of every provider of this chat as `provider/id`, or switch the session to one (a bare id works when only one provider has it) |
 | `/prompt [name]` | list the prompt templates, or switch the system prompt |
 | `/undo [list]` | take back the last file change a tool made, `list` shows them |
-| `/usage [reset]` | token usage and context size of this session |
+| `/usage [reset]` | token usage and context size of this session, and its tool calls with the time they took |
 | `/retry` | ask the last request again, its answer and tool runs are dropped |
 | `/rewind [n]` | take the last exchange (or n) out of the conversation |
 | `/compact` | summarize the older messages now, to free context |
@@ -314,8 +314,8 @@ or `[WRITE_edf5 ERROR_9a78 ... ERROR_9a78]`. In native mode it is a tool message
 | `devel` | what a language has installed, with versions: `perl` (modules under @INC), `python` (packages), `lua` (rocks), `c` (pkg-config), `bash` (tools on the PATH); an optional name filter | reads only, in a forked child |
 | `image` | a picture (PNG, JPEG, GIF or WebP) in the workspace, sent with the next message; a bigger one is made smaller with ImageMagick; only offered with `AI_VISION=1` | Perl, and ImageMagick in a forked child |
 | `convert` | a picture converted with ImageMagick: a smaller size, a crop, a turn, another format by the output name (png, jpg, gif, webp, bmp, tif), the quality. Metadata is removed. Only offered where ImageMagick is installed | ImageMagick in a forked child, no shell, with `ai/imagemagick/policy.xml` |
-| `generate_image` | a picture from a text prompt with the image service (`AI_IMAGE_URL`): the PNG is written to the output name in the workspace (default `image_<seed>.png`); the size, the steps (1 to 50) and the seed. The same prompt, size, steps and seed give the same picture. Only offered where `AI_IMAGE_URL` is set | the image service over HTTP, no process |
-| `speech` | speech from a text with the speech service (`AI_SPEECH_URL`) in a voice the server has: the WAV is written to the output name (default `speech_<voice>.wav`), with the language and the seed. Only offered where `AI_SPEECH_URL` is set | the speech service over HTTP, no process |
+| `generate_image` | a picture from a text prompt with the image service (`AI_IMAGE_URL`): the PNG is written to the output name in the workspace (default `image_<seed>.png`; a file of that name already there is kept, and the picture goes to the first free name, `name-2.png`, ...); the size, the steps (1 to 50) and the seed. The same prompt, size, steps and seed give the same picture. Only offered where `AI_IMAGE_URL` is set | the image service over HTTP, no process |
+| `speech` | speech from a text with the speech service (`AI_SPEECH_URL`) in a voice the server has: the WAV is written to the output name (default `speech_<voice>.wav`; a file of that name already there is kept, and the sound goes to the first free name, `name-2.wav`, ...), with the language and the seed. Only offered where `AI_SPEECH_URL` is set | the speech service over HTTP, no process |
 | `agent` | give a task to a sub-agent | a second conversation in the event loop |
 
 File tools never start a process. `replace` and `edit` write through a temp

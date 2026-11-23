@@ -303,6 +303,22 @@ sub _frame {
 }
 
 # the state of the page: the active session, and what its worker says
+# the tool calls of a session and the seconds they took, from its usage file (see ai::tool_stat)
+sub _tool_totals {
+    my ($name) = @_;
+    my ($calls, $secs) = (0, 0);
+    if (length($name // '') and open(my $fh, '<:raw', "$ai::SESSIONS_DIR/$name/usage")) {
+        local $/;
+        my $u = eval {JSON::XS::decode_json(scalar <$fh>)};
+        close($fh);
+        for my $t (ref($u) eq 'HASH' && ref($u->{tools}) eq 'HASH' ? values %{$u->{tools}} : ()) {
+            $calls += $t->{calls} // 0;
+            $secs  += $t->{seconds} // 0;
+        }
+    }
+    return {tools => $calls, seconds => $secs + 0};
+}
+
 sub _master_state {
     my ($acct) = @_;
     # another account's session is not named to this one
@@ -315,6 +331,7 @@ sub _master_state {
         session => $name,
         project => (length($name) ? (ai::session_project($name) // '') : ''), # account/project, for the page's line
         model   => $model_of{$name} // '',
+        tools   => _tool_totals($name), # the session's tool calls and their time (the page's header)
         busy    => ($w && $w->{busy}) ? \1 : \0,
         queued  => $w ? $w->{pending} : 0,
         voice   => $voice // 'unknown',
@@ -357,12 +374,16 @@ sub _history_data {
     my $file = "$dir/chat";
     my @all = (defined $name and -f $file) ? eval {ai::load_messages($file)} : ();
     my %meta = (defined $name and @all) ? ai::meta_of($dir, \@all) : ();
-    # the results of the server's tool calls, by the call's id (their messages come after the call)
     my $root = defined $name ? _project_dir($name) : undef; # the workspace of the session: its files
-    my %result_of;
-    for my $m (@all) {
-        next unless ($m->{role} // '') eq 'tool' and defined $m->{tool_call_id};
-        $result_of{$m->{tool_call_id}} = $m->{content} // '';
+    # the results of the server's tool calls, by the call's id: the tool messages that follow the answer
+    # that made the calls. An id may come again in a later answer, so the results are kept per answer.
+    my %result_of;   # the index of an answer => {id => content}
+    my $scope;
+    for my $i (0 .. $#all) {
+        my $m = $all[$i];
+        if (($m->{role} // '') eq 'assistant') { $scope = $result_of{$i} = {}; next }
+        next unless ($m->{role} // '') eq 'tool' and defined $m->{tool_call_id} and $scope;
+        $scope->{$m->{tool_call_id}} = $m->{content} // '';
     }
     # what the page shows, in order: what the user said, the answers, and the tool calls with
     # their results (drawn as the live page draws them: a tool line, then its result)
@@ -383,7 +404,7 @@ sub _history_data {
             push @items, $out;
         }
         for my $tc (@{$m->{tool_calls} // []}) {
-            push @items, _tool_item($tc, $result_of{$tc->{id} // ''}, $root);
+            push @items, _tool_item($tc, ($result_of{$i} // {})->{$tc->{id} // ''}, $root);
         }
     }
     my $more = @items > $HISTORY_MAX ? 1 : 0;
@@ -410,7 +431,7 @@ sub _tool_item {
         my $max = $::ORIG_ENV{AI_TOOL_LINES} // 8;
         $item->{result} = ai::web_text(ai::clip_lines(ai::to_bytes($result), $max, "  "));
         if (defined $root and $result !~ m/\A\[ERROR\]/) {
-            my $file = eval { tools::offered_file($c->{k} // '', $c->{args}, $root) };
+            my $file = eval { tools::offered_file($c->{k} // '', $c->{args}, $root, $result) };
             $item->{files} = [$file] if defined $file;
         }
     }
