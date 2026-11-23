@@ -90,6 +90,8 @@ services:
       AI_IMAGE_URL: ${AI_IMAGE_URL:-}
       # the speech service of the speech tool (its base address; empty: no tool). As AI_IMAGE_URL
       AI_SPEECH_URL: ${AI_SPEECH_URL:-}
+      # the audio service of the generate_audio tool (its base address; empty: no tool). As AI_IMAGE_URL
+      AI_AUDIO_URL: ${AI_AUDIO_URL:-}
       UID: ${BROKER_UID:-1000}
       GID: ${BROKER_GID:-1000}
       HOME: /workspace

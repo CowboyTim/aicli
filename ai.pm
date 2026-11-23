@@ -4917,6 +4917,20 @@ EOb
         # only with the speech service to ask (AI_SPEECH_URL: its base address)
         available => sub {length($::ORIG_ENV{AI_SPEECH_URL} // '') ? 1 : 0},
     },
+    generate_audio => {
+        description => "generate a sound from a text prompt with the local audio model (AudioLDM 2): the WAV file is written to the output name in the workspace, a 16 kHz mono clip of the length asked (1 to 10 seconds; about 50 seconds for a 5 second clip). The same prompt, length, steps and seed give the same sound",
+        syntax => "///GENERATE_AUDIO_5e1c+EO_7d3a+EO_e52c+EO_91b8+EO_c04f+EO_2f6e\n{{prompt}}\nEO_7d3a[LENGTH({{prompt}})]\n{{output}}\nEO_e52c[LENGTH({{output}})]\n{{seconds}}\nEO_91b8[LENGTH({{seconds}})]\n{{steps}}\nEO_c04f[LENGTH({{steps}})]\n{{seed}}\nEO_2f6e[LENGTH({{seed}})]\nGENERATE_AUDIO_5e1c",
+        properties  => {
+            "prompt"  => {type => "string", description => "What the sound is, for example: ocean waves crashing on a beach"},
+            "output"  => {type => "string", description => "The WAV file to write in the workspace; empty for audio_<seed>.wav. A file of that name already there is kept: the sound goes to the first free name (name-2.wav, ...), and the result names it"},
+            "seconds" => {type => "string", description => "The length of the clip, 1 to 10 seconds; empty for 5"},
+            "steps"   => {type => "string", description => "Sampler steps, 1 to 200; empty for 100"},
+            "seed"    => {type => "string", description => "A whole number; empty for 0"},
+        },
+        required => ["prompt"],
+        # only with the audio service to ask (AI_AUDIO_URL: its base address)
+        available => sub {length($::ORIG_ENV{AI_AUDIO_URL} // '') ? 1 : 0},
+    },
     list => {
         description => "list a directory: type (d, f, l), size and name of every entry",
         syntax => "///LIST_a41d+EO_6c08\n{{path}}\nEO_6c08[LENGTH({{path}})]\nLIST_a41d",
@@ -5239,14 +5253,20 @@ sub speech_output {
     return length($out // '') ? $out : 'speech_'.($voice // '').'.wav';
 }
 
+# the name of the WAV generate_audio writes: the output, or audio_<seed>.wav (the seed's default is 0)
+sub audio_output {
+    my ($out, $seed) = @_;
+    return length($out // '') ? $out : 'audio_'.(length($seed // '') ? $seed + 0 : 0).'.wav';
+}
+
 # the tools that write a file as a whole, and the argument that names it
-our %WRITES = (write => 'path', convert => 'output', generate_image => 'output', speech => 'output');
+our %WRITES = (write => 'path', convert => 'output', generate_image => 'output', speech => 'output', generate_audio => 'output');
 
 # The workspace file a call of these tools wrote, relative to the workspace $base. undef when the call
 # names no file, or the file is not there (outside the workspace, or gone). What the page offers for
 # download (and shows, for a picture). A generated file's name is the one its result gives ("wrote
 # NAME: ..."), since a name already taken gets another (see free_name); the others are the arguments.
-our %NAMED_BY_RESULT = (generate_image => 1, speech => 1);
+our %NAMED_BY_RESULT = (generate_image => 1, speech => 1, generate_audio => 1);
 sub offered_file {
     my ($k, $args, $base, $result) = @_;
     return unless $WRITES{$k} and ref($args) eq 'ARRAY' and length($base // '');
@@ -5376,6 +5396,45 @@ sub speech_7e2b {
         return ai::to_bytes("wrote $to: ".length($wav)." bytes of WAV (voice $voice)\n");
     }, url => "$base/v1/audio/speech", method => 'post', data => $data, proxy => $proxy,
        timeout => $::ORIG_ENV{AI_SPEECH_TIMEOUT} // 3600, max_size => 268_435_456, follow => 0,
+       headers => ["Content-Type: application/json", "Accept: audio/wav", "User-Agent: aicli"]);
+}
+
+# generate_audio: text to audio through the audio service (AI_AUDIO_URL): POST /v1/audio/generations (AudioLDM 2), the
+# WAV written to the workspace. The server makes one clip at a time; a 5 second clip takes about 50 seconds.
+sub generate_audio_5e1c {
+    my ($t_args) = @_;
+    my ($prompt, $out, $seconds, $steps, $seed) = map {utils::trim($t_args->[$_] // '')} 0 .. 4;
+    die "no prompt\n" unless length $prompt;
+    my $base = $::ORIG_ENV{AI_AUDIO_URL} // '';
+    die "no audio service is set up (AI_AUDIO_URL)\n" unless length $base;
+    $base =~ s{/+\z}{};
+    die "seconds: a number from 1 to 10\n"
+        if length $seconds and ($seconds !~ m/\A\d+(?:\.\d+)?\z/ or $seconds < 1 or $seconds > 10);
+    die "steps: a whole number from 1 to 200\n"
+        if length $steps and ($steps !~ m/\A\d+\z/ or $steps < 1 or $steps > 200);
+    die "seed: a whole number\n" if length $seed and $seed !~ m/\A\d+\z/;
+    my %body = (model => 'audioldm2', prompt => $prompt);
+    $body{seconds} = $seconds + 0 if length $seconds;   # the server's defaults: 5 seconds, 100 steps, seed 0
+    $body{steps}   = $steps + 0 if length $steps;
+    $body{seed}    = length $seed ? $seed + 0 : 0;
+    my $name = audio_output($out, $seed);
+    die "the output must be a .wav file\n" unless $name =~ m/\.wav\z/i;
+    _path($name); # refused here, before anything is asked, when it is outside the workspace
+    my $data = JSON::XS->new->utf8->canonical->encode(\%body);
+    my $proxy = $::ORIG_ENV{AI_AUDIO_PROXY} // '';   # the service is near: no proxy, unless AI_AUDIO_PROXY says so
+    $proxy = '' if $proxy =~ m/^(?:none|off|direct|no)$/i;
+    return _http(sub {
+        my ($r) = @_;
+        _http_check($r);
+        my $wav = $r->{body} // '';
+        die "the audio service sent no WAV\n" unless substr($wav, 0, 4) eq 'RIFF';
+        my $to = free_name($name); # as for the picture and the speech: a file of that name already there stays
+        my $path = _path($to);
+        die "can not write $to: it is a link or a directory\n" if -l $path or -d $path;
+        _write_whole($path, $wav, 'generate_audio', $to);
+        return ai::to_bytes("wrote $to: ".length($wav)." bytes of WAV (seconds ".($body{seconds} // 5).", seed $body{seed})\n");
+    }, url => "$base/v1/audio/generations", method => 'post', data => $data, proxy => $proxy,
+       timeout => $::ORIG_ENV{AI_AUDIO_TIMEOUT} // 3600, max_size => 268_435_456, follow => 0,
        headers => ["Content-Type: application/json", "Accept: audio/wav", "User-Agent: aicli"]);
 }
 

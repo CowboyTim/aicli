@@ -334,7 +334,7 @@ The session last used in this directory is continued, as with C<-c>, unless
 C<--new> or C<AI_SESSION> says otherwise. The page shows the conversation of
 the session when it connects and after a switch: what was said, the answers, and
 the tool calls with their results. A file a tool wrote (C<write>, C<convert>,
-C<generate_image>, C<speech>) is listed under its call: a picture is shown inline,
+C<generate_image>, C<speech>, C<generate_audio>) is listed under its call: a picture is shown inline,
 a sound plays, and each has a download.
 
 Each session has a worker process of its own (the same chat, forked by this
@@ -984,6 +984,28 @@ Seconds to wait for speech (default 3600).
 =item B<AI_SPEECH_PROXY>
 
 A proxy for the speech service, as B<AI_IMAGE_PROXY>.
+
+=item B<generate_audio>
+
+Generate a sound from a text prompt with the local audio service (B<AI_AUDIO_URL>,
+AudioLDM 2): the WAV file is written to the output name in the workspace; a file of that name
+already there is kept, and the sound goes to the first free name (C<name-2.wav>, ...). Arguments:
+the prompt, the output (default C<audio_<seed>.wav>), the length in seconds (1 to 10, default 5),
+the steps (1 to 200, default 100) and the seed (default 0). The same prompt, length, steps and seed
+give the same sound. Only with B<AI_AUDIO_URL> set.
+
+=item B<AI_AUDIO_URL>
+
+The base address of the audio service for the B<generate_audio> tool, as the agent reaches it (for
+example C<http://host:8000>, the same host as B<AI_SPEECH_URL>). The tool is only offered when it is set.
+
+=item B<AI_AUDIO_TIMEOUT>
+
+Seconds to wait for a sound (default 3600: the service makes one clip at a time).
+
+=item B<AI_AUDIO_PROXY>
+
+A proxy for the audio service, as B<AI_IMAGE_PROXY>.
 
 =item B<AI_IMAGE_MAX>
 

@@ -132,6 +132,16 @@ else
     v=$(pick "$agent_f" AI_SPEECH_URL)
     [ -n "$v" ] && set_key "$env_f" AI_SPEECH_URL "$v"
 fi
+# the audio service of the generate_audio tool (AI_AUDIO_URL, its base address). As the speech service above: compose
+# reads it from the shell or .env, so a URL that .agent.env has moves to .env. AI_AUDIO_URL= (set and empty) clears it:
+# no generate_audio tool.
+if [ "${AI_AUDIO_URL+x}" = x ] && [ -z "$AI_AUDIO_URL" ]; then
+    del_key "$env_f" AI_AUDIO_URL
+    del_key "$agent_f" AI_AUDIO_URL
+else
+    v=$(pick "$agent_f" AI_AUDIO_URL)
+    [ -n "$v" ] && set_key "$env_f" AI_AUDIO_URL "$v"
+fi
 set_key "$agent_f" AI_MODEL "$(pick "$agent_f" AI_MODEL "Qwen3.5-4B-ROCMFP4")"
 
 if [ "${AICLI_ENV_ONLY:-0}" = 1 ]; then
