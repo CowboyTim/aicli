@@ -249,7 +249,7 @@ reachable, the mic is off and the page says why. The model, the look and the the
 dropdown with the models of every provider (`provider/id`). Ctrl-C on the terminal ends
 the chat as it does without the interface.
 
-A file a tool writes (`write`, `convert`, `generate_image`, `speech`) is listed under its call in the chat: a picture (PNG, JPEG, GIF, WebP) is shown inline, a sound (WAV, MP3, OGG) plays, and each has a download. Only files of the session's project are sent (`GET /file`); a link or `..` out of the project is refused. A tool line can be opened (a click) to show the whole call, its arguments in full.
+A file a tool writes (`write`, `convert`, `generate_image`, `speech`, `generate_audio`) is listed under its call in the chat: a picture (PNG, JPEG, GIF, WebP) is shown inline, a sound (WAV, MP3, OGG) plays, and each has a download. Only files of the session's project are sent (`GET /file`); a link or `..` out of the project is refused. A tool line can be opened (a click) to show the whole call, its arguments in full.
 
 Not yet: uploads, slash commands in the page.
 
@@ -315,6 +315,7 @@ or `[WRITE_edf5 ERROR_9a78 ... ERROR_9a78]`. In native mode it is a tool message
 | `image` | a picture (PNG, JPEG, GIF or WebP) in the workspace, sent with the next message; a bigger one is made smaller with ImageMagick; only offered with `AI_VISION=1` | Perl, and ImageMagick in a forked child |
 | `convert` | a picture converted with ImageMagick: a smaller size, a crop, a turn, another format by the output name (png, jpg, gif, webp, bmp, tif), the quality. Metadata is removed. Only offered where ImageMagick is installed | ImageMagick in a forked child, no shell, with `ai/imagemagick/policy.xml` |
 | `generate_image` | a picture from a text prompt with the image service (`AI_IMAGE_URL`): the PNG is written to the output name in the workspace (default `image_<seed>.png`; a file of that name already there is kept, and the picture goes to the first free name, `name-2.png`, ...); the size, the steps (1 to 50) and the seed. The same prompt, size, steps and seed give the same picture. Only offered where `AI_IMAGE_URL` is set | the image service over HTTP, no process |
+| `generate_audio` | a sound from a text prompt with the audio service (`AI_AUDIO_URL`, AudioLDM 2): the WAV is written to the output name (default `audio_<seed>.wav`; a file of that name already there is kept, and the sound goes to the first free name, `name-2.wav`, ...), a clip of 1 to 10 seconds, the steps (1 to 200) and the seed. Only offered where `AI_AUDIO_URL` is set | the audio service over HTTP, no process |
 | `speech` | speech from a text with the speech service (`AI_SPEECH_URL`) in a voice the server has: the WAV is written to the output name (default `speech_<voice>.wav`; a file of that name already there is kept, and the sound goes to the first free name, `name-2.wav`, ...), with the language and the seed. Only offered where `AI_SPEECH_URL` is set | the speech service over HTTP, no process |
 | `agent` | give a task to a sub-agent | a second conversation in the event loop |
 
@@ -725,6 +726,9 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 | `AI_SPEECH_URL` | base address of the speech service for `speech`, as the agent reaches it (e.g. `http://host:8000`); empty: no tool | none |
 | `AI_SPEECH_TIMEOUT` | seconds to wait for speech | 3600 |
 | `AI_SPEECH_PROXY` | proxy for the speech service; `none` or empty: none | none |
+| `AI_AUDIO_URL` | base address of the audio service for `generate_audio`, as the agent reaches it (e.g. `http://host:8000`); empty: no tool | none |
+| `AI_AUDIO_TIMEOUT` | seconds to wait for a clip (about 50 seconds for 5 seconds of sound) | 3600 |
+| `AI_AUDIO_PROXY` | proxy for the audio service; `none` or empty: none | none |
 | `AI_RAW` | use `/v1/completions` with a prompt built here (qwen only) | off |
 | `AI_DIR` | base directory | `~/.aicli` |
 | `AI_PS1`, `AI_PS2` | input prompts | |
