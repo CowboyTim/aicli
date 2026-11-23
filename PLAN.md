@@ -132,9 +132,15 @@ torch and the ROCm wheels). rtl-sdr and nrf are not images yet. Their run option
   the last one included; new session with a name; rename from the name box; delete with "sure?" and
   "cancel"; the menu's layout at 360 and 1000 px). Not yet: a real `aicli.sh --root` run with the
   image, and the login path (nginx, auth, the account of a request) in a browser.
-- **Not started:** file downloads and inline pictures for what the model
-  generates (`GET /files`, `tools::_path()`, `Content-Disposition: attachment`
-  for downloads, `file` events from `tools::_changing`).
+- **Files on the page, what is left:** `replace` and `edit` do not offer their
+  file (only `write`, `convert`, `generate_image` and `speech` do); a sub-agent's
+  files are not offered (its calls are not in the page's chat); the page shows a
+  file's link and picture, not a list of the session's files.
+- **The image and speech services in a real setup:** the repo has no route for
+  them (no nginx location, no compose service). `AI_IMAGE_URL` and `AI_SPEECH_URL`
+  are whatever address the agent can reach. The comments that said nginx serves a
+  `/rocm` prefix were wrong and are gone. Open: check a picture from the service
+  on the page in the real setup.
 - **Not started:** uploads into `./uploads/` (`POST /upload`, a multipart
   parser, `AI_UPLOAD_MAX`, names sanitized, pictures into the next message with
   `AI_VISION=1`).

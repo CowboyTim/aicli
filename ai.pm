@@ -711,9 +711,10 @@ sub handle_llm_response {
     # a tool line or a result: for the web page its own block (kind: tool or result),
     # and in the terminal the same text as always
     my $say_tool = sub {
-        my ($text, $kind) = @_;
+        my ($text, $kind, $full) = @_;
         return &{$say}($text) unless $EVENT_SINK;
-        emit($kind => {text => web_text($text)});
+        # the web page: the line, and for a tool line the whole call (opened by a click there)
+        emit($kind => {text => web_text($text), (length($full // '') ? (full => web_text($full)) : ())});
         print to_bytes(web_text($text))."\n";
         return;
     };
@@ -726,11 +727,16 @@ sub handle_llm_response {
         my ($c) = @_;
         return &{$printer_sub}("${colors::yellow_color1}\[TOOL $c->{tool}\(...))\]${colors::reset_color}\n")
             unless $brief;
-        $say_tool->("${colors::yellow_color1}\x{e2}\x{97}\x{8f} $c->{k}${colors::reset_color} ".tool_summary($c)."\n", 'tool');
+        $say_tool->("${colors::yellow_color1}\x{e2}\x{97}\x{8f} $c->{k}${colors::reset_color} ".tool_summary($c)."\n", 'tool', call_full($c));
     };
     my $answer = sub {
         my ($i, $c, $result, $had_error) = @_;
         $errs[$i] = (defined $had_error and length $had_error) ? $had_error : undef;
+        # a file the tool wrote is offered on the web page: a download, and a picture or a sound inline
+        if($EVENT_SINK and !$had_error){
+            my $file = eval {tools::offered_file($c->{k}, $c->{args}, $WORKSPACE)};
+            emit(file => {path => $file}) if defined $file;
+        }
         my $tool_response = tool_response($c->{tool}, $result, $had_error);
         # a call of the server is answered with a tool message, as its API wants
         $rt[$i] = $c->{id}
@@ -1248,6 +1254,24 @@ sub agent_view {
     return;
 }
 
+# the whole call, as the web page shows it when its tool line is opened: the tool's name, then each
+# argument in full (a value's further lines indented under it). Bytes, as the arguments are.
+sub call_full {
+    my ($c) = @_;
+    my $t = $tools::TOOLS->{$c->{k} // ''} or return '';
+    my $args = $c->{args};
+    my @lines = (($c->{tool} // uc($c->{k})).(ref($args) eq 'ARRAY' ? '' : ' (its arguments are not readable)'));
+    return join("\n", @lines) unless ref($args) eq 'ARRAY';
+    my @names = tools::arg_names($t);
+    for my $i (0 .. $#names) {
+        my $v = $args->[$i] // '';
+        $v = '(empty)' if $v eq '';
+        $v =~ s/\n/\n    /g;
+        push @lines, "  $names[$i]: $v";
+    }
+    return join("\n", @lines);
+}
+
 sub tool_summary {
     my ($c) = @_;
     my @lines = grep {m/\S/} split m/\n/, ($c->{args} // [])->[0] // '';
@@ -1347,8 +1371,8 @@ sub show_changes {
     return unless $printer and ($::ORIG_ENV{AI_SHOW_DIFF} // 1);
     foreach my $ch (@changes){
         if($ch->{binary}){
-            # a picture: there is no diff of its bytes
-            &{$printer}("  ${colors::cyan_color}$ch->{path}".(defined $ch->{old} ? "" : " (new)").": a picture${colors::reset_color}\n");
+            # a picture or a sound: there is no diff of its bytes
+            &{$printer}("  ${colors::cyan_color}$ch->{path}".(defined $ch->{old} ? "" : " (new)").": a binary file${colors::reset_color}\n");
             next;
         }
         my ($diff, $added, $removed) = format_diff($ch->{old}, $ch->{new}, max => $::ORIG_ENV{AI_DIFF_LINES} // 40);
@@ -4795,7 +4819,7 @@ EOb
             "seed"   => {type => "string", description => "A whole number; empty for 42"},
         },
         required => ["prompt"],
-        # only with the image service to ask (AI_IMAGE_URL: its address, with the /rocm prefix where nginx serves it)
+        # only with the image service to ask (AI_IMAGE_URL: its base address)
         available => sub {length($::ORIG_ENV{AI_IMAGE_URL} // '') ? 1 : 0},
     },
     speech => {
@@ -4809,7 +4833,7 @@ EOb
             "seed"     => {type => "string", description => "A whole number; empty for 0"},
         },
         required => ["text", "voice"],
-        # only with the speech service to ask (AI_SPEECH_URL: its address, with the /rocm prefix where nginx serves it)
+        # only with the speech service to ask (AI_SPEECH_URL: its base address)
         available => sub {length($::ORIG_ENV{AI_SPEECH_URL} // '') ? 1 : 0},
     },
     list => {
@@ -5122,7 +5146,61 @@ sub search_d4a7 {
        headers => ["Accept: application/json", "User-Agent: aicli"]);
 }
 
-# generate_image: text to image through the rocm-inference service (AI_IMAGE_URL): POST /v1/images/generations, the PNG
+# the name of the picture generate_image writes: the output, or image_<seed>.png (the seed's default is 42)
+sub image_output {
+    my ($out, $seed) = @_;
+    return length($out // '') ? $out : 'image_'.(length($seed // '') ? $seed + 0 : 42).'.png';
+}
+
+# the name of the WAV speech writes: the output, or speech_<voice>.wav
+sub speech_output {
+    my ($out, $voice) = @_;
+    return length($out // '') ? $out : 'speech_'.($voice // '').'.wav';
+}
+
+# the tools that write a file as a whole, and the argument that names it
+our %WRITES = (write => 'path', convert => 'output', generate_image => 'output', speech => 'output');
+
+# The workspace file a call of these tools wrote, relative to the workspace $base, with the defaults
+# of the tool's arguments worked out. undef when the call names no file, or the file is not there
+# (outside the workspace, or gone). What the page offers for download (and shows, for a picture).
+sub offered_file {
+    my ($k, $args, $base) = @_;
+    return unless $WRITES{$k} and ref($args) eq 'ARRAY' and length($base // '');
+    my $t = $TOOLS->{$k} or return;
+    my @names = arg_names($t);
+    my %v;
+    @v{@names} = map {utils::trim($_ // '')} @$args;
+    my $file = $k eq 'generate_image' ? image_output($v{output}, $v{seed})
+        : $k eq 'speech'              ? speech_output($v{output}, $v{voice})
+        :                               $v{$WRITES{$k}};
+    return unless length($file // '');
+    utils::load_cpan("File::Spec");
+    my $rel = File::Spec->abs2rel(File::Spec->rel2abs($file, $base), $base);
+    return if $rel =~ m{\A\.\.(?:/|\z)};
+    return -f "$base/$rel" ? $rel : undef;
+}
+
+# A file a tool writes whole: the old content goes to the undo journal first (_changing), the new
+# bytes go to a temp name next to it, and replace the file only when all of them were written.
+sub _write_whole {
+    my ($path, $bytes, $tool, $name) = @_;
+    (my $tmp = $path) =~ s{([^/]*)\z}{.aicli-$tool-$$-$1};
+    my $ok = eval {
+        open(my $fh, '>:raw', $tmp) or die "cannot write $name: $!\n";
+        print {$fh} $bytes or die "cannot write $name: $!\n";
+        close($fh) or die "cannot write $name: $!\n";
+        _changing($path, $tool, undef, binary => 1);
+        rename($tmp, $path) or die "cannot write $name: $!\n";
+        1;
+    };
+    my $err = $@;
+    unlink $tmp if -e $tmp;
+    die $err unless $ok;
+    return;
+}
+
+# generate_image: text to image through the image service (AI_IMAGE_URL): POST /v1/images/generations, the PNG
 # written to the workspace. The server makes one image at a time; a 1024 x 1024 image takes about 30 seconds.
 sub generate_image_3a7c {
     my ($t_args) = @_;
@@ -5131,14 +5209,18 @@ sub generate_image_3a7c {
     my $base = $::ORIG_ENV{AI_IMAGE_URL} // '';
     die "no image service is set up (AI_IMAGE_URL)\n" unless length $base;
     $base =~ s{/+\z}{};
+    die "steps: a whole number from 1 to 50\n"
+        if length $steps and ($steps !~ m/\A\d+\z/ or $steps < 1 or $steps > 50);
+    die "seed: a whole number\n" if length $seed and $seed !~ m/\A\d+\z/;
     my %body = (model => 'z-image-turbo', prompt => $prompt, response_format => 'b64_json');
     $body{size}  = $size if length $size;    # the server checks the size
     $body{steps} = $steps + 0 if length $steps;
     $body{seed}  = (length $seed ? $seed : 42) + 0;
     $body{size} //= '1024x1024';
-    $out = "image_$body{seed}.png" unless length $out;
-    die "the output must be a .png file\n" unless $out =~ m/\.png\z/i;
-    my $path = _path($out);
+    my $name = image_output($out, $seed);
+    die "the output must be a .png file\n" unless $name =~ m/\.png\z/i;
+    my $path = _path($name);
+    die "can not write $name: it is a link or a directory\n" if -l $path or -d $path;
     my $data = JSON::XS->new->utf8->canonical->encode(\%body);
     my $proxy = $::ORIG_ENV{AI_IMAGE_PROXY} // '';   # the service is near: no proxy, unless AI_IMAGE_PROXY says so
     $proxy = '' if $proxy =~ m/^(?:none|off|direct|no)$/i;
@@ -5150,10 +5232,9 @@ sub generate_image_3a7c {
             ? $reply->{data}[0]{b64_json} : undef;
         die "the image service sent no image\n" unless length($b64 // '');
         my $png = MIME::Base64::decode_base64($b64);
-        open my $fh, '>:raw', $path or die "cannot write $out: $!\n";
-        print {$fh} $png or die "cannot write $out: $!\n";
-        close $fh or die "cannot write $out: $!\n";
-        return ai::to_bytes("wrote $out: $body{size}, seed $body{seed}, ".length($png)." bytes\n");
+        die "the image service sent no PNG\n" unless (_image_type($png) // '') eq 'image/png';
+        _write_whole($path, $png, 'generate_image', $name);
+        return ai::to_bytes("wrote $name: $body{size}, seed $body{seed}, ".length($png)." bytes\n");
     }, url => "$base/v1/images/generations", method => 'post', data => $data, proxy => $proxy,
        timeout => $::ORIG_ENV{AI_IMAGE_TIMEOUT} // 3600, max_size => 64_000_000, follow => 0,
        headers => ["Content-Type: application/json", "Accept: application/json", "User-Agent: aicli"]);
@@ -5170,13 +5251,14 @@ sub speech_7e2b {
     my $base = $::ORIG_ENV{AI_SPEECH_URL} // '';
     die "no speech service is set up (AI_SPEECH_URL)\n" unless length $base;
     $base =~ s{/+\z}{};
-    $out = "speech_$voice.wav" unless length $out;
-    die "the output must be a .wav file\n" unless $out =~ m/\.wav\z/i;
+    my $name = speech_output($out, $voice);
+    die "the output must be a .wav file\n" unless $name =~ m/\.wav\z/i;
     die "seed: a whole number\n" if length $seed and $seed !~ m/\A\d+\z/;
     my %body = (input => $text, voice => $voice, response_format => 'wav');
     $body{language} = $lang if length $lang;
     $body{seed} = $seed + 0 if length $seed;
-    my $path = _path($out);
+    my $path = _path($name);
+    die "can not write $name: it is a link or a directory\n" if -l $path or -d $path;
     my $data = JSON::XS->new->utf8->canonical->encode(\%body);
     my $proxy = $::ORIG_ENV{AI_SPEECH_PROXY} // '';   # the service is near: no proxy, unless AI_SPEECH_PROXY says so
     $proxy = '' if $proxy =~ m/^(?:none|off|direct|no)$/i;
@@ -5184,11 +5266,9 @@ sub speech_7e2b {
         my ($r) = @_;
         _http_check($r);
         my $wav = $r->{body} // '';
-        die "the speech service sent no audio\n" unless length $wav;
-        open my $fh, '>:raw', $path or die "cannot write $out: $!\n";
-        print {$fh} $wav or die "cannot write $out: $!\n";
-        close $fh or die "cannot write $out: $!\n";
-        return ai::to_bytes("wrote $out: ".length($wav)." bytes of WAV (voice $voice)\n");
+        die "the speech service sent no WAV\n" unless substr($wav, 0, 4) eq 'RIFF';
+        _write_whole($path, $wav, 'speech', $name);
+        return ai::to_bytes("wrote $name: ".length($wav)." bytes of WAV (voice $voice)\n");
     }, url => "$base/v1/audio/speech", method => 'post', data => $data, proxy => $proxy,
        timeout => $::ORIG_ENV{AI_SPEECH_TIMEOUT} // 3600, max_size => 268_435_456, follow => 0,
        headers => ["Content-Type: application/json", "Accept: audio/wav", "User-Agent: aicli"]);

@@ -325,13 +325,17 @@ page is at C<http://127.0.0.1:8080/?token=...>; the address with the token is
 printed on stderr when it starts. Every request needs the token (a cookie set by
 that address, or an C<Authorization: Bearer> header). C<AI_UI_TOKEN> in the
 environment sets the token. Routes: C</events> (the stream), C<POST /message>,
-C<POST /abort>, C</state>, C<POST /voice> (a WAV recording, recognized
+C<POST /abort>, C</state>, C<GET /file> (a file of the session's project: a
+picture or a sound inline, anything else a download), C<POST /voice> (a WAV
+recording, recognized
 by C<AI_ASR_URL> and sent to the chat as soon as it is ready), C<POST /session>
 (switch to another session by its name, or C<{"new": true}> for a new one).
 The session last used in this directory is continued, as with C<-c>, unless
 C<--new> or C<AI_SESSION> says otherwise. The page shows the conversation of
-the session when it connects and after a switch: what was said, not the tool
-calls.
+the session when it connects and after a switch: what was said, the answers, and
+the tool calls with their results. A file a tool wrote (C<write>, C<convert>,
+C<generate_image>, C<speech>) is listed under its call: a picture is shown inline,
+a sound plays, and each has a download.
 
 Each session has a worker process of its own (the same chat, forked by this
 one): sessions run their turns at the same time, and the page can switch away
@@ -342,7 +346,7 @@ turn. The directory the interface starts in is the root: the directories
 of the accounts under it hold the projects (C<root/account/project>). A session is made in a project, its worker
 may only write there (and in the temp directory and its own session), and the
 prompt of a new session carries the project's C<AGENTS.md>. Slash commands and
-files come later.
+uploads come later.
 
 =item B<--new>
 
@@ -530,7 +534,9 @@ Generate an image from a text prompt with the local image service (B<AI_IMAGE_UR
 Z-Image-Turbo): the PNG is written to the output name in the workspace. Arguments:
 the prompt, the output (default C<image_<seed>.png>), the size (WIDTHxHEIGHT,
 default 1024x1024), the steps (default 9) and the seed (default 42). The same
-prompt, size, steps and seed give the same image. Only with B<AI_IMAGE_URL> set.
+prompt, size, steps and seed give the same image. The picture is written whole:
+the file it replaces goes to the undo journal first, and a failed request leaves
+nothing behind. Only with B<AI_IMAGE_URL> set.
 
 =item B<agent>
 
@@ -948,20 +954,33 @@ with B<AI_SPEECH_URL> set.
 
 =item B<AI_SPEECH_URL>
 
-The address of the speech service for the B<speech> tool, with the prefix
-where its nginx serves it (the same host as B<AI_IMAGE_URL>). The tool is only
-offered when it is set.
+The base address of the speech service for the B<speech> tool, as the agent
+reaches it (for example C<http://host:8000>, the same host as B<AI_IMAGE_URL>). The
+tool is only offered when it is set.
 
 =item B<AI_IMAGE_URL>
 
-The address of the image service for the B<generate_image> tool, with the
-prefix where its nginx serves it (for example C<http://host:8000/rocm>). The
-tool is only offered when it is set.
+The base address of the image service for the B<generate_image> tool, as the
+agent reaches it (for example C<http://host:8000>). The tool is only offered when
+it is set.
 
 =item B<AI_IMAGE_TIMEOUT>
 
 Seconds to wait for an image (default 3600: the service makes one image at a
 time).
+
+=item B<AI_IMAGE_PROXY>
+
+A proxy for the image service. None by default (the service is near), and
+C<none> says so too.
+
+=item B<AI_SPEECH_TIMEOUT>
+
+Seconds to wait for speech (default 3600).
+
+=item B<AI_SPEECH_PROXY>
+
+A proxy for the speech service, as B<AI_IMAGE_PROXY>.
 
 =item B<AI_IMAGE_MAX>
 

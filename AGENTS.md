@@ -121,9 +121,10 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   browser"): the revert buttons, the session and project menu (rename, delete with "sure?"
   and "cancel", create), the dark theme's fields, the menu's layout, the session select.
   Not yet in a real desktop browser: both looks and themes, the microphone, the
-  thinking block, the TLS trust prompt. Not built yet: file downloads and
-  inline pictures, uploads to `./uploads/`, slash commands over `POST /command`
-  (refused with 400 for now).
+  thinking block, the TLS trust prompt. Not built yet: uploads to `./uploads/`,
+  slash commands over `POST /command` (refused with 400 for now). The files a tool
+  writes are on the page: a picture inline and a download, live and after a reload
+  (`GET /file`, the `file` event, the history's `files`; `tools/ui-check/files.js`).
 - What is open is in PLAN.md. What is built is in README.md and in this
   "Status", not in PLAN.md.
 
@@ -176,7 +177,12 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   them with the interface. The worker side keeps the queue, `input()` and the
   model switch (see worker.pm). `$OUTBOX` is for the tests: the messages go into
   an array instead of the workers. Routes, the SSE stream (`publish()`, the
-  `$ai::EVENT_SINK` hook of the chat), the token (`_authed()`). The worker side
+  `$ai::EVENT_SINK` hook of the chat), the token (`_authed()`). The files of a
+  session: `GET /file` (`_file`, `_query`: only what lies in the session's project,
+  `tools::_resolve` for where a path leads; a picture or a sound inline, the rest an
+  attachment, sandboxed); a tool's file goes to the page as a `file` event
+  (`handle_llm_response` through `tools::offered_file`, the master adds the session
+  in `_worker_event`), and the history lists it in the call's `files` (`_tool_item`). A tool line carries the whole call as `full` (`ai::call_full`: the name, then each argument in full), and the page opens it on a click (`toolLine()`). The worker side
   has the input queue that `chat_loop` reads (`input()`; a recording is recognized
   there, in the main flow, never in a request). `check_voice()` asks the recognizer (AI_ASR_URL)
   for a GET at start and after a failed recognition: the state's `voice` (`ok`,
@@ -503,6 +509,8 @@ How they run:
 | bash | temp file, `_run` → `exec bash <file>` |
 | perl | `_run` → `eval` in package `aicli::tool`, or `Safe->reval` (`AI_PERL_SAFE`) |
 | fetch, search | `tools::_http` → `loop::http` (web proxy, timeout, size limit, redirects) |
+| generate_image | `tools::_http` → `loop::http` to `AI_IMAGE_URL`; the PNG is written by `_write_whole` (the old file goes to the undo journal through `_changing`, the bytes to a temp name, renamed when whole). `image_output()` names the file (the default too), `offered_file()` tells the page. Only with `AI_IMAGE_URL` |
+| speech | the same for the speech service (`AI_SPEECH_URL`): the WAV, named by `speech_output()`, written by `_write_whole`; the answer must start with RIFF. Only with `AI_SPEECH_URL` |
 | agent | `agent::launch` + `agent::wait` |
 
 Tools are called natively by default: the request has their JSON schemas (from
@@ -636,10 +644,13 @@ Other APIs are reached through an OpenAI compatible gateway, such as LiteLLM or 
 | `t/127_enroll_e2e.t` | the enrollment end to end: a broker with its state file, the user's token and list over the socket, `ai.pl --enroll` (a wrong token refused, the right one keeps agent.json 0600, the token not printed), `ai.pl --agent` with that file and no token on its command line runs a job, a revocation stops it |
 | `t/126_enrollment.t` | the enrollment without sockets: a user's token (only its hash kept, a new one replaces it, used once: a second use is refused), agents enrolled with it (own token, hash only), the names and tags checked, the list of a user, revocation (owner only, the token stops), the state file over a restart |
 | `t/135_error_display.t` | the errors of a tool read whole on the page (a line is not cut at the terminal width there; an error has up to 40 lines, a result 8) |
-| `t/134_history_tools.t` | the history of a session on the page: the tool calls of the chat with their results, in their place between what was said and the answers, a call without a result yet has none |
+| `t/134_history_tools.t` | the whole call of a tool line (`full`: each argument in full, a multi-line value indented), the history of a session on the page: the tool calls of the chat with their results, in their place between what was said and the answers, a call without a result yet has none |
 | `t/133_favicon.t` | the icon of the pages: favicon.ico (16, 32, 48, 64, 256 pixels) and favicon.svg, a strawberry drawn for aicli (not emoji artwork); both pages link it; nginx serves it publicly; the local interface answers it without a login |
 | `t/136_api_token.t` | the API tokens of the services (`/auth/api/token`, aud=flm): issued from a login only, verified with `?aud=flm` (a login refused for it, an API token refused for the page), no renewal, a user that is not an account, a token past its time, the end at logout |
 | `t/137_agent_defaults.t` | the enrollment defaults: the name is a random UUID version 4 (each new), the tags are the programs' names (a path's last part, short lower-case words, each once) |
+| `t/144_web_files.t` | the files of a session on the page: `GET /file` (a picture or a sound inline, the rest an attachment, sandboxed; a login sees the projects of its own account only; a link or `..` out of the project, an absolute path, a bad session name and a folder refused; the size limit; only GET), the history's `files` (a call that wrote a file still there, not a failed call, not one without its result), the master's `file` event (the active session only, with its session) |
+| `t/143_speech.t` | the speech tool: the WAV written whole (the old file in the undo journal, a temp name renamed when whole), the request, the default name, the refusals (no request made), an answer that is not a WAV leaves no file, the file offered |
+| `t/142_generate_image.t` | the generate_image tool: the PNG written whole and journaled the same way, the request (the URL's slash, the size, steps and seed), the default names, refusals (no request made), the service's errors leave no file, the file offered, a chat turn sends the `file` event, a failed call none |
 | `t/141_create_session.t` | the model makes a session: the name made by the worker, the master makes it in the asking session's project and lists it, a switch to it in the same answer is accepted, the same name or a bad one is refused, not for a sub-agent or the terminal |
 | `t/140_switch_session.t` | the model lists its project's sessions (this one marked, the empty ones and other projects left out, a filter) and switches the page: checked (same project, exists, not this one), kept by the master, the page's state has it, done when the turn is over only if the page is still on this session, refused as a failure when the target is gone |
 | `t/139_rename_session.t` | the model's session rename: the tool (web only, not for a sub-agent; the name checked, its own name and a taken one refused), the master keeps the request, the page's state has it (a refresh too), it is done when the turn is over and nothing is queued, a name taken by then is refused and the page is told |
@@ -687,6 +698,8 @@ The checks are in `tools/ui-check/`:
 - `menu.js`: the session menu (rename from the name box, delete with "sure?" and "cancel")
   and the project menu (create, rename, delete). It changes the state dir.
 - `common.js`: the shared part (the address, the token, Firefox, the page errors).
+- `fake-services.py`: a fake chat (it asks for `generate_image` once, then answers in text) and a fake image service (a 256 pixel PNG), so a turn runs without a model.
+- `files.js`: a picture a tool wrote is shown inline and downloads, live and after a reload; a tool line opens to the whole call. It needs the fake services and a server started with `AICLI_CHECK_LLM` and `AICLI_CHECK_IMAGE` (the first lines of the file say how).
 
 Run them from `tools/ui-check/` with the server's settings:
 
@@ -698,8 +711,7 @@ AICLI_URL=http://127.0.0.1:8770 AICLI_STATE=<state dir> NODE_PATH=$(npm root -g)
 ```
 
 A new state dir for each run: `menu.js` renames and deletes the fixture. What they do not
-cover: a turn (no model here, so nothing is sent to a model), the login through nginx, the
-looks in a desktop browser, and the microphone. To check the model's own tools (rename, list,
+cover: a turn with a real model (`fake-services.py` stands in for one, so `files.js` checks the page's part only), the login through nginx, the looks in a desktop browser, and the microphone. To check the model's own tools (rename, list,
 switch, create a session), the server needs a model: `AI_LOCAL_SERVER` or a cloud key. The
 tool calls and the sub-agents then show in the page's chat as usual.
 

@@ -5,6 +5,8 @@
 #   AICLI_CHECK_PORT   the port (default 8770)
 #   AICLI_CHECK_STATE  the state dir (default: a new temporary directory, kept)
 #   AICLI_CHECK_TOKEN  the page's token (default abc123)
+#   AICLI_CHECK_LLM    the chat's model server (default: none, 127.0.0.1:9); fake-services.py serves one
+#   AICLI_CHECK_IMAGE  the image service (AI_IMAGE_URL, the generate_image tool); unset: no tool
 set -e
 here=$(cd "$(dirname "$0")/../.." && pwd)
 port=${AICLI_CHECK_PORT:-8770}
@@ -16,7 +18,9 @@ printf '%s\n' '{"role":"system","content":"sys"}' '{"role":"user","content":"hel
   '{"role":"assistant","content":"second answer"}' > "$state/ai/sessions/s1/chat"
 echo sys > "$state/ai/sessions/s1/prompt"
 cd "$state/root"
-AI_SESSION=s1 AI_DIR="$state/ai" AI_UI_TOKEN="$token" AI_LOCAL_SERVER=http://127.0.0.1:9 \
+unset AI_IMAGE_URL
+if [ -n "$AICLI_CHECK_IMAGE" ]; then export AI_IMAGE_URL="$AICLI_CHECK_IMAGE"; fi
+AI_SESSION=s1 AI_DIR="$state/ai" AI_UI_TOKEN="$token" AI_LOCAL_SERVER="${AICLI_CHECK_LLM:-http://127.0.0.1:9}" \
   AI_WORKSPACE="$state/root" nohup perl "$here/ai.pl" --ui "$port" > "$state/server.log" 2>&1 &
 echo $! > "$state/server.pid"
 sleep 2

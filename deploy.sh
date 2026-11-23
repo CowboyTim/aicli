@@ -112,7 +112,7 @@ else
     v=$(pick "$agent_f" AI_ASR_URL)
     [ -n "$v" ] && set_key "$env_f" AI_ASR_URL "$v"
 fi
-# the image service of the generate_image tool (AI_IMAGE_URL, with the /rocm prefix). As the recognizer above: compose
+# the image service of the generate_image tool (AI_IMAGE_URL, its base address). As the recognizer above: compose
 # reads it from the shell or .env, so a URL that .agent.env has moves to .env. AI_IMAGE_URL= (set and empty) clears it:
 # no image tool.
 if [ "${AI_IMAGE_URL+x}" = x ] && [ -z "$AI_IMAGE_URL" ]; then
@@ -122,7 +122,7 @@ else
     v=$(pick "$agent_f" AI_IMAGE_URL)
     [ -n "$v" ] && set_key "$env_f" AI_IMAGE_URL "$v"
 fi
-# the speech service of the speech tool (AI_SPEECH_URL, with the /rocm prefix). As the recognizer above: compose
+# the speech service of the speech tool (AI_SPEECH_URL, its base address). As the recognizer above: compose
 # reads it from the shell or .env, so a URL that .agent.env has moves to .env. AI_SPEECH_URL= (set and empty) clears it:
 # no speech tool.
 if [ "${AI_SPEECH_URL+x}" = x ] && [ -z "$AI_SPEECH_URL" ]; then

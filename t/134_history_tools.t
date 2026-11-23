@@ -44,4 +44,22 @@ like($m[3]{text}, qr/bash sleep 1/, "a call that has not answered yet");
 ok(!exists $m[3]{result}, "and it has no result line");
 ok(!${$h->{more}}, "not cut");
 
+# the whole call, for the page's tool line when it is opened: the name, then each argument in full,
+# a value's further lines indented under it
+is($m[1]{full}, "BASH\n  code: echo hi", "the whole call of a bash call: its name and its argument");
+{
+    my $name2 = 'history-full-test';
+    mkdir "$ai::SESSIONS_DIR/$name2" or die "mkdir: $!";
+    open(my $fh2, '>', "$ai::SESSIONS_DIR/$name2/chat") or die $!;
+    print {$fh2} map {$J->encode($_)."\n"} (
+        {role => 'assistant', content => '', tool_calls => [{id => 'call_w', type => 'function',
+            function => {name => 'write', arguments => $J->encode({path => 'notes.txt', content => "one\ntwo"})}}]},
+        {role => 'tool', tool_call_id => 'call_w', content => "[OK] wrote notes.txt\n"},
+    );
+    close $fh2;
+    my ($w) = grep {$_->{role} eq 'tool'} @{ui::_history_data($name2)->{messages}};
+    is($w->{full}, "WRITE\n  path: notes.txt\n  content: one\n    two",
+        "a value over several lines: its further lines are indented under it");
+}
+
 done_testing();

@@ -105,6 +105,16 @@
                 margin: 6px 0 0 1.4em; padding-left: 10px; border-left: 2px solid var(--line); }
   .tool { color: var(--accent); font-size: 13px; margin-top: 8px; }
   .result { color: var(--muted); font-size: 13px; margin-left: 1.5em; }
+  .file { font-size: 13px; margin-left: 1.5em; }
+  .file img { display: block; max-width: 100%; height: auto; border: 1px solid var(--line); border-radius: 6px; margin: 4px 0 6px; }
+  .file audio { display: block; max-width: 100%; margin: 4px 0 6px; }
+  .file a { color: var(--accent); }
+  .tool-head { display: block; width: 100%; margin: 0; padding: 0; border: none; background: none; text-align: left;
+               font: inherit; font-size: 13px; color: var(--accent); cursor: pointer; white-space: pre-wrap; }
+  .tool-head:hover { text-decoration: underline; }
+  .tool-full { margin: 4px 0 8px 1.5em; padding: 8px 10px; border-left: 2px solid var(--line); color: var(--muted);
+               font-family: var(--mono); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere;
+               max-height: 24em; overflow: auto; }
   .usage { color: var(--muted); font-size: 13px; }
   /* the tag of an answer: its usage, and a revert (the exchange goes out of the chat) */
   .tag { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin: 6px 0 0; font-size: 12px; color: var(--muted); }
@@ -447,6 +457,65 @@
     window.scrollTo(0, document.body.scrollHeight);
     return d;
   }
+  // a tool line: with the whole call (its arguments in full) it is a button that opens it, as the
+  // thinking block does; without one it is a plain line
+  function toolLine(text, full) {
+    if (!full) { return add("tool", text); }
+    var box = document.createElement("div");
+    box.className = "msg";
+    var head = document.createElement("button");
+    head.type = "button";
+    head.className = "tool tool-head";
+    head.setAttribute("aria-expanded", "false");
+    head.textContent = text; // never innerHTML
+    var body = document.createElement("pre");
+    body.className = "tool-full";
+    body.textContent = full;
+    body.hidden = true;
+    head.addEventListener("click", function () {
+      body.hidden = !body.hidden;
+      head.setAttribute("aria-expanded", String(!body.hidden));
+    });
+    box.appendChild(head);
+    box.appendChild(body);
+    log.appendChild(box);
+    window.scrollTo(0, document.body.scrollHeight);
+    return box;
+  }
+  // a file a tool wrote in the session: a picture or a sound shown inline (the server sends it,
+  // the same file opens in a tab of its own), and a download. The path is the file's name in the
+  // session's project, and the session is the one it was written in (a switch may come before a click).
+  function fileBlock(session, path) {
+    var q = "session=" + encodeURIComponent(session) + "&path=" + encodeURIComponent(path);
+    var view = "/file?" + q;
+    var kind = (path.split(".").pop() || "").toLowerCase();
+    var box = document.createElement("div");
+    box.className = "msg file";
+    if (/^(png|jpe?g|gif|webp)$/.test(kind)) {
+      var link = document.createElement("a");
+      link.href = view;
+      link.target = "_blank";
+      link.rel = "noopener";
+      var img = document.createElement("img");
+      img.src = view;
+      img.alt = path;
+      link.appendChild(img);
+      box.appendChild(link);
+    } else if (/^(wav|mp3|ogg)$/.test(kind)) {
+      var audio = document.createElement("audio");
+      audio.controls = true;
+      audio.src = view;
+      box.appendChild(audio);
+    }
+    var dl = document.createElement("a");
+    dl.href = view + "&download=1";
+    dl.setAttribute("download", path.split("/").pop());
+    dl.textContent = "download " + path;
+    box.appendChild(dl);
+    log.appendChild(box);
+    window.scrollTo(0, document.body.scrollHeight);
+    return box;
+  }
 
   // the mic needs the speech recognizer: without one it is not offered
   var voiceNote = {
@@ -781,8 +850,9 @@
       if (m.role === "user") { add("user", m.text); return; }
       // a tool call of the chat: its line and its result, drawn as the live ones are
       if (m.role === "tool") {
-        add("tool", m.text);
+        toolLine(m.text, m.full);
         if (m.result !== undefined && m.result !== null) { add("result", m.result); }
+        (m.files || []).forEach(function (f) { fileBlock(d.session, f); });
         current = null;
         return;
       }
@@ -998,15 +1068,24 @@
   });
   // a tool line or its result is a block of its own: the next text starts a new one
   es.addEventListener("tool", function (e) {
+    var d = JSON.parse(e.data);
     waitHide();
     thinkEnd();
-    add("tool", JSON.parse(e.data).text);
+    toolLine(d.text, d.full);
     current = null;
   });
   es.addEventListener("result", function (e) {
     waitHide();
     thinkEnd();
     add("result", JSON.parse(e.data).text);
+    current = null;
+  });
+  // a file a tool wrote: its picture or download, after the result (the session is in the event)
+  es.addEventListener("file", function (e) {
+    var d = JSON.parse(e.data);
+    waitHide();
+    thinkEnd();
+    fileBlock(d.session, d.path);
     current = null;
   });
   es.addEventListener("status", function (e) {

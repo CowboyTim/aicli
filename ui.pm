@@ -358,6 +358,7 @@ sub _history_data {
     my @all = (defined $name and -f $file) ? eval {ai::load_messages($file)} : ();
     my %meta = (defined $name and @all) ? ai::meta_of($dir, \@all) : ();
     # the results of the server's tool calls, by the call's id (their messages come after the call)
+    my $root = defined $name ? _project_dir($name) : undef; # the workspace of the session: its files
     my %result_of;
     for my $m (@all) {
         next unless ($m->{role} // '') eq 'tool' and defined $m->{tool_call_id};
@@ -382,7 +383,7 @@ sub _history_data {
             push @items, $out;
         }
         for my $tc (@{$m->{tool_calls} // []}) {
-            push @items, _tool_item($tc, $result_of{$tc->{id} // ''});
+            push @items, _tool_item($tc, $result_of{$tc->{id} // ''}, $root);
         }
     }
     my $more = @items > $HISTORY_MAX ? 1 : 0;
@@ -395,16 +396,23 @@ sub _history_data {
 }
 
 # a tool call of the chat as the page shows it: its line (the name and the first line of its
-# arguments, as the live line), and its result (clipped as the live one is), when there is one
+# arguments, as the live line), and its result (clipped as the live one is), when there is one.
+# A call that wrote a file (not an error) has the file in its `files`, as the live page shows it.
 sub _tool_item {
-    my ($tc, $result) = @_;
+    my ($tc, $result, $root) = @_;
     my $fn = $tc->{function} // {};
     my $c = eval { ai::native_call({id => $tc->{id}, name => $fn->{name} // '', arguments => $fn->{arguments}}) } // {};
     my $line = ai::web_text("\x{e2}\x{97}\x{8f} ".($c->{k} // $fn->{name} // '?')." ".(eval { ai::tool_summary($c) } // ''));
     my $item = {role => 'tool', text => $line};
+    my $full = eval { ai::call_full($c) } // '';
+    $item->{full} = ai::web_text($full) if length $full; # the whole call, when the page opens the line
     if (defined $result) {
         my $max = $::ORIG_ENV{AI_TOOL_LINES} // 8;
         $item->{result} = ai::web_text(ai::clip_lines(ai::to_bytes($result), $max, "  "));
+        if (defined $root and $result !~ m/\A\[ERROR\]/) {
+            my $file = eval { tools::offered_file($c->{k} // '', $c->{args}, $root) };
+            $item->{files} = [$file] if defined $file;
+        }
     }
     return $item;
 }
@@ -450,7 +458,7 @@ sub _worker_for {
 sub _project_dir {
     my ($name) = @_;
     my $dir = ai::project_path(ai::session_project($name));
-    return -d $dir ? $dir : $ai::ROOT;
+    return (defined $dir and -d $dir) ? $dir : $ai::ROOT;
 }
 
 # A login's page starts in its own work: when the active session is not the account's (the last
@@ -551,6 +559,12 @@ sub _worker_event {
         my $to = $data->{to} // '';
         $pending_rename{$name} = $to if length $to;
         publish(state => _master_state()) if $is_active;
+        return;
+    }
+    if ($type eq 'file') {
+        # a file a tool wrote: the page offers it (a download, a picture or a sound inline), by its session
+        publish(file => {path => $data->{path} // '', session => $name})
+            if $is_active and length($data->{path} // '');
         return;
     }
     if ($type eq 'turn') {
@@ -1258,6 +1272,61 @@ sub _authed {
     return defined $t && $t eq $token;
 }
 
+# A file of a session's project, for the page: a picture or a sound inline (the page shows it), any
+# other file as a download. Only what really lies in the project: tools::_resolve gives where a path
+# leads, so a link or '..' that leads out of it is refused.
+our $MAX_FILE = 100_000_000; # bytes of a file sent to the page
+our %FILE_TYPE = (
+    png => ['image/png', 1], jpg => ['image/jpeg', 1], jpeg => ['image/jpeg', 1],
+    gif => ['image/gif', 1], webp => ['image/webp', 1],
+    wav => ['audio/wav', 1], mp3 => ['audio/mpeg', 1], ogg => ['audio/ogg', 1],
+    txt => ['text/plain; charset=utf-8', 0], md => ['text/plain; charset=utf-8', 0],
+    csv => ['text/csv; charset=utf-8', 0], json => ['application/json', 0], pdf => ['application/pdf', 0],
+);
+
+# the query of a request as name => value (the values unescaped, as the bytes they are)
+sub _query {
+    my ($q) = @_;
+    my %a;
+    foreach my $kv (split /&/, $q // '') {
+        my ($k, $v) = split /=/, $kv, 2;
+        next unless defined $k and length $k;
+        $v //= '';
+        $v =~ s/%([0-9A-Fa-f]{2})/chr(hex($1))/ge;
+        $a{$k} = $v;
+    }
+    return %a;
+}
+
+sub _file {
+    my ($cn, $acct, $q) = @_;
+    my %a = _query($q);
+    my ($name, $rel) = ($a{session} // '', $a{path} // '');
+    return _respond($cn, 400, 'text/plain', "a session and the path of a file in its project are wanted\n")
+        unless ai::valid_session_name($name) and length($rel) and $rel !~ m{\A/} and $rel !~ m/\x00/;
+    return _respond($cn, 404, 'text/plain', "no such session of yours\n")
+        unless -d "$ai::SESSIONS_DIR/$name" and _owns($acct, ai::session_project($name));
+    my $root = _project_dir($name);
+    my $base = eval {tools::_resolve($root)} // '';
+    my $real = eval {tools::_resolve("$root/$rel")} // '';
+    return _respond($cn, 404, 'text/plain', "no such file in the project\n")
+        unless length($base) and length($real) and index($real, "$base/") == 0 and -f $real;
+    return _respond($cn, 413, 'text/plain', "the file is bigger than $MAX_FILE bytes\n")
+        if -s $real > $MAX_FILE;
+    open(my $fh, '<:raw', $real) or return _respond($cn, 404, 'text/plain', "no such file in the project\n");
+    local $/;
+    my $bytes = <$fh>;
+    close($fh);
+    my ($leaf) = $real =~ m{([^/]+)\z};
+    my ($ext) = $leaf =~ m/\.([A-Za-z0-9]+)\z/;
+    my ($type, $inline) = @{$FILE_TYPE{lc($ext // '')} // ['application/octet-stream', 0]};
+    (my $file = $leaf) =~ s/[^A-Za-z0-9._-]/_/g;
+    my $view = ($inline and !$a{download}) ? 'inline' : 'attachment';
+    return _respond($cn, 200, $type, $bytes,
+        "Content-Disposition: $view; filename=\"$file\"",
+        "Content-Security-Policy: sandbox");
+}
+
 sub _dispatch {
     my ($cn, $m, $path, $h, $body) = @_;
     my ($p, $q) = split /\?/, $path, 2;
@@ -1582,7 +1651,10 @@ sub _dispatch {
     if($p eq '/state' and $m eq 'GET'){
         return _json($cn, 200, _master_state($acct));
     }
-    return _respond($cn, 405, 'text/plain', "method not allowed\n") if $p =~ m{^/(events|message|session|session/delete|session/rename|project|voice|abort|state|rewind)$};
+    if($p eq '/file' and $m eq 'GET'){
+        return _file($cn, $acct, $q);
+    }
+    return _respond($cn, 405, 'text/plain', "method not allowed\n") if $p =~ m{^/(events|message|session|session/delete|session/rename|project|voice|abort|state|rewind|file)$};
     return _respond($cn, 404, 'text/plain', "not found\n");
 }
 
