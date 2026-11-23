@@ -20,7 +20,7 @@ const check = (ok, what) => { console.log((ok ? 'ok   ' : 'FAIL ') + what); if (
     lines: await p.locator('#log .tool-head').filter({ hasText: 'generate_image' }).count(),
     pictures: await p.locator('#log .msg.file img').count(),
     took: await p.locator('#log .result').filter({ hasText: /took \d/ }).count(),
-    names: await p.$$eval('#log .msg.file img', imgs => imgs.map(i => i.getAttribute('src').replace(/^.*path=/, ''))),
+    names: await p.$$eval('#log .msg.file img', imgs => imgs.map(i => i.getAttribute('src').replace(/^.*path=/, '').replace(/&.*$/, ''))),
   });
 
   let c = await counts();

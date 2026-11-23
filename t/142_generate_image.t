@@ -207,7 +207,7 @@ ok(!defined tools::offered_file('bash', ['ls'], $ws), "a tool that writes no fil
     TestAI::capture {ai::chat_completion("draw a blue cube")};
     my ($file) = grep {$_->[0] eq 'file'} @EV;
     ok($file, "a turn: the call's file is sent to the page as a file event");
-    is_deeply($file ? $file->[1] : undef, {path => 'chat.png'}, "with its name in the workspace");
+    is($file ? $file->[1]{path} : undef, 'chat.png', "with its name in the workspace");
     ok(-f "$ws2/chat.png", "and the file is there");
     like($TestAI::REQUESTS[1]{data} // '', qr/wrote chat\.png/, "the model gets the result as before");
     # the page's tool line: the summary, and the whole call for when it is opened

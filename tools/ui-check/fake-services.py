@@ -58,6 +58,13 @@ class Llm(BaseHTTPRequestHandler):
             events.append({'choices': [{'delta': {'tool_calls': [{'index': 0, 'id': 'call_sound', 'type': 'function',
                 'function': {'name': 'generate_audio', 'arguments': json.dumps(args)}}]}}]})
             events.append({'choices': [{'delta': {}, 'finish_reason': 'tool_calls'}]})
+        elif body.get('tools') and messages and messages[-1].get('role') != 'tool' and 'copy' in next(
+                (m.get('content') or '' for m in reversed(messages) if m.get('role') == 'user'), ''):
+            # "copy" in the message: a bash call that makes a picture (no image tool, the way a model may do it)
+            args = {'code': 'cp live.png copy.png'}
+            events.append({'choices': [{'delta': {'tool_calls': [{'index': 0, 'id': 'call_copy', 'type': 'function',
+                'function': {'name': 'bash', 'arguments': json.dumps(args)}}]}}]})
+            events.append({'choices': [{'delta': {}, 'finish_reason': 'tool_calls'}]})
         elif body.get('tools') and messages and messages[-1].get('role') != 'tool':
             # "two" in the message asks for two pictures in one answer: both calls at index 0, as some
             # servers send them, with an id each

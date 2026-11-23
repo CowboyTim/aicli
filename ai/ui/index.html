@@ -485,8 +485,9 @@
   // a file a tool wrote in the session: a picture or a sound shown inline (the server sends it,
   // the same file opens in a tab of its own), and a download. The path is the file's name in the
   // session's project, and the session is the one it was written in (a switch may come before a click).
-  function fileBlock(session, path) {
-    var q = "session=" + encodeURIComponent(session) + "&path=" + encodeURIComponent(path);
+  function fileBlock(session, path, v) {
+    // v (the file's version) makes a changed file's address new, so the browser does not keep the old one
+    var q = "session=" + encodeURIComponent(session) + "&path=" + encodeURIComponent(path) + (v ? "&v=" + encodeURIComponent(v) : "");
     var view = "/file?" + q;
     var kind = (path.split(".").pop() || "").toLowerCase();
     var box = document.createElement("div");
@@ -866,7 +867,7 @@
       if (m.role === "tool") {
         toolLine(m.text, m.full);
         if (m.result !== undefined && m.result !== null) { add("result", m.result); }
-        (m.files || []).forEach(function (f) { fileBlock(d.session, f); });
+        (m.files || []).forEach(function (f) { fileBlock(d.session, f.path, f.v); });
         current = null;
         return;
       }
@@ -1099,7 +1100,7 @@
     var d = JSON.parse(e.data);
     waitHide();
     thinkEnd();
-    fileBlock(d.session, d.path);
+    fileBlock(d.session, d.path, d.v);
     current = null;
   });
   es.addEventListener("status", function (e) {

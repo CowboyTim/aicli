@@ -334,7 +334,8 @@ The session last used in this directory is continued, as with C<-c>, unless
 C<--new> or C<AI_SESSION> says otherwise. The page shows the conversation of
 the session when it connects and after a switch: what was said, the answers, and
 the tool calls with their results. A file a tool wrote (C<write>, C<convert>,
-C<generate_image>, C<speech>, C<generate_audio>) is listed under its call: a picture is shown inline,
+C<generate_image>, C<speech>, C<generate_audio>), and a picture or a sound a C<bash> call made or changed, is listed
+under its call: a picture is shown inline,
 a sound plays, and each has a download.
 
 Each session has a worker process of its own (the same chat, forked by this
@@ -520,10 +521,12 @@ the profiles are offered; the system prompt does not carry the list.
 
 Convert a picture with ImageMagick (the C<magick> or C<convert> program on the
 PATH; the tool is only offered when one is there). The output name sets the
-format: png, jpg, gif, webp, bmp or tif. Options: a largest width and height
+format: png, jpg, gif, webp, bmp or tif. A file of that name already there is kept: the picture
+goes to the first free name (C<name-2.jpg>, ...). Options: a largest width and height
 (the proportions are kept, a picture is never made bigger), a crop
 (WIDTHxHEIGHT+X+Y), a turn by 90, 180 or 270 degrees, the quality of jpg and
-webp. The metadata (GPS, camera) is removed and the picture is turned upright.
+webp, and the colours: C<gray> (black and white) or C<sepia>; nothing else changes the colours. The
+metadata (GPS, camera) is removed and the picture is turned upright.
 The program runs in a forked child with no shell, and with the policy in
 F<ai/imagemagick/policy.xml>: only these formats are read or written, and
 PostScript, PDF, SVG and the like, programs and the network are not used.

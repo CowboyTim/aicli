@@ -429,10 +429,15 @@ sub _tool_item {
     $item->{full} = ai::web_text($full) if length $full; # the whole call, when the page opens the line
     if (defined $result) {
         my $max = $::ORIG_ENV{AI_TOOL_LINES} // 8;
-        $item->{result} = ai::web_text(ai::clip_lines(ai::to_bytes($result), $max, "  "));
+        $item->{result} = ai::web_text(ai::clip_lines(ai::to_bytes(tools::without_result_files($result)), $max, "  "));
         if (defined $root and $result !~ m/\A\[ERROR\]/) {
-            my $file = eval { tools::offered_file($c->{k} // '', $c->{args}, $root, $result) };
-            $item->{files} = [$file] if defined $file;
+            my $k = $c->{k} // '';
+            my @files = ($k eq 'bash') ? tools::result_files($result) : do {
+                my $f = eval { tools::offered_file($k, $c->{args}, $root, $result) };
+                defined $f ? ($f) : ();
+            };
+            my @there = grep {-f "$root/$_"} @files;
+            $item->{files} = [map {+{path => $_, v => tools::file_version($root, $_)}} @there] if @there;
         }
     }
     return $item;
@@ -584,7 +589,8 @@ sub _worker_event {
     }
     if ($type eq 'file') {
         # a file a tool wrote: the page offers it (a download, a picture or a sound inline), by its session
-        publish(file => {path => $data->{path} // '', session => $name})
+        publish(file => {path => $data->{path} // '', session => $name,
+                (length($data->{v} // '') ? (v => $data->{v}) : ())})
             if $is_active and length($data->{path} // '');
         return;
     }

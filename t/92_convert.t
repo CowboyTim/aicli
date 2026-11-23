@@ -122,11 +122,13 @@ sub run_quiet {
         "stub: the change is in the journal, marked as a picture");
     @tools::CHANGES = ();
 
-    # an existing output is replaced, and its old bytes are kept for undo
+    # a file of that name already there stays as it was: the picture goes to the first free name
     write_file("$ws/out.jpg", "old");
-    ai::execute_tool('convert', 'CONVERT_5d1a', ['shot.png', 'out.jpg']);
-    is($tools::CHANGES[-1]{old}, 'old', "stub: the old file is kept for undo");
-    is(slurp_file("$ws/out.jpg"), 'stub-output', "stub: and replaced");
+    my ($again) = ai::execute_tool('convert', 'CONVERT_5d1a', ['shot.png', 'out.jpg']);
+    like($again // '', qr/\Awrote out-2\.jpg: converted shot\.png to out-2\.jpg/, "stub: the result names the new file");
+    is(slurp_file("$ws/out.jpg"), 'old', "stub: the file that was there stays");
+    is(slurp_file("$ws/out-2.jpg"), 'stub-output', "stub: the picture is the new file");
+    ok(!defined $tools::CHANGES[-1]{old} && $tools::CHANGES[-1]{path} eq 'out-2.jpg', "stub: a new file in the journal, no old content");
     @tools::CHANGES = ();
 }
 
@@ -175,6 +177,27 @@ sub run_quiet {
     write_file("$ws/shot.png", $PNG);
     my (undef, $e) = ai::execute_tool('convert', 'CONVERT_5d1a', ['shot.png', 'o.jpg']);
     like($e // '', qr/more than AI_CONVERT_MAX \(10\)/, "limit: a bigger input is refused by AI_CONVERT_MAX");
+}
+
+# colours: gray (black and white) and sepia are ImageMagick's own options, given only when asked for;
+# any other colour is refused
+{
+    my $ws = fresh_stub();
+    write_file("$ws/shot.png", $PNG);
+    my %option = (gray => ['-colorspace', 'Gray'], sepia => ['-sepia-tone', '80%']);
+    for my $c ('gray', 'Gray', 'sepia') {
+        my (undef, $e) = ai::execute_tool('convert', 'CONVERT_5d1a', ['shot.png', 'c.png', '', '', '', '', '', $c]);
+        ok(!$e, "colour: '$c' runs") or diag($e);
+        my @args = map {s/^ARG //r} grep {/^ARG /} lines_of("$ws/stub.log");
+        my ($flag, $value) = @{$option{lc $c}};
+        my ($at) = grep {$args[$_] eq $flag} 0 .. $#args;
+        ok(defined $at && $args[$at + 1] eq $value, "colour: '$c' is the option $flag $value");
+    }
+    ai::execute_tool('convert', 'CONVERT_5d1a', ['shot.png', 'c.png']);
+    my @plain = map {s/^ARG //r} grep {/^ARG /} lines_of("$ws/stub.log");
+    ok(!grep({$_ eq '-colorspace' || $_ eq '-sepia-tone'} @plain), "colour: none adds no option, the colours are kept");
+    my (undef, $e) = ai::execute_tool('convert', 'CONVERT_5d1a', ['shot.png', 'c.png', '', '', '', '', '', 'negative']);
+    like($e // '', qr/colour must be gray \(black and white\) or sepia: negative/, "colour: another one is refused");
 }
 
 {

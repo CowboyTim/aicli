@@ -78,7 +78,7 @@ const check = (ok, what) => { console.log((ok ? 'ok   ' : 'FAIL ') + what); if (
     c.width = img.naturalWidth; c.height = img.naturalHeight;
     const ctx = c.getContext('2d');
     ctx.drawImage(img, 0, 0);
-    return { src: img.getAttribute('src').replace(/^.*path=/, ''), blue: ctx.getImageData(0, 0, 1, 1).data[2] };
+    return { src: img.getAttribute('src').replace(/^.*path=/, '').replace(/&.*$/, ''), blue: ctx.getImageData(0, 0, 1, 1).data[2] };
   }));
   const ready = n => p.waitForFunction(n => {
     const imgs = Array.from(document.querySelectorAll('#log .msg.file img'));

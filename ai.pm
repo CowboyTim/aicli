@@ -768,7 +768,7 @@ sub handle_llm_response {
             $say_tool->($colors::red_color.clip_lines($e, $EVENT_SINK ? 40 : ($::ORIG_ENV{AI_TOOL_LINES} // 8), "  ").$colors::reset_color, 'result');
         } elsif(!$changed or !($::ORIG_ENV{AI_SHOW_DIFF} // 1)){
             # (a file change shows its diff instead)
-            $say_tool->($colors::green_color.clip_lines($result, $::ORIG_ENV{AI_TOOL_LINES} // 8, "  ").$colors::reset_color, 'result');
+            $say_tool->($colors::green_color.clip_lines(tools::without_result_files($result), $::ORIG_ENV{AI_TOOL_LINES} // 8, "  ").$colors::reset_color, 'result');
         }
         show_changes($printer_sub == $say ? $say : undef); # the diff of a file change, then the time
         # how long the call took (not for one that did not run)
@@ -783,8 +783,11 @@ sub handle_llm_response {
         # a file the tool wrote is offered on the web page, after its result: a download, and a picture
         # or a sound inline
         if($EVENT_SINK and !$had_error){
-            my $file = eval {tools::offered_file($c->{k}, $c->{args}, $WORKSPACE, $result)};
-            emit(file => {path => $file}) if defined $file;
+            my @files = ($c->{k} eq 'bash') ? tools::result_files($result) : do {
+                my $f = eval {tools::offered_file($c->{k}, $c->{args}, $WORKSPACE, $result)};
+                defined $f ? ($f) : ();
+            };
+            emit(file => {path => $_, v => tools::file_version($WORKSPACE, $_)}) for @files;
         }
     };
     foreach my $c (@$native ? map {native_call($_)} @$native : parse_tool_calls($msg)){
@@ -801,11 +804,18 @@ sub handle_llm_response {
             push @agents, [$i, $c, agent::launch($c->{args}[0])];
         } else {
             $TUI->set('tool', $c->{k});
+            # on the web page a bash call can make pictures: the workspace is looked at before and after
+            my $before = ($EVENT_SINK and $c->{k} eq 'bash') ? tools::workspace_pictures($WORKSPACE) : undef;
             my $t0 = Time::HiRes::time();
             my ($result, $had_error) = execute_tool($c->{k}, $c->{tool}, $c->{args});
             my $secs = Time::HiRes::time() - $t0;
             $TUI->unset('tool');
             tool_stat($c->{k}, $secs, $had_error);
+            if($before and !$had_error){
+                my @made = tools::picture_changes($before, tools::workspace_pictures($WORKSPACE));
+                splice(@made, 20) if @made > 20;
+                $result .= join('', map {"\n[aicli file] $_"} @made);
+            }
             &{$answer}($i, $c, $result, $had_error, $secs);
         }
     }
@@ -4951,8 +4961,8 @@ EOb
         available => sub {$::ORIG_ENV{AI_VISION} ? 1 : 0},
     },
     convert => {
-        description => "convert a picture with ImageMagick and write it to the output name: a smaller size (the proportions are kept, a picture is never made bigger), a crop, a turn, another format (by the name: png, jpg, gif, webp, bmp, tif), the quality of jpg and webp. The metadata (GPS, camera) is removed and the picture turned upright. Input and output are in the workspace",
-        syntax => "///CONVERT_5d1a+EO_c7e2+EO_0b93+EO_4a6f+EO_e18c+EO_7d20+EO_b5f9+EO_3c61\n{{input}}\nEO_c7e2[LENGTH({{input}})]\n{{output}}\nEO_0b93[LENGTH({{output}})]\n{{width}}\nEO_4a6f[LENGTH({{width}})]\n{{height}}\nEO_e18c[LENGTH({{height}})]\n{{crop}}\nEO_7d20[LENGTH({{crop}})]\n{{rotate}}\nEO_b5f9[LENGTH({{rotate}})]\n{{quality}}\nEO_3c61[LENGTH({{quality}})]\nCONVERT_5d1a",
+        description => "convert a picture with ImageMagick and write it to the output name: a smaller size (the proportions are kept, a picture is never made bigger), a crop, a turn, another format (by the name: png, jpg, gif, webp, bmp, tif), the quality of jpg and webp, and the colours: gray (black and white) or sepia. The metadata (GPS, camera) is removed and the picture turned upright. Input and output are in the workspace",
+        syntax => "///CONVERT_5d1a+EO_c7e2+EO_0b93+EO_4a6f+EO_e18c+EO_7d20+EO_b5f9+EO_3c61+EO_b1f7\n{{input}}\nEO_c7e2[LENGTH({{input}})]\n{{output}}\nEO_0b93[LENGTH({{output}})]\n{{width}}\nEO_4a6f[LENGTH({{width}})]\n{{height}}\nEO_e18c[LENGTH({{height}})]\n{{crop}}\nEO_7d20[LENGTH({{crop}})]\n{{rotate}}\nEO_b5f9[LENGTH({{rotate}})]\n{{quality}}\nEO_3c61[LENGTH({{quality}})]\n{{colour}}\nEO_b1f7[LENGTH({{colour}})]\nCONVERT_5d1a",
         properties  => {
             "input"   => {type => "string", description => "The picture to read"},
             "output"  => {type => "string", description => "The file to write: its name ends in .png, .jpg, .gif, .webp, .bmp or .tif, and that sets the format"},
@@ -4961,6 +4971,7 @@ EOb
             "crop"    => {type => "string", description => "The part to keep, as WIDTHxHEIGHT+X+Y, such as 800x600+0+0; empty for none"},
             "rotate"  => {type => "string", description => "90, 180 or 270 degrees clockwise; empty for none"},
             "quality" => {type => "string", description => "From 1 to 100, for jpg and webp; empty for the default"},
+            "colour"  => {type => "string", description => "gray (black and white) or sepia; empty to keep the colours. Nothing else changes the colours"},
         },
         required => ["input", "output"],
         # only where the ImageMagick program is installed
@@ -5266,7 +5277,60 @@ our %WRITES = (write => 'path', convert => 'output', generate_image => 'output',
 # names no file, or the file is not there (outside the workspace, or gone). What the page offers for
 # download (and shows, for a picture). A generated file's name is the one its result gives ("wrote
 # NAME: ..."), since a name already taken gets another (see free_name); the others are the arguments.
-our %NAMED_BY_RESULT = (generate_image => 1, speech => 1, generate_audio => 1);
+our %NAMED_BY_RESULT = (generate_image => 1, speech => 1, generate_audio => 1, convert => 1);
+
+# the version of a workspace file, for the page's address of it: a changed file gets a new address, so
+# the browser does not keep showing the old picture
+sub file_version {
+    my ($base, $rel) = @_;
+    return '' unless length($base // '') and length($rel // '');
+    my @st = stat("$base/$rel");
+    return @st ? "$st[9]-$st[7]" : '';
+}
+
+# the files a bash call made: the "[aicli file] NAME" lines that handle_llm_response adds to its result
+# (the model sees them as well)
+sub result_files {
+    my ($r) = @_;
+    return map {m/\A\[aicli file\] (.+)\z/ ? $1 : ()} split /\n/, ($r // '');
+}
+
+sub without_result_files {
+    my ($r) = @_;
+    (my $t = $r // '') =~ s/\n\[aicli file\] [^\n]*//g;
+    return $t;
+}
+
+# The pictures and sounds of the workspace, not hidden, not links: {path => version}. Two scans tell the
+# files a bash call changed (picture_changes). undef when there are too many files to look at.
+our $PICTURES_MAX = 5000;
+sub workspace_pictures {
+    my ($base) = @_;
+    return unless length($base // '');
+    utils::load_cpan("File::Find");
+    my (%now, $n, $many);
+    $n = 0;
+    File::Find::find({
+        no_chdir   => 1,
+        preprocess => sub { grep {!/\A\./} @_ },
+        wanted     => sub {
+            return if $many;
+            if (++$n > $PICTURES_MAX) { $many = 1; return }
+            return unless -f $_ and !-l $_ and $_ =~ m/\.(?:png|jpe?g|gif|webp|bmp|tiff?|wav|mp3|ogg)\z/i;
+            (my $rel = $_) =~ s{\A\Q$base\E/}{};
+            $now{$rel} = file_version($base, $rel);
+        },
+    }, $base);
+    return if $many;
+    return \%now;
+}
+
+# the picture and sound files that are new or changed between two scans (see workspace_pictures)
+sub picture_changes {
+    my ($before, $after) = @_;
+    return () unless $before and $after;
+    return grep {!defined $before->{$_} or $before->{$_} ne $after->{$_}} sort keys %$after;
+}
 sub offered_file {
     my ($k, $args, $base, $result) = @_;
     return unless $WRITES{$k} and ref($args) eq 'ARRAY' and length($base // '');
@@ -5606,6 +5670,8 @@ sub _magick_args {
     push @cmd, '-rotate', $o{rotate} if length($o{rotate} // '');
     push @cmd, '-resize', ($o{width} // '').'x'.($o{height} // '').'>'
         if length($o{width} // '') or length($o{height} // '');
+    push @cmd, '-colorspace', 'Gray' if ($o{colour} // '') eq 'gray';
+    push @cmd, '-sepia-tone', '80%' if ($o{colour} // '') eq 'sepia';
     push @cmd, '-strip';
     push @cmd, '-quality', $o{quality} if length($o{quality} // '');
     push @cmd, $o{out};
@@ -5663,7 +5729,7 @@ our %CONVERT_OUT = map {($_ => 1)} qw(png jpg jpeg gif webp bmp tif tiff);
 # convert: a picture written as another size, crop, turn or format (see the table)
 sub convert_5d1a {
     my ($t_args) = @_;
-    my ($in, $out, $w, $h, $crop, $rot, $q) = map {utils::trim($t_args->[$_] // '')} 0 .. 6;
+    my ($in, $out, $w, $h, $crop, $rot, $q, $colour) = map {utils::trim($t_args->[$_] // '')} 0 .. 7;
     die "no picture to read is given\n" unless length $in;
     die "no file to write is given\n" unless length $out;
     die "ImageMagick is not installed (convert or magick)\n" unless _magick();
@@ -5691,13 +5757,16 @@ sub convert_5d1a {
         if length $crop and $crop !~ m/\A\d{1,5}x\d{1,5}\+\d{1,5}\+\d{1,5}\z/;
     die "rotate must be 90, 180 or 270 degrees: $rot\n"
         if length $rot and $rot !~ m/\A(?:90|180|270)\z/;
+    $colour = lc $colour;
+    die "colour must be gray (black and white) or sepia: $colour\n"
+        if length $colour and $colour !~ m/\A(?:gray|sepia)\z/;
 
     # ImageMagick writes a temp file next to the output; it replaces the output
     # only when the whole thing worked
     (my $tmp = $dest) =~ s{([^/]*)\z}{.aicli-convert-$$-$1};
     my $run = eval {
         _magick_run(in => _magick_name($src), out => _magick_name($tmp),
-            width => $w, height => $h, crop => $crop, rotate => $rot, quality => $q);
+            width => $w, height => $h, crop => $crop, rotate => $rot, quality => $q, colour => $colour);
     };
     if($@){
         my $err = $@;
@@ -5705,16 +5774,20 @@ sub convert_5d1a {
         die $err;
     }
     my $publish = sub {
-        my $ok = eval {
+        my ($to, $ok);
+        $ok = eval {
             -f $tmp or die "ImageMagick wrote no picture\n";
-            _changing($dest, 'convert', undef, binary => 1);
-            rename($tmp, $dest) or die "cannot write $dest: $!\n";
+            # a file of that name already there stays as it is: the picture goes to the first free name
+            $to = _path(free_name($out));
+            die "can not write $to: it is a link or a directory\n" if -l $to or -d $to;
+            _changing($to, 'convert', undef, binary => 1);
+            rename($tmp, $to) or die "cannot write $to: $!\n";
             1;
         };
         my $err = $@;
         unlink $tmp if -e $tmp;
         die $err unless $ok;
-        return "[OK] converted $in to $dest (".(-s $dest)." bytes)";
+        return "wrote $to: converted $in to $to (".(-s $to)." bytes)";
     };
     return $publish->() unless ref($run) eq 'tools::job';
     # a sub-agent: the program runs in the loop, and the rest when it is over

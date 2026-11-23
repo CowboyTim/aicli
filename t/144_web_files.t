@@ -187,10 +187,10 @@ my %theirs = ('x-aicli-gate' => 'gate-files', 'x-aicli-account' => $B);
     ));
     my @tools = grep {$_->{role} eq 'tool'} @{ui::_history_data($name)->{messages}};
     is(scalar(@tools), 5, "five calls in the history");
-    is_deeply($tools[0]{files}, ['out/shot.png'], "a picture the call wrote is listed with it");
+    is_deeply([map {$_->{path}} @{$tools[0]{files}}], ['out/shot.png'], "a picture the call wrote is listed with it");
     ok(!$tools[1]{files}, "a file that is gone is not listed");
     ok(!$tools[2]{files}, "a failed call lists no file, though the name exists");
-    is_deeply($tools[3]{files}, ['notes.txt'], "a write lists its file");
+    is_deeply([map {$_->{path}} @{$tools[3]{files}}], ['notes.txt'], "a write lists its file");
     ok(!exists $tools[4]{files}, "a call with no result yet lists none");
     is(ui::_history_data($name)->{session}, 'mine', "the history names its session (the page's links need it)");
 }
