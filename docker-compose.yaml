@@ -88,6 +88,8 @@ services:
       # the image service of the generate_image tool (its address with the /rocm prefix; empty: no tool). Compose reads
       # it from the shell or .env (deploy.sh moves it there from .agent.env), see deploy.sh
       AI_IMAGE_URL: ${AI_IMAGE_URL:-}
+      # the speech service of the speech tool (its address with the /rocm prefix; empty: no tool). As AI_IMAGE_URL
+      AI_SPEECH_URL: ${AI_SPEECH_URL:-}
       UID: ${BROKER_UID:-1000}
       GID: ${BROKER_GID:-1000}
       HOME: /workspace

@@ -4798,6 +4798,20 @@ EOb
         # only with the image service to ask (AI_IMAGE_URL: its address, with the /rocm prefix where nginx serves it)
         available => sub {length($::ORIG_ENV{AI_IMAGE_URL} // '') ? 1 : 0},
     },
+    speech => {
+        description => "speak a text with the local speech model (Qwen3-TTS) in a voice: the WAV file is written to the output name in the workspace. The voice is the name of a voice the server has; the same text, voice, language and seed give the same audio",
+        syntax => "///SPEECH_7e2b+EO_a0c3+EO_4f81+EO_d26e+EO_19b7+EO_c5f0\n{{text}}\nEO_a0c3[LENGTH({{text}})]\n{{voice}}\nEO_4f81[LENGTH({{voice}})]\n{{output}}\nEO_d26e[LENGTH({{output}})]\n{{language}}\nEO_19b7[LENGTH({{language}})]\n{{seed}}\nEO_c5f0[LENGTH({{seed}})]\nSPEECH_7e2b",
+        properties  => {
+            "text"     => {type => "string", description => "What to say"},
+            "voice"    => {type => "string", description => "The name of the voice (a voice directory of the server)"},
+            "output"   => {type => "string", description => "The WAV file to write in the workspace; empty for speech_<voice>.wav"},
+            "language" => {type => "string", description => "A language name such as english; empty for english"},
+            "seed"     => {type => "string", description => "A whole number; empty for 0"},
+        },
+        required => ["text", "voice"],
+        # only with the speech service to ask (AI_SPEECH_URL: its address, with the /rocm prefix where nginx serves it)
+        available => sub {length($::ORIG_ENV{AI_SPEECH_URL} // '') ? 1 : 0},
+    },
     list => {
         description => "list a directory: type (d, f, l), size and name of every entry",
         syntax => "///LIST_a41d+EO_6c08\n{{path}}\nEO_6c08[LENGTH({{path}})]\nLIST_a41d",
@@ -5143,6 +5157,41 @@ sub generate_image_3a7c {
     }, url => "$base/v1/images/generations", method => 'post', data => $data, proxy => $proxy,
        timeout => $::ORIG_ENV{AI_IMAGE_TIMEOUT} // 3600, max_size => 64_000_000, follow => 0,
        headers => ["Content-Type: application/json", "Accept: application/json", "User-Agent: aicli"]);
+}
+
+# speech: text to speech through the rocm-inference service (AI_SPEECH_URL): POST /v1/audio/speech, the WAV written to the
+# workspace. The server answers with the audio itself (not JSON).
+sub speech_7e2b {
+    my ($t_args) = @_;
+    my ($text, $voice, $out, $lang, $seed) = map {utils::trim($t_args->[$_] // '')} 0 .. 4;
+    die "no text\n" unless length $text;
+    die "no voice: give the name of a voice the server has\n" unless length $voice;
+    die "the voice name has letters, digits, '-', '_' and '.' only\n" unless $voice =~ m/\A[A-Za-z0-9_.-]+\z/ && $voice !~ m/\A\.{1,2}\z/;
+    my $base = $::ORIG_ENV{AI_SPEECH_URL} // '';
+    die "no speech service is set up (AI_SPEECH_URL)\n" unless length $base;
+    $base =~ s{/+\z}{};
+    $out = "speech_$voice.wav" unless length $out;
+    die "the output must be a .wav file\n" unless $out =~ m/\.wav\z/i;
+    die "seed: a whole number\n" if length $seed and $seed !~ m/\A\d+\z/;
+    my %body = (input => $text, voice => $voice, response_format => 'wav');
+    $body{language} = $lang if length $lang;
+    $body{seed} = $seed + 0 if length $seed;
+    my $path = _path($out);
+    my $data = JSON::XS->new->utf8->canonical->encode(\%body);
+    my $proxy = $::ORIG_ENV{AI_SPEECH_PROXY} // '';   # the service is near: no proxy, unless AI_SPEECH_PROXY says so
+    $proxy = '' if $proxy =~ m/^(?:none|off|direct|no)$/i;
+    return _http(sub {
+        my ($r) = @_;
+        _http_check($r);
+        my $wav = $r->{body} // '';
+        die "the speech service sent no audio\n" unless length $wav;
+        open my $fh, '>:raw', $path or die "cannot write $out: $!\n";
+        print {$fh} $wav or die "cannot write $out: $!\n";
+        close $fh or die "cannot write $out: $!\n";
+        return ai::to_bytes("wrote $out: ".length($wav)." bytes of WAV (voice $voice)\n");
+    }, url => "$base/v1/audio/speech", method => 'post', data => $data, proxy => $proxy,
+       timeout => $::ORIG_ENV{AI_SPEECH_TIMEOUT} // 3600, max_size => 268_435_456, follow => 0,
+       headers => ["Content-Type: application/json", "Accept: audio/wav", "User-Agent: aicli"]);
 }
 
 # agent: a sub-agent works on the task, see package agent. (Several calls in

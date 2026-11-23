@@ -122,6 +122,16 @@ else
     v=$(pick "$agent_f" AI_IMAGE_URL)
     [ -n "$v" ] && set_key "$env_f" AI_IMAGE_URL "$v"
 fi
+# the speech service of the speech tool (AI_SPEECH_URL, with the /rocm prefix). As the recognizer above: compose
+# reads it from the shell or .env, so a URL that .agent.env has moves to .env. AI_SPEECH_URL= (set and empty) clears it:
+# no speech tool.
+if [ "${AI_SPEECH_URL+x}" = x ] && [ -z "$AI_SPEECH_URL" ]; then
+    del_key "$env_f" AI_SPEECH_URL
+    del_key "$agent_f" AI_SPEECH_URL
+else
+    v=$(pick "$agent_f" AI_SPEECH_URL)
+    [ -n "$v" ] && set_key "$env_f" AI_SPEECH_URL "$v"
+fi
 set_key "$agent_f" AI_MODEL "$(pick "$agent_f" AI_MODEL "Qwen3.5-4B-ROCMFP4")"
 
 if [ "${AICLI_ENV_ONLY:-0}" = 1 ]; then

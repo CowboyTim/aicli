@@ -938,6 +938,20 @@ Set to 1 to offer the B<image> tool. Only for a model that takes pictures: a
 text model refuses the request, and the picture then stays in the conversation.
 Default: off.
 
+=item B<speech>
+
+Speak a text with the local speech model (Qwen3-TTS, the server's C<--models-dir>
+or C<--tts>): the WAV file is written to the output name in the workspace. Arguments:
+the text, the voice (the name of a voice directory of the server), the output
+(default C<speech_<voice>.wav>), the language (default english) and the seed. Only
+with B<AI_SPEECH_URL> set.
+
+=item B<AI_SPEECH_URL>
+
+The address of the speech service for the B<speech> tool, with the prefix
+where its nginx serves it (the same host as B<AI_IMAGE_URL>). The tool is only
+offered when it is set.
+
 =item B<AI_IMAGE_URL>
 
 The address of the image service for the B<generate_image> tool, with the
