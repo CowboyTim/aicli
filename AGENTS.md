@@ -88,7 +88,11 @@ These are requirements, not suggestions.
   is sent, the model count, the listener's address): written by the web
   interface (`--ui`) and with `DEBUG`, not by the terminal chat at its start
   (`t/15_logging_privileges.t` keeps that stderr quiet). `log::info` is only
-  with `DEBUG` or `--debug`. `ai.pl -p` in a pipe must give the answer
+  with `DEBUG` or `--debug`. Every model request is stamped (`ai::request_stamp()`:
+  UTC time, the user, a checksum of the body) in its `REQUEST` lines, and the
+  retries of a web turn are in that log, not on the page (`ai::chat_completion`);
+  the page's error for a failed request ends with the stamp of its last try.
+  `ai.pl -p` in a pipe must give the answer
   and nothing else.
 - **Tests**: `prove -I. t` must pass. Add tests with every change, the LLM is
   scripted (`t/lib/TestAI.pm`) or faked (`t/lib/FakeLLM.pm`).
@@ -660,6 +664,7 @@ Other APIs are reached through an OpenAI compatible gateway, such as LiteLLM or 
 | `t/136_api_token.t` | the API tokens of the services (`/auth/api/token`, aud=flm): issued from a login only, verified with `?aud=flm` (a login refused for it, an API token refused for the page), no renewal, a user that is not an account, a token past its time, the end at logout |
 | `t/137_agent_defaults.t` | the enrollment defaults: the name is a random UUID version 4 (each new), the tags are the programs' names (a path's last part, short lower-case words, each once) |
 | `t/144_web_files.t` | the files of a session on the page: `GET /file` (a picture or a sound inline, the rest an attachment, sandboxed; a login sees the projects of its own account only; a link or `..` out of the project, an absolute path, a bad session name and a folder refused; the size limit; only GET), the history's `files` (a call that wrote a file still there, not a failed call, not one without its result), the master's `file` event (the active session only, with its session) |
+| `t/150_request_stamp.t` | the request stamp (UTC time, the user: the project's account or `local`, the checksum: SHA-256 of the body, the same body the same checksum); in web mode the retries are in the log stamped and not events for the page; the page's error for a failed request names the request by its stamp |
 | `t/149_model_timeout.t` | the start with a model server that takes the connection and never answers: the model list and the context time out (`ai::LIST_TIMEOUT`), the error says so, the start goes on with no models |
 | `t/147_bash_pictures.t` | a bash call on the web page: the pictures and sounds it made or changed are offered (a file event with a version, the model's result lists them, the history has them), a change to anything else and a failed call offer nothing |
 | `t/146_generate_audio.t` | the generate_audio tool: the WAV written whole and journaled, a name taken goes to the next free one, the request (the seconds, steps and seed, the defaults), the refusals (no request made), a non-WAV answer leaves no file, the file offered |

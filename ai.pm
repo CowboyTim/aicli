@@ -12,6 +12,7 @@ use MIME::Base64 ();
 use Errno;
 use JSON::XS ();
 use Time::HiRes ();
+use Digest::SHA ();
 
 BEGIN {
     # canonical: the same data is always the same bytes, in requests and files
@@ -1536,6 +1537,23 @@ sub web_note {
     return;
 }
 
+# Who a request is for: the account of the session's project in the web interface (the project is
+# account/project, and the account is the user's ID), else 'local' (the terminal chat).
+sub request_user {
+    my $project = session_project($AI_SESSION // '');
+    return length($project) ? (split m{/}, $project)[0] : 'local';
+}
+
+# A request to the model, stamped for the log: when (UTC), for whom, and a checksum of the body sent. Someone
+# who asks about an error gives the stamp, and the log finds the request. The same body has the same checksum;
+# the time tells the tries apart.
+sub request_stamp {
+    my ($body) = @_;
+    my @t = gmtime;
+    return sprintf("%04d-%02d-%02dT%02d:%02d:%02dZ user=%s sum=%s", $t[5] + 1900, $t[4] + 1, @t[3, 2, 1, 0],
+        request_user(), substr(Digest::SHA::sha256_hex($body // ''), 0, 16));
+}
+
 sub request_completion {
     my ($msgs, %o) = @_;
     my $req = build_request($msgs);
@@ -1546,9 +1564,11 @@ sub request_completion {
 
     STDOUT->autoflush(1);
     STDERR->autoflush(1);
-    my $info = {t_start => Time::HiRes::time()};
+    my $stamp = request_stamp($req);
+    my $attempt = ($o{attempt} // 0) + 1;
+    my $info = {t_start => Time::HiRes::time(), ref => $stamp};
     my $where = ($AI_PROVIDER // '').'/'.($SESSION_MODEL // '<server default>');
-    web_note("request to $where at $AI_URL");
+    log::notice("REQUEST $stamp attempt $attempt to $where at $AI_URL");
     # while it waits, a line now and then: a model that is loading takes a while
     my ($waited, $ended, $tick) = (0, 0, undef);
     $tick = sub {
@@ -1607,7 +1627,7 @@ sub request_completion {
         return ($st->{content}, "interrupted", $info);
     }
     my ($err, $c) = completion_result($st, !defined $r, $utils::http_error, $utils::http_code, \%utils::http_headers);
-    web_note(sprintf("answer from %s: %s, %d characters, %.1fs", $where,
+    log::notice(sprintf("REQUEST %s attempt %d: %s, %d characters, %.1fs", $stamp, $attempt,
         ($err ? "error: ".(ref($err) ? 'see the log' : $err) : 'ok'),
         length($st->{content} // ''), $info->{t_end} - $info->{t_start}));
     $info->{$_} = $c->{$_} for keys %$c;
@@ -2239,7 +2259,7 @@ sub chat_completion {
         my $attempt = 0;
         while(1){
             @msgs = load_messages();
-            ($resp, $err, $info) = request_completion(\@msgs);
+            ($resp, $err, $info) = request_completion(\@msgs, attempt => $attempt);
             last unless defined $err;
             last if utils::aborted();
             last if length(strip_thinking($resp) =~ s/\A\s+//r); # part of an answer: keep it
@@ -2252,10 +2272,13 @@ sub chat_completion {
                 $err .= sprintf(" (asked to wait %ds, more than AI_RETRY_MAX_WAIT=%d)", $wait, $max_wait);
                 last;
             }
-            print "${colors::red_color}$err${colors::reset_color}\n";
-            printf "%s[retry %d of %d in %.1fs, ctrl-C to stop]%s\n", $colors::cyan_color, $attempt, $retries, $wait, $colors::reset_color;
-            emit(failed => {text => web_text($err)}); # the web page: the same, as text
-            emit(status => {text => sprintf("retry %d of %d in %.1fs, ctrl-C to stop", $attempt, $retries, $wait)});
+            if ($EVENT_SINK) {
+                # the web page does not show the retries: the server's log does, with the request's stamp
+                log::notice(sprintf("retry %d of %d in %.1fs after: %s", $attempt, $retries, $wait, web_text($err)));
+            } else {
+                print "${colors::red_color}$err${colors::reset_color}\n";
+                printf "%s[retry %d of %d in %.1fs, ctrl-C to stop]%s\n", $colors::cyan_color, $attempt, $retries, $wait, $colors::reset_color;
+            }
             utils::wait_abortable($wait)
                 or last;
         }
@@ -2288,7 +2311,8 @@ sub chat_completion {
             if(utils::aborted()){
                 print "${colors::red_color}[interrupted]${colors::reset_color}\n";
             } else {
-                log::error(${colors::red_color}.$err.${colors::reset_color});
+                # the stamp of the last try: the page's error can be looked up in the server's log
+                log::error(${colors::red_color}.$err.(($info // {})->{ref} ? " (request $info->{ref})" : '').${colors::reset_color});
             }
             last;
         }
@@ -4270,7 +4294,9 @@ sub request {
         my ($kind) = @_;
         $self->{activity} = $kind eq 'think' ? 'thinking' : 'answering';
     });
-    my $info = {t_start => Time::HiRes::time(), streamed => 0};
+    my $stamp = ai::request_stamp($json);
+    log::notice("REQUEST $stamp attempt ".(($self->{attempt} // 0) + 1)." sub-agent to ".($ai::AI_URL // ''));
+    my $info = {t_start => Time::HiRes::time(), streamed => 0, ref => $stamp};
     loop::http(
         method  => 'post',
         url     => $ai::AI_URL,
@@ -4290,6 +4316,8 @@ sub request {
             $info->{t_end} = Time::HiRes::time();
             $info->{usage} = $st->{usage};
             my ($err, $c) = ai::completion_result($st, defined $req->{error}, $req->{error}, $req->{code}, $req->{headers});
+            log::notice(sprintf("REQUEST %s sub-agent: %s, %.1fs", $stamp, ($err ? "error: $err" : 'ok'),
+                Time::HiRes::time() - $info->{t_start}));
             $info->{$_} = $c->{$_} for keys %$c;
             $info->{tool_calls} = ai::stream_tool_calls($st);
             $info->{finish} = $st->{finish_reason}; # why the model stopped, for a reply with nothing in it

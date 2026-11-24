@@ -494,6 +494,14 @@ tried again, `AI_RETRIES` times, waiting 2s, 4s, 8s, ... with jitter
 errors, and errors after part of an answer arrived, are shown and the chat goes
 on. Ctrl-C ends a wait.
 
+In the web interface the retries and the request lines are not on the page:
+they are in the server's log (`docker compose logs agent`). Every request to the
+model has a `REQUEST` line with its stamp: the UTC time, the user (the account
+of the session's project, `local` in the terminal chat) and a checksum (the first
+16 hex digits of the SHA-256 of the request body). The same body has the same
+checksum, so the time tells the tries apart. When a request fails for good, the
+page's error ends with the stamp of its last try, to quote when asking about it.
+
 ### Token usage and context
 
 After each answer a line shows the tokens of the request, the total of the
