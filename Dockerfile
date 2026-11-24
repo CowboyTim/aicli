@@ -66,12 +66,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # image conversion and media: ImageMagick (the convert tool and the image tool), ffmpeg,
 # the perl tool's modules, PDL (arrays, FFT) and Audio::Wav (WAV files), lame (an MP3
-# encoder), the perl docs, qrencode (the QR code of the web interface), and the pipewire
+# encoder), the perl docs, the QR codes (qrencode writes them, the qr_encode tool and the web
+# interface's login code; zbarimg, from zbar-tools, reads them, the qr_decode tool), and the pipewire
 # recorder (voice)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         imagemagick ffmpeg \
         pdl libaudio-wav-perl lame perl-doc \
-        qrencode pipewire-bin \
+        qrencode zbar-tools pipewire-bin \
+        tesseract-ocr tesseract-ocr-eng tesseract-ocr-nld tesseract-ocr-deu tesseract-ocr-fra \
     && rm -rf /var/lib/apt/lists/*
 
 COPY ai.pl ai.pm md.pm remote_agent.pm remote_hub.pm tui.pm utils.pm ui.pm worker.pm /

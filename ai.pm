@@ -762,15 +762,22 @@ sub handle_llm_response {
             ? {role => 'tool', tool_call_id => $c->{id}, content => to_text($had_error // $result // '')}
             : {role => 'user', content => to_text($tool_response)};
         my $changed = scalar(@tools::CHANGES);
+        # a result that is not text is shown as its size, not as its bytes (the model still gets all of it)
+        my $note = $had_error ? undef : binary_note(tools::without_result_files($result // ''));
         if(!$brief){
-            &{$printer_sub}("${colors::green_color}$tool_response${colors::reset_color}\n");
+            &{$printer_sub}(defined $note ? "${colors::cyan_color}  $note${colors::reset_color}\n"
+                : "${colors::green_color}$tool_response${colors::reset_color}\n");
         } elsif($had_error){
             my $e = $had_error =~ s/^\[ERROR\] (?:problem running tool '\w+': )?//r;
             # an error is read whole: the web page shows more lines of it than of a result
             $say_tool->($colors::red_color.clip_lines($e, $EVENT_SINK ? 40 : ($::ORIG_ENV{AI_TOOL_LINES} // 8), "  ").$colors::reset_color, 'result');
         } elsif(!$changed or !($::ORIG_ENV{AI_SHOW_DIFF} // 1)){
             # (a file change shows its diff instead)
-            $say_tool->($colors::green_color.clip_lines(tools::without_result_files($result), $::ORIG_ENV{AI_TOOL_LINES} // 8, "  ").$colors::reset_color, 'result');
+            if(defined $note){
+                $say_tool->($colors::cyan_color."  $note".$colors::reset_color, 'result');
+            } else {
+                $say_tool->($colors::green_color.clip_lines(tools::without_result_files($result), $::ORIG_ENV{AI_TOOL_LINES} // 8, "  ").$colors::reset_color, 'result');
+            }
         }
         show_changes($printer_sub == $say ? $say : undef); # the diff of a file change, then the time
         # how long the call took (not for one that did not run)
@@ -1275,6 +1282,24 @@ sub term_width {
 }
 
 # a text for the terminal: at most $max lines, lines cut to the width
+# A text the screen can show is UTF-8 without NUL bytes. A binary file is neither: its bytes are not text.
+sub is_binary {
+    my ($s) = @_;
+    return 0 unless defined $s;
+    my $b = utf8::is_utf8($s) ? Encode::encode('UTF-8', $s) : $s;
+    return 1 if index($b, "\0") >= 0;
+    return (eval {Encode::decode('UTF-8', $b, Encode::FB_CROAK() | Encode::LEAVE_SRC()); 0}) // 1;
+}
+
+# What the screen and the page show of a result that is not text: its size, not its bytes (the model still
+# gets all of it). undef for a text.
+sub binary_note {
+    my ($s) = @_;
+    return undef unless is_binary($s);
+    my $b = utf8::is_utf8($s) ? Encode::encode('UTF-8', $s) : $s;
+    return "not text, ".length($b)." bytes: not shown here";
+}
+
 sub clip_lines {
     my ($text, $max, $prefix) = @_;
     $prefix //= '';
@@ -5032,6 +5057,41 @@ EOb
         # only where the ImageMagick program is installed
         available => sub {tools::_magick() ? 1 : 0},
     },
+    qr_decode => {
+        description => "read the QR codes in a picture of the workspace (PNG, JPEG, GIF, BMP or TIFF): the text each code holds, one per line. A picture with no QR code is an error. A small or blurred one can be read after a convert to a bigger size, or to gray",
+        syntax => "///QR_DECODE_3b1e+EO_5a0c\n{{input}}\nEO_5a0c[LENGTH({{input}})]\nQR_DECODE_3b1e",
+        properties  => {
+            "input" => {type => "string", description => "The picture file in the workspace"},
+        },
+        required => ["input"],
+        # only where the zbarimg program (the zbar tools) is installed
+        available => sub {tools::_program('zbarimg') ? 1 : 0},
+    },
+    qr_encode => {
+        description => "write a text as a QR code: a PNG file in the workspace, which the page shows. The size is the pixels of each square of the code, from 1 to 32 (8 by default). The level is the error correction: L, M (the default), Q or H; the higher, the more of the code can be lost, and the bigger the code. A text of up to about 2900 bytes fits at level L, less at the higher levels",
+        syntax => "///QR_ENCODE_9d42+EO_6f21+EO_8e47+EO_2d9b+EO_c306\n{{text}}\nEO_6f21[LENGTH({{text}})]\n{{output}}\nEO_8e47[LENGTH({{output}})]\n{{size}}\nEO_2d9b[LENGTH({{size}})]\n{{level}}\nEO_c306[LENGTH({{level}})]\nQR_ENCODE_9d42",
+        properties  => {
+            "text"   => {type => "string", description => "What the code holds: a text, a link, a number"},
+            "output" => {type => "string", description => "The file to write in the workspace; its name ends in .png. Empty for qr.png; a name already taken gets the next free one"},
+            "size"   => {type => "string", description => "Pixels per square, from 1 to 32; empty for 8"},
+            "level"  => {type => "string", description => "Error correction: L, M, Q or H; empty for M"},
+        },
+        required => ["text"],
+        # only where the qrencode program is installed
+        available => sub {tools::_program('qrencode') ? 1 : 0},
+    },
+    ocr => {
+        description => "read the text in a picture of the workspace (PNG, JPEG, GIF, BMP or TIFF) with Tesseract OCR: printed text such as scans, screenshots and documents, the text in order. The language is a name such as eng (the default), nld, deu or fra, or several joined with +, such as eng+nld. The page mode (0 to 13) tells how the page is laid out: 3 (the default) finds the layout itself, 6 is one block of text, 7 one line, 11 scattered text. Handwriting and poor photos are read badly: for those, the image tool does better, where the model can see pictures",
+        syntax => "///OCR_b8e4+EO_1d7a+EO_9f3c+EO_e25b\n{{input}}\nEO_1d7a[LENGTH({{input}})]\n{{language}}\nEO_9f3c[LENGTH({{language}})]\n{{mode}}\nEO_e25b[LENGTH({{mode}})]\nOCR_b8e4",
+        properties  => {
+            "input"    => {type => "string", description => "The picture file in the workspace"},
+            "language" => {type => "string", description => "The language: eng (the default), nld, deu or fra, or several joined with +, such as eng+nld"},
+            "mode"     => {type => "string", description => "The page mode, from 0 to 13; empty for 3"},
+        },
+        required => ["input"],
+        # only where the tesseract program is installed (its language data for the language asked for, too)
+        available => sub {tools::_program('tesseract') ? 1 : 0},
+    },
     theme => {
         description => "change the colours of the web interface to one of: ".join(', ', @THEMES)
             .". A look only, for fun or for reading; nothing else changes. Only in the web interface",
@@ -5326,13 +5386,13 @@ sub audio_output {
 }
 
 # the tools that write a file as a whole, and the argument that names it
-our %WRITES = (write => 'path', convert => 'output', generate_image => 'output', speech => 'output', generate_audio => 'output');
+our %WRITES = (write => 'path', convert => 'output', generate_image => 'output', speech => 'output', generate_audio => 'output', qr_encode => 'output');
 
 # The workspace file a call of these tools wrote, relative to the workspace $base. undef when the call
 # names no file, or the file is not there (outside the workspace, or gone). What the page offers for
 # download (and shows, for a picture). A generated file's name is the one its result gives ("wrote
 # NAME: ..."), since a name already taken gets another (see free_name); the others are the arguments.
-our %NAMED_BY_RESULT = (generate_image => 1, speech => 1, generate_audio => 1, convert => 1);
+our %NAMED_BY_RESULT = (generate_image => 1, speech => 1, generate_audio => 1, convert => 1, qr_encode => 1);
 
 # the version of a workspace file, for the page's address of it: a changed file gets a new address, so
 # the browser does not keep showing the old picture
@@ -5630,6 +5690,164 @@ sub perl_d8d2 {
 sub read_c5a3 {
     my ($t_args) = @_;
     return _slurp(_path($t_args->[0]));
+}
+
+# the program of a QR tool on the PATH of the chat (zbarimg reads, qrencode writes); undef when it is not there
+sub _program {
+    my ($name) = @_;
+    my @dirs = grep {length} split m/:/, $::ORIG_ENV{PATH} // '';
+    my ($found) = grep {-f $_ and -x _} map {"$_/$name"} @dirs;
+    return $found;
+}
+
+# qr_decode: the text of the QR codes in a picture of the workspace (zbarimg). zbarimg exits 4 when it finds
+# no code: that is the answer "no code", and the tool says so.
+sub qr_decode_3b1e {
+    my ($t_args) = @_;
+    my $in = utils::trim($t_args->[0] // '');
+    die "no picture to read is given\n" unless length $in;
+    my $program = _program('zbarimg') or die "zbarimg is not installed (the zbar-tools package)\n";
+    my $src = _path($in);
+    die "not a file: $src\n" unless -f $src;
+    my $max = 52428800; # 50 MB, as convert
+    die sprintf("%s is %d bytes, more than 50 MB\n", $src, -s $src) if -s $src > $max;
+    die "not a picture zbarimg reads here (PNG, JPEG, GIF, BMP or TIFF): $src\n"
+        unless _picture_ok(_read_bytes($src, 16));
+    my $read = sub {
+        my ($out) = @_;
+        $out //= '';
+        $out =~ s/\n\z//;
+        die "no QR code found in $in\n" unless length $out;
+        return "QR code in $in:\n$out";
+    };
+    my $run = _run(sub {
+        exec {$program} 'zbarimg', '--quiet', '--raw', $src
+            or die "cannot exec zbarimg: $!\n";
+    }, exit_ok => [0, 4]);
+    return $read->($run) unless ref($run) eq 'tools::job';
+    my $inner = $run->{finish};
+    $run->{finish} = sub { return $read->($inner->(@_)) };
+    return $run;
+}
+
+# qr_encode: a text as a QR code, a PNG in the workspace (qrencode). The picture is written to a temp file next
+# to the output, which it replaces only when the whole thing worked. The text comes after "--", so a text that
+# starts with '-' is still a text.
+sub qr_encode_9d42 {
+    my ($t_args) = @_;
+    my $text = $t_args->[0] // '';
+    my ($out, $size, $level) = map {utils::trim($t_args->[$_] // '')} 1 .. 3;
+    die "no text to encode is given\n" unless length $text;
+    die "the text can not hold a NUL byte\n" if index($text, "\0") >= 0;
+    my $program = _program('qrencode') or die "qrencode is not installed (the qrencode package)\n";
+    $out = 'qr.png' unless length $out;
+    my $dest = _path($out);
+    my ($ext) = $dest =~ m/\.([A-Za-z0-9]+)\z/;
+    die "the output must end in .png: $dest\n" unless defined $ext and lc($ext) eq 'png';
+    die "can not write $dest: it is a link or a directory\n" if -l $dest or -d $dest;
+    $size = 8 unless length $size;
+    die "size must be from 1 to 32 pixels a square: $size\n"
+        unless $size =~ m/\A\d+\z/ and $size >= 1 and $size <= 32;
+    $level = length $level ? uc $level : 'M';
+    die "level must be L, M, Q or H: $level\n" unless $level =~ m/\A[LMQH]\z/;
+
+    (my $tmp = $dest) =~ s{([^/]*)\z}{.aicli-qr-$$-$1};
+    my $publish = sub {
+        my ($to, $ok);
+        $ok = eval {
+            -f $tmp or die "qrencode wrote no picture\n";
+            (_image_type(_read_bytes($tmp)) // '') eq 'image/png' or die "qrencode wrote no PNG\n";
+            # a file of that name already there stays as it is: the code goes to the first free name
+            $to = _path(free_name($out));
+            die "can not write $to: it is a link or a directory\n" if -l $to or -d $to;
+            _changing($to, 'qr_encode', undef, binary => 1);
+            rename($tmp, $to) or die "cannot write $to: $!\n";
+            1;
+        };
+        my $err = $@;
+        unlink $tmp if -e $tmp;
+        die $err unless $ok;
+        return "wrote $to: a QR code of ".length($text)." bytes at level $level, $size pixels a square (".(-s $to)." bytes)";
+    };
+    my $run = eval {
+        _run(sub {
+            exec {$program} 'qrencode', '-o', $tmp, '-t', 'PNG', '-s', $size, '-l', $level, '--', $text
+                or die "cannot exec qrencode: $!\n";
+        });
+    };
+    if($@){
+        my $err = $@;
+        unlink $tmp;
+        die $err;
+    }
+    return $publish->() unless ref($run) eq 'tools::job';
+    my $inner = $run->{finish};
+    $run->{finish} = sub {
+        eval {$inner->(@_)};
+        if($@){
+            my $err = $@;
+            unlink $tmp;
+            die $err;
+        }
+        return $publish->();
+    };
+    return $run;
+}
+
+# ocr: the text of a picture of the workspace (tesseract, from the tesseract-ocr package). The program writes its
+# text to a file in the temp directory: that file is read and removed. What the program says on stderr is shown
+# only when it fails.
+sub ocr_b8e4 {
+    my ($t_args) = @_;
+    my $in   = utils::trim($t_args->[0] // '');
+    my $lang = utils::trim($t_args->[1] // '');
+    my $mode = utils::trim($t_args->[2] // '');
+    die "no picture to read is given\n" unless length $in;
+    my $program = _program('tesseract') or die "tesseract is not installed (the tesseract-ocr package)\n";
+    $lang = 'eng' unless length $lang;
+    die "the language is a name such as eng, or several joined with +, such as eng+nld: $lang\n"
+        unless $lang =~ m/\A[a-z_]{2,20}(?:\+[a-z_]{2,20})*\z/;
+    $mode = 3 unless length $mode;
+    die "the page mode must be a number from 0 to 13: $mode\n"
+        unless $mode =~ m/\A\d+\z/ and $mode <= 13;
+    my $src = _path($in);
+    die "not a file: $src\n" unless -f $src;
+    my $max = 52428800; # 50 MB, as convert
+    die sprintf("%s is %d bytes, more than 50 MB\n", $src, -s $src) if -s $src > $max;
+    die "not a picture tesseract reads here (PNG, JPEG, GIF, BMP or TIFF): $src\n"
+        unless _picture_ok(_read_bytes($src, 16));
+    my $base = ai::tmpdir()."/aicli-ocr-$$-".time; # tesseract adds .txt to it
+    my $read = sub {
+        my $txt = "$base.txt";
+        my $text = -f $txt ? _slurp($txt) : '';
+        unlink $txt;
+        $text =~ s/\s+\z//;
+        die "no text found in $in\n" unless length $text;
+        return "text of $in ($lang):\n$text";
+    };
+    my $run = eval {
+        _run(sub {
+            exec {$program} 'tesseract', $src, $base, '-l', $lang, '--psm', $mode
+                or die "cannot exec tesseract: $!\n";
+        });
+    };
+    if($@){
+        my $err = $@;
+        unlink "$base.txt";
+        die $err;
+    }
+    return $read->() unless ref($run) eq 'tools::job';
+    my $inner = $run->{finish};
+    $run->{finish} = sub {
+        my $out = eval {$inner->(@_)};
+        if($@){
+            my $err = $@;
+            unlink "$base.txt";
+            die $err;
+        }
+        return $read->();
+    };
+    return $run;
 }
 
 # a picture for the model: read in the workspace, checked to be a format the
@@ -6277,7 +6495,9 @@ sub _changing {
     my ($file, $tool, $new, %o) = @_;
     my $old = (-f $file) ? _slurp($file) : undef;
     _journal(op => 'write', tool => $tool, path => $file, old => $old);
-    push @CHANGES, {tool => $tool, path => $file, old => $old, new => $new, binary => $o{binary}};
+    # a change to a binary file (old or new) has no diff of its bytes: "a binary file" is shown instead
+    push @CHANGES, {tool => $tool, path => $file, old => $old, new => $new,
+        binary => ($o{binary} or ai::is_binary($old) or ai::is_binary($new)) ? 1 : 0};
     return;
 }
 
