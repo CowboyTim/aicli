@@ -41,7 +41,7 @@ our $MAX_QUEUE   = 20;        # messages waiting at once
 our $MAX_PENDING = 1_000_000; # bytes not yet sent to a client before it is dropped
 
 my %STATUS = (
-    200 => 'OK', 202 => 'Accepted', 303 => 'See Other', 400 => 'Bad Request',
+    200 => 'OK', 201 => 'Created', 202 => 'Accepted', 303 => 'See Other', 400 => 'Bad Request',
     401 => 'Unauthorized', 403 => 'Forbidden', 404 => 'Not Found',
     405 => 'Method Not Allowed', 413 => 'Payload Too Large', 415 => 'Unsupported Media Type',
     429 => 'Too Many Requests', 500 => 'Internal Server Error', 502 => 'Bad Gateway',
@@ -1262,6 +1262,9 @@ sub _close {
 
 # a recording comes to POST /voice, with a bigger limit than the JSON bodies
 my $p_is_voice = sub { my ($m, $path) = @_; return $m eq 'POST' && $path =~ m{^/voice(?:\?|$)} };
+# a file for the project's uploads/ comes to POST /upload, with its own limit: any kind of file
+our $MAX_UPLOAD = 50_000_000; # bytes of an uploaded file
+my $p_is_upload = sub { my ($m, $path) = @_; return $m eq 'POST' && $path =~ m{^/upload(?:\?|$)} };
 
 sub _feed {
     my ($cn, $bytes) = @_;
@@ -1282,7 +1285,7 @@ sub _feed {
     return _respond($cn, 501, 'text/plain', "no chunked request bodies\n") if exists $h{'transfer-encoding'};
     my $cl = $h{'content-length'} // 0;
     return _respond($cn, 400, 'text/plain', "bad content-length\n") unless $cl =~ m/^\d+$/;
-    my $cap = $p_is_voice->($m, $path) ? $MAX_VOICE : $MAX_BODY;
+    my $cap = $p_is_voice->($m, $path) ? $MAX_VOICE : $p_is_upload->($m, $path) ? $MAX_UPLOAD : $MAX_BODY;
     return _respond($cn, 413, 'text/plain', "body too big\n") if $cl > $cap;
     my $start = $i + 4;
     return if length($cn->{in}) < $start + $cl; # the rest of the body is still coming
@@ -1388,6 +1391,19 @@ sub _file {
         "Content-Security-Policy: sandbox");
 }
 
+# the name of an uploaded file, as it is kept in uploads/: its last part, with the characters of a normal name
+# (any extension goes); undef when nothing is left
+sub _upload_name {
+    my ($n) = @_;
+    return undef unless defined $n;
+    $n =~ s{\A.*[/\\]}{}s;
+    $n =~ s/[^A-Za-z0-9._ -]/_/g;
+    $n =~ s/\A[. ]+//;
+    $n =~ s/\s+\z//;
+    $n = substr($n, 0, 200) if length($n) > 200;
+    return length($n) ? $n : undef;
+}
+
 sub _dispatch {
     my ($cn, $m, $path, $h, $body) = @_;
     my ($p, $q) = split /\?/, $path, 2;
@@ -1477,6 +1493,33 @@ sub _dispatch {
         my $q = _to_active({model => $id});
         return _json($cn, 503, {error => "no session to switch the model of"}) unless defined $q;
         return _json($cn, 202, {queued => $q});
+    }
+    # a file for the active session's project, kept in its uploads/ (a new name when that one is taken): the
+    # page names it in the next message, and the model reads it from the project
+    if($p eq '/upload' and $m eq 'POST'){
+        return _json($cn, 403, {error => 'the session of the page belongs to another account, or there is none'})
+            unless _owns($acct, _active_rel());
+        return _json($cn, 503, {error => 'no session to put the file in'}) unless defined $active;
+        my %a = _query($q);
+        my $name = _upload_name($a{name});
+        return _json($cn, 400, {error => 'a file name is wanted'}) unless defined $name;
+        my $root = _project_dir($active);
+        my $dir  = "$root/uploads";
+        return _json($cn, 403, {error => 'uploads is a link, not a folder'}) if -l $dir;
+        mkdir $dir unless -d $dir;
+        my $base = eval {tools::_resolve($root)} // '';
+        my $real = eval {tools::_resolve($dir)} // '';
+        return _json($cn, 500, {error => 'the project has no uploads folder'})
+            unless -d $dir and length($base) and length($real) and index($real, "$base/") == 0;
+        my $file = tools::free_name("$dir/$name");
+        my $part = "$file.part";
+        open(my $fh, '>:raw', $part) or return _json($cn, 500, {error => "cannot write $name: $!"});
+        print {$fh} $body;
+        close($fh) or return _json($cn, 500, {error => "cannot write $name: $!"});
+        rename($part, $file) or return _json($cn, 500, {error => "cannot keep $name: $!"});
+        (my $leaf = $file) =~ s{\A.*/}{};
+        log::audit("session $active: uploaded uploads/$leaf (".length($body)." bytes)");
+        return _json($cn, 201, {path => "uploads/$leaf", session => $active, size => length($body)});
     }
     if($p eq '/message' and $m eq 'POST'){
         my $d = eval {$::JSON->decode($body)};

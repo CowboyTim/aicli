@@ -151,6 +151,13 @@
   button.icon.rec { color: var(--err); }
   html[data-look] button.icon { border: none; background: none; padding: 0 0; }
   html[data-look] button.icon:hover:not(:disabled) { background: var(--user-bg); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 6px; }
+  .chips:empty { display: none; }
+  .chip { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 2px 2px 2px 10px; border: 1px solid var(--line); border-radius: 12px; color: var(--fg); font-size: 13px; }
+  .chip a, .chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60vw; }
+  .chip a { color: var(--blue); text-decoration: none; }
+  .chip button { border: none; background: none; color: var(--muted); font-size: 16px; line-height: 1; padding: 0 6px; cursor: pointer; }
+  .chip.bad { border-color: var(--err); color: var(--err); }
   @media (max-width: 600px) { header { padding: 8px 12px; } main { padding: 12px; } }
   /* the two-click actions of the menu (no dialog): "sure?" in red, "cancel" in blue beside it */
   #menu button.armed { color: var(--err); border-color: var(--err); }
@@ -241,8 +248,13 @@
   <div id="log"></div>
   <div id="wait" class="wait" hidden><span id="wait-spin" class="think-spin"></span><span id="wait-label"></span></div>
   <form id="form">
+    <div id="chips" class="chips"></div>
     <textarea id="text" rows="2" placeholder="Message" aria-label="message" autocomplete="off" autocorrect="off" autocapitalize="sentences" spellcheck="false"></textarea>
     <div class="bar">
+      <input id="file" type="file" multiple hidden>
+      <button id="attach" class="icon" type="button" title="attach a file" aria-label="attach a file">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>
+      </button>
       <button id="mic" class="icon" type="button" aria-pressed="false" title="speak (click to start, click to stop)" aria-label="speak">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>
       </button>
@@ -1182,18 +1194,71 @@
 
   form.addEventListener("submit", function (ev) {
     ev.preventDefault();
+    if (pending.some(function (p) { return !p.path && !p.error; })) { add("error", "wait for the upload to finish"); return; }
+    var files = pending.filter(function (p) { return p.path; }).map(function (p) { return p.path; });
     var s = text.value.trim();
-    if (!s) { return; }
-    add("user", s);
+    if (!s && !files.length) { return; }
+    // the uploaded files are named in the message: the model reads them from the project
+    var msg = files.length ? "Uploaded: " + files.join(", ") + (s ? "\n\n" + s : "") : s;
+    add("user", msg);
     text.value = "";
+    pending = [];
+    renderChips();
     fetch("/message", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: s })
+      body: JSON.stringify({ text: msg })
     }).then(function (r) {
       if (!r.ok) { return r.json().then(function (j) { add("error", j.error || r.statusText); }); }
     }).catch(function (err) { add("error", String(err)); });
   });
+
+  // files: "+" uploads what is picked, any kind of file, into the project's uploads/. Each shows as a chip
+  // until the next message, which names the files that came through.
+  var pending = [];
+  var fileIn = document.getElementById("file");
+  var chips = document.getElementById("chips");
+  document.getElementById("attach").addEventListener("click", function () { fileIn.click(); });
+  fileIn.addEventListener("change", function () {
+    Array.prototype.forEach.call(fileIn.files, uploadFile);
+    fileIn.value = "";
+  });
+  function renderChips() {
+    chips.textContent = "";
+    pending.forEach(function (p) {
+      var chip = document.createElement("span");
+      chip.className = "chip" + (p.error ? " bad" : "");
+      var name = document.createElement(p.path ? "a" : "span");
+      name.textContent = p.error ? p.name + ": " + p.error : (p.path || p.name + " ...");
+      if (p.path) { name.href = "/file?session=" + encodeURIComponent(p.session) + "&path=" + encodeURIComponent(p.path); name.target = "_blank"; }
+      chip.appendChild(name);
+      var x = document.createElement("button");
+      x.type = "button";
+      x.textContent = "×";
+      x.title = "remove";
+      x.setAttribute("aria-label", "remove " + p.name);
+      x.addEventListener("click", function () { pending = pending.filter(function (q) { return q !== p; }); renderChips(); });
+      chip.appendChild(x);
+      chips.appendChild(chip);
+    });
+  }
+  function uploadFile(f) {
+    var p = { name: f.name, path: null, session: null, error: null };
+    pending.push(p);
+    renderChips();
+    fetch("/upload?name=" + encodeURIComponent(f.name), {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: f
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        if (!r.ok) { p.error = j.error || r.statusText; return; }
+        p.path = j.path;
+        p.session = j.session;
+      });
+    }).catch(function (err) { p.error = String(err); })
+      .then(renderChips);
+  }
 
   // speech: the browser records 16 kHz mono and sends it as WAV; the server
   // recognizes it and the text goes to the chat as soon as it is ready

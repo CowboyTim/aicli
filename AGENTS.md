@@ -131,8 +131,11 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   browser"): the revert buttons, the session and project menu (rename, delete with "sure?"
   and "cancel", create), the dark theme's fields, the menu's layout, the session select.
   Not yet in a real desktop browser: both looks and themes, the microphone, the
-  thinking block, the TLS trust prompt. Not built yet: uploads to `./uploads/`,
-  slash commands over `POST /command` (refused with 400 for now). The files a tool
+  thinking block, the TLS trust prompt. Uploads: the "+" of the page (`POST /upload`)
+  keeps any file in the active session's project under `uploads/` (`_upload_name`,
+  `tools::free_name` for a taken name; a link named `uploads` is refused; the page names
+  the files in the next message, `Uploaded: uploads/...`; `t/151_upload.t`,
+  `tools/ui-check/upload.js`). Not built yet: slash commands over `POST /command` (refused with 400 for now). The files a tool
   writes are on the page: a picture inline and a download, live and after a reload
   (`GET /file`, the `file` event, the history's `files`; `tools/ui-check/files.js`).
 - What is open is in PLAN.md. What is built is in README.md and in this
@@ -664,6 +667,7 @@ Other APIs are reached through an OpenAI compatible gateway, such as LiteLLM or 
 | `t/136_api_token.t` | the API tokens of the services (`/auth/api/token`, aud=flm): issued from a login only, verified with `?aud=flm` (a login refused for it, an API token refused for the page), no renewal, a user that is not an account, a token past its time, the end at logout |
 | `t/137_agent_defaults.t` | the enrollment defaults: the name is a random UUID version 4 (each new), the tags are the programs' names (a path's last part, short lower-case words, each once) |
 | `t/144_web_files.t` | the files of a session on the page: `GET /file` (a picture or a sound inline, the rest an attachment, sandboxed; a login sees the projects of its own account only; a link or `..` out of the project, an absolute path, a bad session name and a folder refused; the size limit; only GET), the history's `files` (a call that wrote a file still there, not a failed call, not one without its result), the master's `file` event (the active session only, with its session) |
+| `t/151_upload.t` | the "+" upload (`POST /upload`): a file kept in the active session's project under `uploads/` (any kind, the bytes as they were), a name taken gets the next free one, a name is only its last part (no folders, no hidden names, nothing with no name left), another account's session refused (403), `uploads` as a link refused, no session refused, a body over `$MAX_UPLOAD` refused by the reader (413) |
 | `t/150_request_stamp.t` | the request stamp (UTC time, the user: the project's account or `local`, the checksum: SHA-256 of the body, the same body the same checksum); in web mode the retries are in the log stamped and not events for the page; the page's error for a failed request names the request by its stamp |
 | `t/149_model_timeout.t` | the start with a model server that takes the connection and never answers: the model list and the context time out (`ai::LIST_TIMEOUT`), the error says so, the start goes on with no models |
 | `t/147_bash_pictures.t` | a bash call on the web page: the pictures and sounds it made or changed are offered (a file event with a version, the model's result lists them, the history has them), a change to anything else and a failed call offer nothing |
@@ -722,6 +726,7 @@ The checks are in `tools/ui-check/`:
 - `audio.js`: a clip a tool made plays (the audio element) and downloads, live and after a reload. It needs the fake services with the audio service (`AICLI_CHECK_AUDIO`).
 - `files.js`: a picture a tool wrote is shown inline and downloads, live and after a reload; a tool line opens to the whole call; a follow-up picture goes to a new name and each entry keeps its own.
 - `cancel.js`: a cancelled exchange can be reverted: a question cancelled before its first word or while the model is thinking ("slow think"), an answer cut short, and a stopped tool call ("sleep": a bash call that takes 25 s), each with its revert at the end of its exchange, which takes the exchange out of the chat file and the page; a stop leaves no empty answer. It needs the fake services ("slow", "late", "think", "sleep"; "bigpicture" is a slow picture) and a fresh fixture.
+- `upload.js`: the "+" picks files (any kind): they go to the project's `uploads/` (a chip with a link each), and the next message names them; the chat file has the message. Needs a fresh fixture (the session runs in the root).
 - `revert-scroll.js`: reverting the last answer of a long chat keeps the page at its end, on a desktop and a phone-sized view (needs a fresh fixture: it adds long exchanges to the chat before the page opens). The history is built off the page and put in place in one step, then the page scrolls once to its end.
 - `bashfiles.js`: "copy the picture" makes the fake model ask for a bash call (`cp live.png copy.png`): the copy is shown inline with its download, live and after a reload, and the result on the page has no list of files.
 - `multi.js`: "draw two cubes" makes the fake model answer with two calls at index 0: two tool lines, two pictures, each result's time, the header's totals (the times are live, not kept with the chat). It needs the fake services and a server started with `AICLI_CHECK_LLM` and `AICLI_CHECK_IMAGE` (the first lines of the file say how).
