@@ -1096,25 +1096,35 @@
   // only the last exchange of the chat can be reverted: its button is the only one enabled (not while a
   // turn runs). It is on the answer, or, when no answer follows its question (a cancelled question, or calls
   // that gave no text), on the question. A revert takes the exchange out, so the one before becomes the last.
+  // The last exchange is the one a revert takes out. Its revert sits at its end: the last thing that came in
+  // for it (its answer, or after a tool call the last result, a picture, or its question when nothing else
+  // came). A usage line and an answer with no text do not count.
   function lastExchange() {
-    var kids = log.children;
-    for (var i = kids.length - 1; i >= 0; i--) {
-      // an answer with no text (a stop before the first word) is not an answer: its question is the exchange
-      if (kids[i].classList.contains("user") || (kids[i].classList.contains("answer") && kids[i].textContent !== "")) {
-        return kids[i];
-      }
+    var kids = log.children, j, lastUser = -1;
+    for (j = kids.length - 1; j >= 0; j--) {
+      if (kids[j].classList.contains("user")) { lastUser = j; break; }
     }
-    return null;
+    if (lastUser < 0) { return null; }
+    for (j = kids.length - 1; j > lastUser; j--) {
+      if (kids[j].classList.contains("usage") || (kids[j].classList.contains("answer") && kids[j].textContent === "")) { continue; }
+      return kids[j];
+    }
+    return kids[lastUser];
   }
   function refreshReverts() {
     var last = lastExchange();
-    Array.prototype.forEach.call(log.querySelectorAll(":scope > .user"), function (u) {
-      var tag = u.querySelector(":scope > .tag");
-      if (u === last && !tag) { makeRevert(u, ""); }
-      else if (u !== last && tag) { u.removeChild(tag); }
+    var busy = send.disabled;
+    // the revert of an exchange that has no answer sits at its end: the other exchanges lose theirs
+    Array.prototype.forEach.call(log.children, function (kid) {
+      if (kid.classList.contains("answer")) { return; } // an answer keeps its tag (with its usage)
+      var tag = kid.querySelector(":scope > .tag");
+      if (tag && (kid !== last || busy)) { kid.removeChild(tag); }
     });
+    if (last && !busy && !last.classList.contains("answer") && !last.querySelector(":scope > .tag")) {
+      makeRevert(last, "");
+    }
     Array.prototype.forEach.call(log.querySelectorAll(".tag > button.revert"), function (b) {
-      b.disabled = !last || b.parentNode.parentNode !== last || send.disabled;
+      b.disabled = !last || b.parentNode.parentNode !== last || busy;
     });
   }
   es.addEventListener("usage", function (e) {

@@ -1,6 +1,6 @@
 // A cancelled answer can be reverted, as the others: a question the answer never came for (cancelled before
 // its first word, or while the model was still thinking) has its revert button, and so has an answer cut short
-// (its partial text). Each revert takes
+// (its partial text), and a stopped tool call has its revert at the end of its exchange (after the result). Each revert takes
 // the exchange out of the chat file and the page. Needs the fake services with the chat's slow answers, and a
 // fresh start-server.sh fixture (see files.js and AGENTS.md):
 //   python3 tools/ui-check/fake-services.py 8780 8781 8782 &
@@ -61,6 +61,23 @@ const check = (ok, what) => { console.log((ok ? 'ok   ' : 'FAIL ') + what); if (
   check(await enabled() === 1, 'the question of the stopped thinking has its revert button');
   await revertEnabled();
   check(!lastChat().some(m => String(m.content).includes('think about it')), 'the revert takes that question out of the chat file');
+  check(await answers() === before, 'and out of the page (' + (await answers()) + ' answers, as before)');
+
+  // 4. stopped during a tool call: the revert sits at the end of its exchange, after the tool's result
+  await p.fill('#text', 'sleep for a while');
+  await p.click('#send');
+  await p.waitForFunction(() => document.querySelectorAll('#log .tool-head').length >= 1, null, { timeout: 15000 });
+  await p.waitForTimeout(1500);
+  await p.click('#abort');
+  await idle();
+  await p.waitForTimeout(500);
+  check(await enabled() === 1, 'the stopped tool call has its revert button');
+  check(await p.evaluate(() => {
+    const b = document.querySelector('#log .tag button.revert:not([disabled])');
+    return !!b && b.parentNode.parentNode.classList.contains('result');
+  }), 'at the end of its exchange, after the result of the call');
+  await revertEnabled();
+  check(!lastChat().some(m => String(m.content).includes('sleep for a while')), 'the revert takes the stopped tool call out of the chat file');
   check(await answers() === before, 'and out of the page (' + (await answers()) + ' answers, as before)');
 
   check(errors.length === 0, 'no page errors: ' + JSON.stringify(errors));

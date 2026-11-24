@@ -78,6 +78,16 @@ class Llm(BaseHTTPRequestHandler):
             events.append({'choices': [{'delta': {'tool_calls': [{'index': 0, 'id': 'call_sound', 'type': 'function',
                 'function': {'name': 'generate_audio', 'arguments': json.dumps(args)}}]}}]})
             events.append({'choices': [{'delta': {}, 'finish_reason': 'tool_calls'}]})
+        elif body.get('tools') and messages and messages[-1].get('role') != 'tool' and 'sleep' in next(
+                (m.get('content') or '' for m in reversed(messages) if m.get('role') == 'user'), ''):
+            # "sleep" in the message: a bash call that takes a while (for a stop during a tool call)
+            args = {'code': 'echo started; sleep 25; echo done'}
+            if 'sleeptext' in last_user:
+                # "sleeptext": the model says something first, then calls the tool
+                events.append({'choices': [{'delta': {'content': 'Let me run it, it takes a while.'}}]})
+            events.append({'choices': [{'delta': {'tool_calls': [{'index': 0, 'id': 'call_sleep', 'type': 'function',
+                'function': {'name': 'bash', 'arguments': json.dumps(args)}}]}}]})
+            events.append({'choices': [{'delta': {}, 'finish_reason': 'tool_calls'}]})
         elif body.get('tools') and messages and messages[-1].get('role') != 'tool' and 'copy' in next(
                 (m.get('content') or '' for m in reversed(messages) if m.get('role') == 'user'), ''):
             # "copy" in the message: a bash call that makes a picture (no image tool, the way a model may do it)
@@ -96,7 +106,7 @@ class Llm(BaseHTTPRequestHandler):
                 outputs = ['live.png']
             calls = []
             for k, output in enumerate(outputs):
-                args = {'prompt': 'a cube', 'output': output, 'size': '256x256', 'steps': '2'}
+                args = {'prompt': 'big cube' if 'bigpicture' in last else 'a cube', 'output': output, 'size': '256x256', 'steps': '2'}
                 calls.append({'index': 0, 'id': 'call_%d_%d' % (n, k), 'type': 'function',
                               'function': {'name': 'generate_image', 'arguments': json.dumps(args)}})
             for c in calls:
@@ -125,7 +135,9 @@ class Image(BaseHTTPRequestHandler):
     count = 0  # each picture has its own blue, so two pictures can be told apart
 
     def do_POST(self):
-        self.rfile.read(int(self.headers.get('Content-Length', 0)))
+        request = self.rfile.read(int(self.headers.get('Content-Length', 0)))
+        if b'big cube' in request:
+            time.sleep(25)  # a picture that takes a while (a stop during the tool call)
         Image.count += 1
         reply = {'data': [{'b64_json': base64.b64encode(png(256, 256, 40 + (Image.count * 50) % 200)).decode()}]}
         send(self, 200, 'application/json', json.dumps(reply).encode())
