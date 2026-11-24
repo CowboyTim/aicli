@@ -1,6 +1,7 @@
 #!/usr/bin/perl
-# whether the chat's model takes pictures: the server's model list gives a model the capability "vision"; AI_VISION
-# overrides it (1 always, 0 never). The image tool is offered when the model does.
+# the tools that need a capability of the server: the image tool (vision), generate_image (image) and generate_audio
+# (audio). Each is offered by its flag (AI_VISION, AI_IMAGE, AI_AUDIO: 1 always, 0 never); unset, when the server's
+# model list has a model with that capability for the chat's provider. No such model: the tool is not offered.
 use strict; use warnings;
 
 use Test::More;
@@ -25,49 +26,79 @@ sub mock_models {
     };
 }
 
-my $list = '{"data":['
-    .'{"id":"vis-1","kind":"chat","capabilities":["completion","vision","tools"]},'
-    .'{"id":"text-1","kind":"chat","capabilities":["completion","tools"]},'
+my $full = '{"data":['
+    .'{"id":"vis-1","capabilities":["completion","vision","tools"]},'
+    .'{"id":"text-1","capabilities":["completion","tools"]},'
+    .'{"id":"z-image-turbo","capabilities":["image"]},'
+    .'{"id":"audioldm2","capabilities":["audio"]},'
     .'{"id":"nocaps-1"}'
     .']}';
+my $text = '{"data":[{"id":"text-1","capabilities":["completion","tools"]}]}';
 
-{
-    TestAI::setup(AI_API_KEY => 'sk-test', AI_PROVIDER => 'openai', AI_LOCAL_SERVER => undef, AI_TOOL_CALLS => 'native');
-    mock_models($list);
-    my $ids = ai::fetch_models();
-    is_deeply($ids, [qw(vis-1 text-1 nocaps-1)], "the list has its models");
-    is_deeply($ai::MODEL_CAPS{"openai/vis-1"}, [qw(completion vision tools)], "the capabilities of a model are kept");
-    is_deeply($ai::MODEL_CAPS{"openai/text-1"}, [qw(completion tools)], "another model's capabilities are its own");
-    ok(!exists $ai::MODEL_CAPS{"openai/nocaps-1"}, "a model with no capabilities in the list has none kept");
-
-    # the chat's model decides, unless AI_VISION says otherwise
-    $ai::SESSION_MODEL = 'vis-1';
-    ok(ai::vision_allowed(), "a model with the capability vision takes pictures");
-    ok(tools::available('image'), "the image tool is offered for it");
-    $ai::SESSION_MODEL = 'text-1';
-    ok(!ai::vision_allowed(), "a model without it does not");
-    ok(!tools::available('image'), "and the image tool is not offered for it");
-    $ai::SESSION_MODEL = 'nocaps-1';
-    ok(!ai::vision_allowed(), "a model the list gives no capabilities does not");
-
-    # AI_VISION overrides the list, both ways
-    $ai::SESSION_MODEL = 'text-1';
-    local $::ORIG_ENV{AI_VISION} = '1';
-    ok(ai::vision_allowed(), "AI_VISION=1 offers the tool for a model without the capability");
-    $ai::SESSION_MODEL = 'vis-1';
-    local $::ORIG_ENV{AI_VISION} = '0';
-    ok(!ai::vision_allowed(), "AI_VISION=0 never offers it, even for a model with the capability");
-    ok(!tools::available('image'), "and the image tool is not offered");
+# a chat setup with the server's list (or none), and the given environment
+sub scenario {
+    my ($list, %env) = @_;
+    TestAI::setup(AI_API_KEY => 'sk-test', AI_PROVIDER => 'openai', AI_LOCAL_SERVER => undef, AI_TOOL_CALLS => 'native',
+        AI_IMAGE_URL => 'http://img.test:8000/rocm/', AI_AUDIO_URL => 'http://audio.test:8000/rocm/', %env);
+    %ai::MODEL_CAPS = ();
+    mock_models($list) if defined $list;
+    ai::fetch_models() if defined $list;
 }
 
-# a server that lists nothing: the tool stays off unless AI_VISION=1
+# the list: the capabilities of its models are kept, and the tools follow them with the flags unset
 {
-    TestAI::setup(AI_LOCAL_SERVER => 'http://127.0.0.1:9', AI_TOOL_CALLS => 'native');
-    %ai::MODEL_CAPS = ();
-    $ai::SESSION_MODEL = 'anything';
-    ok(!ai::vision_allowed(), "no list: no picture model");
-    local $::ORIG_ENV{AI_VISION} = '1';
-    ok(ai::vision_allowed(), "no list: AI_VISION=1 still offers it");
+    scenario($full);
+    is_deeply($ai::MODEL_CAPS{"openai/vis-1"}, [qw(completion vision tools)], "the capabilities of a model are kept");
+    ok(!exists $ai::MODEL_CAPS{"openai/nocaps-1"}, "a model with no capabilities in the list has none kept");
+    ok(tools::available('image'), "a list with a vision model: the image tool is offered (unset)");
+    ok(tools::available('generate_image'), "a list with an image model: generate_image is offered (unset)");
+    ok(tools::available('generate_audio'), "a list with an audio model: generate_audio is offered (unset)");
+}
+
+# the default is per provider's list, not per chat model: the tool is offered whatever model the chat is on
+{
+    scenario($full);
+    $ai::SESSION_MODEL = 'text-1';
+    ok(tools::available('image'), "a text model: the image tool is still offered, a vision model is listed");
+    $ai::SESSION_MODEL = 'nocaps-1';
+    ok(tools::available('image'), "a model the list gives no capabilities: offered too, the list has a vision model");
+}
+
+# a list with none of the capabilities: the tools are not offered, unless their flag says 1
+{
+    scenario($text);
+    ok(!tools::available('image'), "no vision model listed: the image tool is not offered");
+    ok(!tools::available('generate_image'), "no image model listed: generate_image is not offered");
+    ok(!tools::available('generate_audio'), "no audio model listed: generate_audio is not offered");
+}
+{
+    scenario($text, AI_VISION => 1, AI_IMAGE => 1, AI_AUDIO => 1);
+    ok(tools::available('image'), "AI_VISION=1 offers the image tool, the list or not");
+    ok(tools::available('generate_image'), "AI_IMAGE=1 offers generate_image, the list or not");
+    ok(tools::available('generate_audio'), "AI_AUDIO=1 offers generate_audio, the list or not");
+}
+
+# 0 never offers the tool, even when the list has its model
+{
+    scenario($full, AI_VISION => 0, AI_IMAGE => 0, AI_AUDIO => 0);
+    ok(!tools::available('image'), "AI_VISION=0: the image tool is never offered");
+    ok(!tools::available('generate_image'), "AI_IMAGE=0: generate_image is never offered");
+    ok(!tools::available('generate_audio'), "AI_AUDIO=0: generate_audio is never offered");
+}
+
+# no list at all (the server did not answer): unset is off; the flag 1 still offers
+{
+    scenario(undef);
+    ok(!tools::available('image'), "no list: the image tool is off");
+    scenario(undef, AI_VISION => 1);
+    ok(tools::available('image'), "no list: AI_VISION=1 still offers it");
+}
+
+# the generators also need their URL: a flag 1 with no URL offers nothing
+{
+    scenario($full, AI_IMAGE_URL => '', AI_AUDIO_URL => '', AI_IMAGE => 1, AI_AUDIO => 1);
+    ok(!tools::available('generate_image'), "no AI_IMAGE_URL: generate_image is not offered, flag or not");
+    ok(!tools::available('generate_audio'), "no AI_AUDIO_URL: generate_audio is not offered, flag or not");
 }
 
 done_testing();

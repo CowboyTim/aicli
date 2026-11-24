@@ -40,7 +40,7 @@ sub reply_with_png {
 }
 $REPLY = sub { reply_with_png($PNG) };
 
-my $tmp = TestAI::setup(AI_TOOL_CALLS => 'native', AI_IMAGE_URL => 'http://img.test:8000/rocm/');
+my $tmp = TestAI::setup(AI_TOOL_CALLS => 'native', AI_IMAGE => 1, AI_IMAGE_URL => 'http://img.test:8000/rocm/');
 
 # a session in a new workspace: relative names are from here, as in a session
 sub workspace {
@@ -196,7 +196,7 @@ ok(!defined tools::offered_file('bash', ['ls'], $ws), "a tool that writes no fil
 # a turn of the chat: the picture is made, and the page gets the file as an event
 
 {
-    TestAI::setup(AI_TOOL_CALLS => 'native', AI_IMAGE_URL => 'http://img.test:8000/rocm', AI_TOOL_DISPLAY => 'brief');
+    TestAI::setup(AI_TOOL_CALLS => 'native', AI_IMAGE => 1, AI_IMAGE_URL => 'http://img.test:8000/rocm', AI_TOOL_DISPLAY => 'brief');
     my $ws2 = workspace();
     my @EV;
     local $ai::EVENT_SINK = sub { push @EV, [@_] };
@@ -220,7 +220,7 @@ ok(!defined tools::offered_file('bash', ['ls'], $ws), "a tool that writes no fil
 
 # a call that failed offers no file
 {
-    TestAI::setup(AI_TOOL_CALLS => 'native', AI_IMAGE_URL => 'http://img.test:8000/rocm');
+    TestAI::setup(AI_TOOL_CALLS => 'native', AI_IMAGE => 1, AI_IMAGE_URL => 'http://img.test:8000/rocm');
     my $ws3 = workspace();
     my @EV;
     local $ai::EVENT_SINK = sub { push @EV, [@_] };

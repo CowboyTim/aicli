@@ -2836,15 +2836,29 @@ sub fetch_models {
     return $ids;
 }
 
-# Whether the chat's model takes pictures. AI_VISION=1 says it does, AI_VISION=0 that it does not; unset, the
-# model list of the server says so: the capability "vision" on the model. A server that lists no model with
-# that capability has none that takes pictures.
-sub vision_allowed {
-    my $set = $::ORIG_ENV{AI_VISION};
-    return ($set ? 1 : 0) if defined $set and length $set;
-    my $caps = $MODEL_CAPS{"$AI_PROVIDER/".($SESSION_MODEL // '')} // [];
-    return (grep {$_ eq 'vision'} @$caps) ? 1 : 0;
+# Whether the server's model list has a model with this capability, for the chat's provider. A server that
+# lists none has no model that does.
+sub listed_with {
+    my ($capability) = @_;
+    my $prefix = "$AI_PROVIDER/";
+    for my $key (grep {index($_, $prefix) == 0} keys %MODEL_CAPS) {
+        return 1 if grep {$_ eq $capability} @{$MODEL_CAPS{$key}};
+    }
+    return 0;
 }
+
+# A tool that needs a capability of the server is offered by its flag: 1 always, 0 never. Unset (the default),
+# when the server's list has a model with the capability: vision for the image tool, image for generate_image,
+# audio for generate_audio.
+sub flag_allows {
+    my ($flag, $capability) = @_;
+    my $set = $::ORIG_ENV{$flag} // '';
+    return 0 if length($set) and !$set;
+    return 1 if $set;
+    return listed_with($capability);
+}
+
+sub vision_allowed { return flag_allows('AI_VISION', 'vision') }
 
 # context size a local llama.cpp server runs with
 sub fetch_server_context {
@@ -5004,7 +5018,8 @@ EOb
         },
         required => ["prompt"],
         # only with the image service to ask (AI_IMAGE_URL: its base address)
-        available => sub {length($::ORIG_ENV{AI_IMAGE_URL} // '') ? 1 : 0},
+        # with AI_IMAGE_URL, and by the flag AI_IMAGE (1 always, 0 never; unset: when the server lists an image model)
+        available => sub {(length($::ORIG_ENV{AI_IMAGE_URL} // '') and ai::flag_allows('AI_IMAGE', 'image')) ? 1 : 0},
     },
     speech => {
         description => "speak a text with the local speech model (Qwen3-TTS) in a voice: the WAV file is written to the output name in the workspace. The voice is the name of a voice the server has; the same text, voice, language and seed give the same audio",
@@ -5032,7 +5047,8 @@ EOb
         },
         required => ["prompt"],
         # only with the audio service to ask (AI_AUDIO_URL: its base address)
-        available => sub {length($::ORIG_ENV{AI_AUDIO_URL} // '') ? 1 : 0},
+        # with AI_AUDIO_URL, and by the flag AI_AUDIO (1 always, 0 never; unset: when the server lists an audio model)
+        available => sub {(length($::ORIG_ENV{AI_AUDIO_URL} // '') and ai::flag_allows('AI_AUDIO', 'audio')) ? 1 : 0},
     },
     list => {
         description => "list a directory: type (d, f, l), size and name of every entry",

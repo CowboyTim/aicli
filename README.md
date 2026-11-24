@@ -735,7 +735,9 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 | `AI_PERL_SAFE` | perl tool in a `Safe` compartment: `1`, or extra opcodes like `:filesys_read` | off |
 | `AI_MARKDOWN` | draw the markdown of the answer (on a terminal only); 0 keeps it as written | on a terminal |
 | `AI_TOOL_CALLS` | `native`: tools sent with the request, calls as the server parses them; `text`: the tool syntax in the prompt | native |
-| `AI_VISION` | offer the `image` tool, so the model gets pictures: `1` always, `0` never; unset, when the chat's model has the capability `vision` in the server's model list. Only with a model that takes pictures | unset |
+| `AI_VISION` | offer the `image` tool, so the model gets pictures: `1` always, `0` never; unset, when the server's model list has a model with the capability `vision`. Only with a model that takes pictures | unset |
+| `AI_IMAGE` | offer `generate_image` (with `AI_IMAGE_URL`): `1` always, `0` never; unset, when the server's model list has a model with the capability `image` | unset |
+| `AI_AUDIO` | offer `generate_audio` (with `AI_AUDIO_URL`): `1` always, `0` never; unset, when the server's model list has a model with the capability `audio` | unset |
 | `AI_IMAGE_MAX` | largest picture the `image` tool sends, in bytes; a bigger one is made smaller (0 for no limit) | 5242880 |
 | `AI_CONVERT_MAX` | largest input of the `convert` tool, in bytes (0 for no limit) | 52428800 |
 | `AI_IMAGE_URL` | base address of the image service for `generate_image`, as the agent reaches it (e.g. `http://host:8000`); empty: no tool | none |

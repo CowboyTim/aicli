@@ -34,7 +34,7 @@ my (@REQ, $REPLY);
 }
 $REPLY = sub { {code => 200, error => undef, headers => {}, body => $WAV} };
 
-TestAI::setup(AI_TOOL_CALLS => 'native', AI_AUDIO_URL => 'http://audio.test:8000/rocm/');
+TestAI::setup(AI_TOOL_CALLS => 'native', AI_AUDIO => 1, AI_AUDIO_URL => 'http://audio.test:8000/rocm/');
 my $ws = File::Temp::tempdir(CLEANUP => 1, TMPDIR => 1);
 $ai::WORKSPACE = $ws;
 chdir($ws);

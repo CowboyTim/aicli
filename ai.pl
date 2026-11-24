@@ -946,9 +946,22 @@ always use the text. Calls written in the text are run in both modes.
 =item B<AI_VISION>
 
 Set to 1 to offer the B<image> tool, 0 to never offer it. Unset (the default), the
-model list of the server decides: the tool is offered when the chat's model has the
-capability C<vision> there. Only for a model that takes pictures: a text model
-refuses the request, and the picture then stays in the conversation.
+tool is offered when the server's model list has a model with the capability
+C<vision>; with no such model, it is not offered. Only for a model that takes
+pictures: a text model refuses the request, and the picture then stays in the
+conversation.
+
+=item B<AI_IMAGE>
+
+Set to 1 to offer the B<generate_image> tool (with B<AI_IMAGE_URL>), 0 to never offer
+it. Unset (the default), it is offered when the server's model list has a model with
+the capability C<image>.
+
+=item B<AI_AUDIO>
+
+Set to 1 to offer the B<generate_audio> tool (with B<AI_AUDIO_URL>), 0 to never offer
+it. Unset (the default), it is offered when the server's model list has a model with
+the capability C<audio>.
 
 =item B<speech>
 
