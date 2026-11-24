@@ -18,7 +18,7 @@ framework.
   replace, ed-style edit, delete, move, mkdir, list, find) are plain Perl in the
   process; bash and grep are `exec()`ed in a forked child, perl code is
   `eval`ed in a forked child (optionally in a `Safe` compartment)
-- **Pictures for vision models** (`AI_VISION=1`): the `image` tool sends a PNG,
+- **Pictures for vision models** (the server lists the model with the capability `vision`, or `AI_VISION=1`): the `image` tool sends a PNG,
   JPEG, GIF or WebP file from the workspace with the next message, so the model
   can read the text in it or describe it
 - **Sub-agents**: the model can hand tasks to sub-agents that work side by
@@ -735,7 +735,7 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 | `AI_PERL_SAFE` | perl tool in a `Safe` compartment: `1`, or extra opcodes like `:filesys_read` | off |
 | `AI_MARKDOWN` | draw the markdown of the answer (on a terminal only); 0 keeps it as written | on a terminal |
 | `AI_TOOL_CALLS` | `native`: tools sent with the request, calls as the server parses them; `text`: the tool syntax in the prompt | native |
-| `AI_VISION` | offer the `image` tool, so the model gets pictures: only with a model that takes them | off |
+| `AI_VISION` | offer the `image` tool, so the model gets pictures: `1` always, `0` never; unset, when the chat's model has the capability `vision` in the server's model list. Only with a model that takes pictures | unset |
 | `AI_IMAGE_MAX` | largest picture the `image` tool sends, in bytes; a bigger one is made smaller (0 for no limit) | 5242880 |
 | `AI_CONVERT_MAX` | largest input of the `convert` tool, in bytes (0 for no limit) | 52428800 |
 | `AI_IMAGE_URL` | base address of the image service for `generate_image`, as the agent reaches it (e.g. `http://host:8000`); empty: no tool | none |

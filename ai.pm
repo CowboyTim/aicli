@@ -1908,6 +1908,7 @@ sub over_budget {
 # context management: keep the conversation within the context window
 
 our %MODEL_CONTEXT;  # "provider/model id" => context size, from the model list of the API
+our %MODEL_CAPS;     # "provider/model id" => the capabilities the model list gives it, such as "completion", "vision"
 our $SERVER_CONTEXT; # context size of a local server (llama.cpp /props)
 
 # context window in tokens, 0 when unknown
@@ -2827,10 +2828,22 @@ sub fetch_models {
         my $ctx = $m->{context_length} // $m->{context_window}
                // (ref($m->{meta}) eq 'HASH' ? $m->{meta}{n_ctx} : undef);
         $MODEL_CONTEXT{"$AI_PROVIDER/$m->{id}"} = $ctx + 0 if defined $ctx and $ctx =~ m/^\d+$/ and $ctx > 0;
+        $MODEL_CAPS{"$AI_PROVIDER/$m->{id}"} = [grep {defined and !ref} @{$m->{capabilities}}]
+            if ref($m->{capabilities}) eq 'ARRAY';
     }
     my $ids = [grep {defined and length} map {ref($_) eq 'HASH' ? $_->{id} : $_} @models];
     log::notice("$AI_ENDPOINT_URL has ".scalar(@$ids)." model(s)");
     return $ids;
+}
+
+# Whether the chat's model takes pictures. AI_VISION=1 says it does, AI_VISION=0 that it does not; unset, the
+# model list of the server says so: the capability "vision" on the model. A server that lists no model with
+# that capability has none that takes pictures.
+sub vision_allowed {
+    my $set = $::ORIG_ENV{AI_VISION};
+    return ($set ? 1 : 0) if defined $set and length $set;
+    my $caps = $MODEL_CAPS{"$AI_PROVIDER/".($SESSION_MODEL // '')} // [];
+    return (grep {$_ eq 'vision'} @$caps) ? 1 : 0;
 }
 
 # context size a local llama.cpp server runs with
@@ -5036,9 +5049,10 @@ EOb
             "path" => {type => "string", description => "The image file"},
         },
         required => ["path"],
-        # only with AI_VISION=1, for a model that takes pictures: a text model
-        # can not read them, and the picture would stay in the conversation
-        available => sub {$::ORIG_ENV{AI_VISION} ? 1 : 0},
+        # only for a model that takes pictures: AI_VISION=1 says it is one, AI_VISION=0 that it is not; unset, the
+        # server's model list says so (the capability "vision"). A text model can not read them, and the picture
+        # would stay in the conversation
+        available => sub {ai::vision_allowed() ? 1 : 0},
     },
     convert => {
         description => "convert a picture with ImageMagick and write it to the output name: a smaller size (the proportions are kept, a picture is never made bigger), a crop, a turn, another format (by the name: png, jpg, gif, webp, bmp, tif), the quality of jpg and webp, and the colours: gray (black and white) or sepia. The metadata (GPS, camera) is removed and the picture turned upright. Input and output are in the workspace",
