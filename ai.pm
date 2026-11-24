@@ -164,6 +164,7 @@ sub chat_setup {
     $MAIN_PROVIDER = $AI_PROVIDER;
     $MAIN_ENDPOINT = $AI_ENDPOINT_URL;
     $MAIN_KEY      = $api_key;
+    log::notice("provider $AI_PROVIDER at $AI_ENDPOINT_URL, key ".(length($api_key // '') ? 'set' : 'none').", session $AI_SESSION");
 
     $AI_URL = ai_url();
 
@@ -1304,6 +1305,8 @@ sub agent_view {
     return;
 }
 
+our $CALL_ARG_MAX = 4000; # characters of an argument the page's view of a call keeps
+
 # the whole call, as the web page shows it when its tool line is opened: the tool's name, then each
 # argument in full (a value's further lines indented under it). Bytes, as the arguments are.
 sub call_full {
@@ -1316,6 +1319,11 @@ sub call_full {
     for my $i (0 .. $#names) {
         my $v = $args->[$i] // '';
         $v = '(empty)' if $v eq '';
+        # a long argument (a file's content) is cut: the page's events stay small (see ui::publish)
+        my $text = to_text($v);
+        if (length($text) > $CALL_ARG_MAX) {
+            $v = to_bytes(substr($text, 0, $CALL_ARG_MAX)."\n(cut: ".(length($text) - $CALL_ARG_MAX)." more characters)");
+        }
         $v =~ s/\n/\n    /g;
         push @lines, "  $names[$i]: $v";
     }
@@ -2736,6 +2744,11 @@ sub switch_model {
 }
 
 # the model list of the API, undef when it can't be fetched
+# How long the start may wait on a server for its model list and its context (seconds). A server that
+# takes the connection and never answers must end the wait with an error, not hold the start (setup_commands).
+our $LIST_TIMEOUT = 20;
+our $LIST_CONNECT_TIMEOUT = 5;
+
 # Every page of it: Anthropic pages its list (20 by default, 1000 at most, the
 # last id of a page is the next page's after_id).
 sub fetch_models {
@@ -2745,7 +2758,9 @@ sub fetch_models {
         my @q = ($AI_PROVIDER // '') eq 'anthropic' ? ('limit=1000') : ();
         push @q, "after_id=$after" if defined $after;
         my $url = "$AI_ENDPOINT_URL/v1/models".(@q ? '?'.join('&', @q) : '');
-        my $response = eval {utils::http("get", $url, undef, $api_key, undef, provider_headers($api_key))};
+        # scalar: a provider with no headers returns an empty list, which would shift the trailing options
+        my $response = eval {utils::http("get", $url, undef, $api_key, undef, scalar(provider_headers($api_key)),
+            timeout => $LIST_TIMEOUT, connect_timeout => $LIST_CONNECT_TIMEOUT)};
         return unless $response;
         my $resp = eval {JSON::XS::decode_json($response)};
         if (ref($resp) eq 'HASH' and ref($resp->{data}) eq 'ARRAY') {
@@ -2753,6 +2768,7 @@ sub fetch_models {
         } elsif (ref($resp) eq 'ARRAY') {
             push @models, @$resp;
         } else {
+            log::error("no model list from $url: the answer is not a list of models");
             return;
         }
         last unless ref($resp) eq 'HASH' and $resp->{has_more} and defined $resp->{last_id} and length $resp->{last_id};
@@ -2763,16 +2779,23 @@ sub fetch_models {
                // (ref($m->{meta}) eq 'HASH' ? $m->{meta}{n_ctx} : undef);
         $MODEL_CONTEXT{"$AI_PROVIDER/$m->{id}"} = $ctx + 0 if defined $ctx and $ctx =~ m/^\d+$/ and $ctx > 0;
     }
-    return [grep {defined and length} map {ref($_) eq 'HASH' ? $_->{id} : $_} @models];
+    my $ids = [grep {defined and length} map {ref($_) eq 'HASH' ? $_->{id} : $_} @models];
+    log::notice("$AI_ENDPOINT_URL has ".scalar(@$ids)." model(s)");
+    return $ids;
 }
 
 # context size a local llama.cpp server runs with
 sub fetch_server_context {
-    my $response = eval {utils::http("get", "$AI_ENDPOINT_URL/props", undef, $api_key)};
+    my $response = eval {utils::http("get", "$AI_ENDPOINT_URL/props", undef, $api_key, undef, undef,
+        timeout => $LIST_TIMEOUT, connect_timeout => $LIST_CONNECT_TIMEOUT)};
     my $props = $response ? eval {JSON::XS::decode_json($response)} : undef;
-    return unless ref($props) eq 'HASH' and ref($props->{default_generation_settings}) eq 'HASH';
+    unless (ref($props) eq 'HASH' and ref($props->{default_generation_settings}) eq 'HASH') {
+        log::notice("no context from $AI_ENDPOINT_URL/props: ".($utils::http_error // 'bad answer'));
+        return;
+    }
     my $ctx = $props->{default_generation_settings}{n_ctx};
     $SERVER_CONTEXT = $ctx + 0 if defined $ctx and $ctx =~ m/^\d+$/ and $ctx > 0;
+    log::notice("context of $AI_ENDPOINT_URL: ".($SERVER_CONTEXT // 'unknown')." tokens") if defined $SERVER_CONTEXT;
     return $SERVER_CONTEXT;
 }
 
@@ -3310,7 +3333,10 @@ sub handle_command {
 # build the completion tree out of the command table
 sub setup_commands {
     if (!@MODELS and $AI_ENDPOINT_URL) {
-        @MODELS = @{fetch_models() // []};
+        log::notice("asking $AI_ENDPOINT_URL for its models (up to $LIST_TIMEOUT s)");
+        my $models = fetch_models();
+        log::notice("no model list from $AI_ENDPOINT_URL: ".($utils::http_error // 'bad answer')) unless defined $models;
+        @MODELS = @{$models // []};
         fetch_server_context()
             if $::ORIG_ENV{AI_LOCAL_SERVER} and !defined $::ORIG_ENV{AI_CONTEXT_TOKENS};
         # no model set (AI_MODEL, the session's): the first one of the provider's list

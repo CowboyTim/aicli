@@ -83,7 +83,13 @@ These are requirements, not suggestions.
   own (there was a MEMORY.md, it is part of this file now).
 - **stdout is the conversation**: messages, errors and the debug log go to
   stderr through `log::error` / `log::info` (`AI_LOG` for a file), never
-  `print`. `ai.pl -p` in a pipe must give the answer and nothing else.
+  `print`. `log::notice` is for facts about the running process that help when
+  it hangs or misbehaves (the provider and endpoint, the model request before it
+  is sent, the model count, the listener's address): written by the web
+  interface (`--ui`) and with `DEBUG`, not by the terminal chat at its start
+  (`t/15_logging_privileges.t` keeps that stderr quiet). `log::info` is only
+  with `DEBUG` or `--debug`. `ai.pl -p` in a pipe must give the answer
+  and nothing else.
 - **Tests**: `prove -I. t` must pass. Add tests with every change, the LLM is
   scripted (`t/lib/TestAI.pm`) or faked (`t/lib/FakeLLM.pm`).
 
@@ -294,7 +300,7 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   one of the web interface, or a remote agent's), as fork/exec, confined by landlock. The
   broker is not on the path of a local session. The projects are the directories
   `root/account/project` (the local root, or the agent's `--work`).
-- **docker-compose.yaml** – the services: `broker` (broker.pl), `agent` (the web
+- **docker-compose.yaml** – (nginx and proxy/squid are built from `nginx/Dockerfile` and `proxy/Dockerfile`: the upstream image with `iproute2` added, so `ip` works inside them; searxng is the upstream image as it is) the services: `broker` (broker.pl), `agent` (the web
   interface, `ai.pl --ui`, on `aicli-net`, listens in its container on `AGENT_PORT`,
   nothing published), `searxng`, `proxy` (squid), `nginx` (`nginx/nginx.conf.template`:
   TLS on
@@ -654,6 +660,7 @@ Other APIs are reached through an OpenAI compatible gateway, such as LiteLLM or 
 | `t/136_api_token.t` | the API tokens of the services (`/auth/api/token`, aud=flm): issued from a login only, verified with `?aud=flm` (a login refused for it, an API token refused for the page), no renewal, a user that is not an account, a token past its time, the end at logout |
 | `t/137_agent_defaults.t` | the enrollment defaults: the name is a random UUID version 4 (each new), the tags are the programs' names (a path's last part, short lower-case words, each once) |
 | `t/144_web_files.t` | the files of a session on the page: `GET /file` (a picture or a sound inline, the rest an attachment, sandboxed; a login sees the projects of its own account only; a link or `..` out of the project, an absolute path, a bad session name and a folder refused; the size limit; only GET), the history's `files` (a call that wrote a file still there, not a failed call, not one without its result), the master's `file` event (the active session only, with its session) |
+| `t/149_model_timeout.t` | the start with a model server that takes the connection and never answers: the model list and the context time out (`ai::LIST_TIMEOUT`), the error says so, the start goes on with no models |
 | `t/147_bash_pictures.t` | a bash call on the web page: the pictures and sounds it made or changed are offered (a file event with a version, the model's result lists them, the history has them), a change to anything else and a failed call offer nothing |
 | `t/146_generate_audio.t` | the generate_audio tool: the WAV written whole and journaled, a name taken goes to the next free one, the request (the seconds, steps and seed, the defaults), the refusals (no request made), a non-WAV answer leaves no file, the file offered |
 | `t/143_speech.t` | the speech tool: the WAV written whole (a temp name renamed when whole), a name taken goes to the next free one and the file there stays, the request, the default name, the refusals (no request made), an answer that is not a WAV leaves no file, the file offered |

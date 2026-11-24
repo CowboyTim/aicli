@@ -70,6 +70,7 @@ sub start {
     ) or die "ui: cannot listen on $bind:".($o{port} // 8080).": $!\n";
     $listen->blocking(0);
     $port = $listen->sockport;
+    log::notice("web interface listening on $bind port $port");
     $html_file = File::Basename::dirname(__FILE__)."/ai/ui/index.html";
     $theme_file = File::Basename::dirname(__FILE__)."/ai/ui/theme.css";
     loop::watch($listen, \&_accept);
@@ -367,6 +368,20 @@ sub _sessions_data {
 # the conversation of a session as the page shows it: what the user typed and what
 # the model answered (not tool calls, results or summaries), the last $HISTORY_MAX
 our $HISTORY_MAX = 200;
+our $HISTORY_BYTES = 400 * 1024; # what the history may take in the page's stream
+our $ITEM_TEXT_MAX = 65536;      # characters of one text of the history (the chat keeps the rest)
+our $EVENT_MAX = 500_000;        # bytes of an event sent to the page before its long texts are cut
+our $EVENT_TEXT_MAX = 200_000;   # characters kept of such a text
+
+# a text of the history that is too long for the page is cut
+sub _clip_history_item {
+    my ($item) = @_;
+    for my $key (qw(text result full)) {
+        next unless defined $item->{$key} and length($item->{$key}) > $ITEM_TEXT_MAX;
+        $item->{$key} = substr($item->{$key}, 0, $ITEM_TEXT_MAX)."\n(cut: the chat has the rest)";
+    }
+    return;
+}
 
 sub _history_data {
     my ($name) = @_;
@@ -407,8 +422,18 @@ sub _history_data {
             push @items, _tool_item($tc, ($result_of{$i} // {})->{$tc->{id} // ''}, $root);
         }
     }
-    my $more = @items > $HISTORY_MAX ? 1 : 0;
-    splice(@items, 0, @items - $HISTORY_MAX) if $more;
+    # the newest exchanges that fit in HISTORY_BYTES (the stream closes a client that is sent more than
+    # 1 MB unread, see _queue): the older ones are not shown, as after HISTORY_MAX
+    my ($used, $from) = (0, scalar @items);
+    for (my $k = $#items; $k >= 0; $k--) {
+        last if $#items - $k >= $HISTORY_MAX;
+        _clip_history_item($items[$k]);
+        my $n = length($::JSON->encode($items[$k]));
+        last if $used + $n > $HISTORY_BYTES and $from < @items;
+        ($used, $from) = ($used + $n, $k);
+    }
+    my $more = $from > 0 ? 1 : 0;
+    splice(@items, 0, $from) if $more;
     return {
         session  => $name // '',
         more     => $more ? \1 : \0,
@@ -978,7 +1003,16 @@ sub publish {
     if (exists $o{project}) { $rel = $o{project} }
     elsif (exists $o{session}) { $rel = defined $o{session} ? ai::session_project($o{session}) : undef }
     elsif ($type ne 'models') { $rel = _active_rel() }
-    my $msg = "event: $type\ndata: ".$::JSON->encode($data // {})."\n\n";
+    my $json = $::JSON->encode($data // {});
+    if (length($json) > $EVENT_MAX and ref($data) eq 'HASH') {
+        # an event this big would close the clients (see _queue): its long texts are cut
+        my %cut = %$data;
+        for my $key (grep {defined $cut{$_} and !ref $cut{$_} and length($cut{$_}) > $EVENT_TEXT_MAX} keys %cut) {
+            $cut{$key} = substr($cut{$key}, 0, $EVENT_TEXT_MAX)."\n(cut: the chat has the rest)";
+        }
+        $json = $::JSON->encode(\%cut);
+    }
+    my $msg = "event: $type\ndata: ".$json."\n\n";
     for my $c (@{[@clients]}) {
         next unless _visible($c->{account}, $rel);
         _queue($c, $msg);

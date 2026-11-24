@@ -24,9 +24,10 @@ our ($http_error, $http_code, %http_headers);
 # One HTTP request, waited for: returns the body, or undef on any error (see
 # $http_error, $http_code, %http_headers). With $read_handle_sub the body is
 # streamed to it. The request runs in the event loop (package loop), so
-# everything else that is in there keeps going.
+# everything else that is in there keeps going. timeout and connect_timeout (seconds, trailing) end a
+# request that takes longer: undef, with $http_error set.
 sub http {
-    my ($m, $full_url, $data, $api_key, $read_handle_sub, $headers) = @_;
+    my ($m, $full_url, $data, $api_key, $read_handle_sub, $headers, %opt) = @_;
     $data //= "";
     log::info("RSUB: ".((defined $read_handle_sub and ref($read_handle_sub) eq 'CODE')?1:0));
     log::info("URL: $full_url");
@@ -42,6 +43,8 @@ sub http {
         data    => $data,
         api_key => $api_key,
         ($headers ? (headers => $headers) : ()),
+        (defined $opt{timeout} ? (timeout => $opt{timeout}) : ()),
+        (defined $opt{connect_timeout} ? (connect_timeout => $opt{connect_timeout}) : ()),
         on_data => $read_handle_sub,
         on_done => sub {$done = 1},
     );
@@ -198,6 +201,15 @@ sub info {
     my ($message) = @_;
     return unless $::DEBUG;
     _write("INFO: [$$]: ".scalar(localtime()).": $message\n", 0);
+    return;
+}
+
+# a fact about the running process (the provider, the endpoint, the listener): written by the web interface
+# (--ui, where the logs are read later) and with DEBUG; the terminal chat stays quiet on stderr at start
+sub notice {
+    my ($message) = @_;
+    return unless $::UI or $::DEBUG;
+    _write("NOTICE: [$$]: ".scalar(localtime()).": $message\n", 1);
     return;
 }
 
