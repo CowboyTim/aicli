@@ -21,7 +21,7 @@ ARG XRT_KEY_FPR=881CF4B40B0BFA288D6776E83BF36CFA0BD50AEC
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
+ && apt-get install -y --no-install-recommends ca-certificates curl gnupg iproute2 \
  && rm -rf /var/lib/apt/lists/*
 
 # the PPA's signing key: fetched by its fingerprint, checked against it, kept as a keyring

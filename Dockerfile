@@ -36,7 +36,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN apt-get update && apt-get install -y --no-install-recommends \
         bash ripgrep grep findutils coreutils diffutils patch \
         git openssh-client openssl \
-        curl wget socat \
+        curl wget socat iproute2 \
     && rm -rf /var/lib/apt/lists/*
 
 # --------------------------------------------------------------------------

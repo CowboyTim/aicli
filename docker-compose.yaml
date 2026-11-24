@@ -176,7 +176,9 @@ services:
   # proxy: squid, the agent's way to the web (fetch and search); see proxy/squid.conf
   proxy:
     logging: *logging
-    image: ubuntu/squid:latest
+    build:
+      context: ./proxy # the image is ubuntu/squid with iproute2 (proxy/Dockerfile)
+    image: local/ai/squid:latest
     networks:
       - aicli
     # the image declares its log and spool directories as volumes: both are RAM with a fixed
@@ -196,7 +198,9 @@ services:
   # certificate, and reloads when the config changes (renewal).
   nginx:
     logging: *logging
-    image: nginx:stable
+    build:
+      context: ./nginx # the image is nginx:stable with iproute2 (nginx/Dockerfile)
+    image: local/ai/nginx:latest
     networks:
       dmz:
         ipv6_address: ${IPV6_ADDRESS:?set IPV6_ADDRESS (deploy.sh looks it up from PUBLIC_DOMAIN)}
@@ -226,10 +230,6 @@ services:
       # the static files: the login page and its stylesheet (the other pages are the agent's)
       - ./ai/ui:/etc/nginx/ui:ro
       - ./nginx/security-headers.conf:/etc/nginx/security-headers.conf:ro
-    # the logs in RAM, small: a dev setup keeps no logs on disk (in prod they go to the host's log
-    # process, not here). The image's links of these files to stdout are hidden by the mount.
-    tmpfs:
-      - /var/log/nginx:size=16m
     restart: unless-stopped
 
 
