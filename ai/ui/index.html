@@ -259,6 +259,16 @@
 (function () {
   "use strict";
   var log = document.getElementById("log");
+  // the end of the chat: where the page goes when something comes in. While the history is built off the
+  // page nothing scrolls; stick says whether the reader is at the end (the scroll events keep it up to date).
+  var building = false;
+  var stick = true;
+  function atEnd() { return window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 40; }
+  function scrollEnd() {
+    if (building) { return; }
+    window.scrollTo(0, document.documentElement.scrollHeight);
+  }
+  window.addEventListener("scroll", function () { stick = atEnd(); });
   var status = document.getElementById("status");
   var model = document.getElementById("model");
   var session = document.getElementById("session");
@@ -454,7 +464,7 @@
     d.className = "msg " + cls;
     d.textContent = s; // never innerHTML: the model's text is not markup
     log.appendChild(d);
-    window.scrollTo(0, document.body.scrollHeight);
+    scrollEnd();
     return d;
   }
   // a tool line: with the whole call (its arguments in full) it is a button that opens it, as the
@@ -479,7 +489,7 @@
     box.appendChild(head);
     box.appendChild(body);
     log.appendChild(box);
-    window.scrollTo(0, document.body.scrollHeight);
+    scrollEnd();
     return box;
   }
   // a file a tool wrote in the session: a picture or a sound shown inline (the server sends it,
@@ -500,6 +510,7 @@
       var img = document.createElement("img");
       img.src = view;
       img.alt = path;
+      img.addEventListener("load", function () { if (stick) { scrollEnd(); } });
       link.appendChild(img);
       box.appendChild(link);
     } else if (/^(wav|mp3|ogg)$/.test(kind)) {
@@ -514,7 +525,7 @@
     dl.textContent = "download " + path;
     box.appendChild(dl);
     log.appendChild(box);
-    window.scrollTo(0, document.body.scrollHeight);
+    scrollEnd();
     return box;
   }
 
@@ -856,30 +867,41 @@
   // the conversation of the session, drawn again on connect and after a switch
   es.addEventListener("history", function (e) {
     var d = JSON.parse(e.data);
-    log.textContent = "";
-    waitHide();
-    thinkEnd();
-    current = null;
-    if (d.more) { add("usage", "earlier messages of this session are not shown"); }
-    (d.messages || []).forEach(function (m) {
-      if (m.role === "user") { add("user", m.text); return; }
-      // a tool call of the chat: its line and its result, drawn as the live ones are
-      if (m.role === "tool") {
-        toolLine(m.text, m.full);
-        if (m.result !== undefined && m.result !== null) { add("result", m.result); }
-        (m.files || []).forEach(function (f) { fileBlock(d.session, f.path, f.v); });
-        current = null;
-        return;
-      }
-      // the thinking of the answer (kept in the session's meta file), its usage as the tag
-      if (m.thinking) { thinkStart(); thinkAdd(m.thinking); thinkDone("thought"); }
-      var node = add("answer", "");
-      node.raw = m.text;
-      drawAnswer(node);
-      addTag(node, m.usage || ""); // every answer has its line, with the revert of the last one
-    });
+    var shown = log;
+    var fresh = document.createElement("div");
+    building = true;
+    log = fresh;
+    try {
+      waitHide();
+      thinkEnd();
+      current = null;
+      if (d.more) { add("usage", "earlier messages of this session are not shown"); }
+      (d.messages || []).forEach(function (m) {
+        if (m.role === "user") { add("user", m.text); return; }
+        // a tool call of the chat: its line and its result, drawn as the live ones are
+        if (m.role === "tool") {
+          toolLine(m.text, m.full);
+          if (m.result !== undefined && m.result !== null) { add("result", m.result); }
+          (m.files || []).forEach(function (f) { fileBlock(d.session, f.path, f.v); });
+          current = null;
+          return;
+        }
+        // the thinking of the answer (kept in the session's meta file), its usage as the tag
+        if (m.thinking) { thinkStart(); thinkAdd(m.thinking); thinkDone("thought"); }
+        var node = add("answer", "");
+        node.raw = m.text;
+        drawAnswer(node);
+        addTag(node, m.usage || ""); // every answer has its line, with the revert of the last one
+      });
+    } finally {
+      log = shown;
+      building = false;
+    }
+    // in place in one step: no layout comes between the old chat going and the new one coming
+    shown.textContent = "";
+    while (fresh.firstChild) { shown.appendChild(fresh.firstChild); }
     refreshReverts();
-    window.scrollTo(0, document.body.scrollHeight);
+    scrollEnd();
   });
   // thinking: a block with a spinner and the count of characters while it
   // comes; a click on it shows the text. It stops when the answer starts.
@@ -946,7 +968,7 @@
     blocks(think.raw, think.body); // the thinking is markdown too
     think.chars += t.length;
     think.count.textContent = " \u00b7 " + think.chars + " chars";
-    window.scrollTo(0, document.body.scrollHeight);
+    scrollEnd();
   }
   // a thinking block that is over already (the history): its label, no timing
   function thinkDone(label) {
@@ -969,12 +991,14 @@
   });
   es.addEventListener("text", function (e) {
     var t = JSON.parse(e.data).text;
+    // only whitespace before the first word: nothing yet (an empty answer would take the place of the revert of its question)
+    if (!current && !/\S/.test(t || "")) { return; }
     waitHide();
     thinkEnd();
     if (!current) { current = add("answer", ""); }
     current.raw = (current.raw || "") + t;
     drawAnswer(current);
-    window.scrollTo(0, document.body.scrollHeight);
+    scrollEnd();
   });
   es.addEventListener("think", function (e) {
     thinkAdd(JSON.parse(e.data).text);
@@ -1027,14 +1051,14 @@
     });
     cancel.addEventListener("click", disarm);
   }
-  function addTag(answer, text) {
+  function makeRevert(answer, text) {
     var tag = el("div"), span = el("span"), btn = el("button");
     tag.className = "tag";
     span.textContent = text;
     btn.type = "button";
     btn.className = "revert";
     btn.textContent = "revert";
-    btn.title = "take this exchange out of the chat (only the last answer can be reverted)";
+    btn.title = "take this exchange out of the chat (only the last exchange can be reverted)";
     // two clicks, no dialog: the first asks ("sure?" on the button, and a blue "cancel" next to
     // it), the second within 4 s reverts; cancel or the time out takes the question back
     var armed = null, cancel = el("button");
@@ -1064,13 +1088,31 @@
     tag.appendChild(btn);
     tag.appendChild(cancel);
     answer.appendChild(tag);
+  }
+  function addTag(answer, text) {
+    makeRevert(answer, text);
     refreshReverts();
   }
-  // only the last answer of the chat can be reverted: its button is the only one enabled (not while
-  // a turn runs). A revert takes its exchange out, so the answer before it becomes the last one.
+  // only the last exchange of the chat can be reverted: its button is the only one enabled (not while a
+  // turn runs). It is on the answer, or, when no answer follows its question (a cancelled question, or calls
+  // that gave no text), on the question. A revert takes the exchange out, so the one before becomes the last.
+  function lastExchange() {
+    var kids = log.children;
+    for (var i = kids.length - 1; i >= 0; i--) {
+      // an answer with no text (a stop before the first word) is not an answer: its question is the exchange
+      if (kids[i].classList.contains("user") || (kids[i].classList.contains("answer") && kids[i].textContent !== "")) {
+        return kids[i];
+      }
+    }
+    return null;
+  }
   function refreshReverts() {
-    var answers = log.querySelectorAll(":scope > .answer");
-    var last = answers.length ? answers[answers.length - 1] : null;
+    var last = lastExchange();
+    Array.prototype.forEach.call(log.querySelectorAll(":scope > .user"), function (u) {
+      var tag = u.querySelector(":scope > .tag");
+      if (u === last && !tag) { makeRevert(u, ""); }
+      else if (u !== last && tag) { u.removeChild(tag); }
+    });
     Array.prototype.forEach.call(log.querySelectorAll(".tag > button.revert"), function (b) {
       b.disabled = !last || b.parentNode.parentNode !== last || send.disabled;
     });

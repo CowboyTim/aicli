@@ -6,7 +6,7 @@
 #   python3 tools/ui-check/fake-services.py LLM_PORT IMAGE_PORT [AUDIO_PORT]
 # and an audio service (AI_AUDIO_URL, the generate_audio tool) that answers with a short WAV clip. Point the
 # server at them with start-server.sh (AICLI_CHECK_LLM, AICLI_CHECK_IMAGE, AICLI_CHECK_AUDIO).
-import base64, json, math, struct, sys, threading, zlib
+import base64, json, math, struct, sys, threading, time, zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
@@ -50,6 +50,26 @@ class Llm(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))) or b'{}')
         messages = body.get('messages', [])
         events = []
+        last_user = next((m.get('content') or '' for m in reversed(messages) if m.get('role') == 'user'), '')
+        if 'slow' in last_user:
+            # "slow" in the message: a long answer streamed word by word, a second apart (for a cancel); "late"
+            # waits five seconds before the first word
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/event-stream')
+            self.end_headers()
+            try:
+                time.sleep(5 if 'late' in last_user else 0)
+                for n in range(60):
+                    # "think" in the message: the model reasons and does not answer (a stop during the thinking)
+                    delta = {'reasoning_content': 'pondering %d ' % n} if 'think' in last_user else {'content': 'word%d ' % n}
+                    chunk = {'choices': [{'delta': delta}]}
+                    self.wfile.write(('data: %s\n\n' % json.dumps(chunk)).encode())
+                    self.wfile.flush()
+                    time.sleep(1)
+                self.wfile.write(b'data: [DONE]\n\n')
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
         # a tool call for each new message of the user (a message after a tool result is answered in text)
         if body.get('tools') and messages and messages[-1].get('role') != 'tool' and 'sound' in next(
                 (m.get('content') or '' for m in reversed(messages) if m.get('role') == 'user'), ''):

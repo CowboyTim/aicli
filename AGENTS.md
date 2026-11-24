@@ -701,7 +701,7 @@ The checks are in `tools/ui-check/`:
   the session `s1` (two exchanges, no model needed) and a project root with the account
   `acme`. It prints the address, the token (`abc123`), the state dir and the log. It saves the
   server's PID in the state dir, so stop it with `kill -INT $(cat <state>/server.pid)`.
-- `revert.js`: the revert button of the chat. Only the last answer's is enabled; the first
+- `revert.js`: the revert button of the chat. Only the last exchange's is enabled (on its answer, or on its question when no answer follows it); the first
   click shows "sure?", the second reverts it. Prints the buttons, the chat file and the page errors.
 - `menu.js`: the session menu (rename from the name box, delete with "sure?" and "cancel")
   and the project menu (create, rename, delete). It changes the state dir.
@@ -709,6 +709,8 @@ The checks are in `tools/ui-check/`:
 - `fake-services.py`: a fake chat (it asks for `generate_image` for each new message of the user, and answers in text after a tool result; "sound" in the message asks for `generate_audio`, "copy" for a bash call that copies a picture), a fake image service (a 256 pixel PNG) and a fake audio service (a WAV clip), so a turn runs without a model.
 - `audio.js`: a clip a tool made plays (the audio element) and downloads, live and after a reload. It needs the fake services with the audio service (`AICLI_CHECK_AUDIO`).
 - `files.js`: a picture a tool wrote is shown inline and downloads, live and after a reload; a tool line opens to the whole call; a follow-up picture goes to a new name and each entry keeps its own.
+- `cancel.js`: a cancelled answer can be reverted: a question cancelled before its first word or while the model is thinking ("slow think"), and an answer cut short, each with its revert, which takes the exchange out of the chat file and the page; a stop leaves no empty answer. It needs the fake services with the chat's slow answers ("slow", "late", "think"), and a fresh fixture.
+- `revert-scroll.js`: reverting the last answer of a long chat keeps the page at its end, on a desktop and a phone-sized view (needs a fresh fixture: it adds long exchanges to the chat before the page opens). The history is built off the page and put in place in one step, then the page scrolls once to its end.
 - `bashfiles.js`: "copy the picture" makes the fake model ask for a bash call (`cp live.png copy.png`): the copy is shown inline with its download, live and after a reload, and the result on the page has no list of files.
 - `multi.js`: "draw two cubes" makes the fake model answer with two calls at index 0: two tool lines, two pictures, each result's time, the header's totals (the times are live, not kept with the chat). It needs the fake services and a server started with `AICLI_CHECK_LLM` and `AICLI_CHECK_IMAGE` (the first lines of the file say how).
 

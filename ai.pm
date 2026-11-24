@@ -1170,6 +1170,7 @@ sub new_printer {
             &{$out}("\n") if length $last; # a blank line between thinking and answer
         }
         if($to_web){
+            return unless length($text); # an empty piece is no text for the page (it would be an empty answer there)
             emit($kind eq 'think' ? 'think' : 'text', {text => web_text($text)});
         } else {
             my $color = $kind eq 'think' ? $colors::think_color : $colors::green_color;
