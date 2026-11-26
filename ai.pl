@@ -326,7 +326,7 @@ printed on stderr when it starts. Every request needs the token (a cookie set by
 that address, or an C<Authorization: Bearer> header). C<AI_UI_TOKEN> in the
 environment sets the token. Routes: C</events> (the stream), C<POST /message>,
 C<POST /abort>, C</state>, C<GET /file> (a file of the session's project: a
-picture or a sound inline, anything else a download), C<POST /voice> (a WAV
+picture or a sound inline, a model (C<glb>, C<stl>) with a button for its 3D view, anything else a download), C<POST /voice> (a WAV
 recording, recognized
 by C<AI_ASR_URL> and sent to the chat as soon as it is ready), C<POST /session>
 (switch to another session by its name, or C<{"new": true}> for a new one).
@@ -336,7 +336,7 @@ the session when it connects and after a switch: what was said, the answers, and
 the tool calls with their results. A file a tool wrote (C<write>, C<convert>,
 C<generate_image>, C<speech>, C<generate_audio>), and a picture or a sound a C<bash> call made or changed, is listed
 under its call: a picture is shown inline,
-a sound plays, and each has a download.
+a sound plays, a model has a button for its 3D view (the view loads on the click), and each has a download.
 
 Each session has a worker process of its own (the same chat, forked by this
 one): sessions run their turns at the same time, and the page can switch away

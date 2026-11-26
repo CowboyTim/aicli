@@ -1345,6 +1345,7 @@ our %FILE_TYPE = (
     png => ['image/png', 1], jpg => ['image/jpeg', 1], jpeg => ['image/jpeg', 1],
     gif => ['image/gif', 1], webp => ['image/webp', 1],
     wav => ['audio/wav', 1], mp3 => ['audio/mpeg', 1], ogg => ['audio/ogg', 1],
+    glb => ['model/gltf-binary', 0], stl => ['model/stl', 0],
     txt => ['text/plain; charset=utf-8', 0], md => ['text/plain; charset=utf-8', 0],
     csv => ['text/csv; charset=utf-8', 0], json => ['application/json', 0], pdf => ['application/pdf', 0],
 );
@@ -1758,6 +1759,16 @@ sub _dispatch {
     }
     if($p eq '/file' and $m eq 'GET'){
         return _file($cn, $acct, $q);
+    }
+    # the 3D view of a model (ai/ui/viewer.js) and the three.js files it loads (ai/ui/vendor/three): .js files only
+    if($m eq 'GET' and $p =~ m{\A/(?:viewer\.js|vendor/three/[A-Za-z0-9_./-]+\.js)\z} and index($p, '..') < 0){
+        my $js_file = File::Basename::dirname($html_file).$p;
+        open(my $vfh, '<:raw', $js_file) and -f $js_file
+            or return _respond($cn, 404, 'text/plain', "no such file\n");
+        local $/;
+        my $js = <$vfh>;
+        close($vfh);
+        return _respond($cn, 200, 'text/javascript; charset=utf-8', $js);
     }
     return _respond($cn, 405, 'text/plain', "method not allowed\n") if $p =~ m{^/(events|message|session|session/delete|session/rename|project|voice|abort|state|rewind|file)$};
     return _respond($cn, 404, 'text/plain', "not found\n");

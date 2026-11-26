@@ -136,8 +136,10 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   `tools::free_name` for a taken name; a link named `uploads` is refused; the page names
   the files in the next message, `Uploaded: uploads/...`; `t/151_upload.t`,
   `tools/ui-check/upload.js`). Not built yet: slash commands over `POST /command` (refused with 400 for now). The files a tool
-  writes are on the page: a picture inline and a download, live and after a reload
-  (`GET /file`, the `file` event, the history's `files`; `tools/ui-check/files.js`).
+  writes are on the page: a picture inline, a sound, a model (`.glb`, `.stl`) with a button for its 3D view, and a download, live and after a reload
+  (`GET /file`, the `file` event, the history's `files`; `tools/ui-check/files.js`). The 3D view
+  (`ai/ui/viewer.js`, three.js in `ai/ui/vendor/three`) is parsed and tested with node (`t/158`); its drawing
+  has not been seen in a browser, the sandbox's headless browsers have no WebGL.
 - What is open is in PLAN.md. What is built is in README.md and in this
   "Status", not in PLAN.md.
 
@@ -241,6 +243,9 @@ What this file replaces: MEMORY.md, the notes of an earlier session (September
   go in the project's own AGENTS.md).
   `ai/imagemagick/policy.xml` is the ImageMagick policy of the `convert` tool
   (`MAGICK_CONFIGURE_PATH` points at its directory in the child).
+- **ai/ui/** – the page: `index.html` (with its import map of three.js), `theme.css`, the icon, `viewer.js`
+  (the 3D view of a model, loaded on its click) and `vendor/three/` (three.js, MIT: `LICENSE`, and `NOTICE`
+  with the version and the SHA-256 of each file that is there; `t/158` checks them, and that no other `.js` is there).
 - **aicli.sh**, **Dockerfile** – docker wrapper and the Ubuntu image.
   Builds: `./build-watch.sh` runs `docker buildx bake --pull` each time
   `.build-trigger` appears (`touch .build-trigger` starts one). The output goes
@@ -679,6 +684,7 @@ Other APIs are reached through an OpenAI compatible gateway, such as LiteLLM or 
 | `t/149_model_timeout.t` | the start with a model server that takes the connection and never answers: the model list and the context time out (`ai::LIST_TIMEOUT`), the error says so, the start goes on with no models |
 | `t/147_bash_pictures.t` | a bash call on the web page: the pictures and sounds it made or changed are offered (a file event with a version, the model's result lists them, the history has them), a change to anything else and a failed call offer nothing |
 | `t/156_generate_3d.t` | the generate_3d tool (a textured GLB, the mesh alone, an STL with its size): the job's requests (the start's body: the picture in base64 and the options as the service names them; the state asked until it is done; the download), the GLB written whole and journaled, the default name (the picture's name), a name taken goes to the next free one, the refusals (no request made), the service's refusals and failures (busy, a reason, no job id, a failed job, a lost job, a download that is not a model), a job over `AI_3D_TIMEOUT`, a sub-agent's call (a job of the loop), a stop, the file offered |
+| `t/158_model_view.t` | the 3D view of a model on the page: `/viewer.js` and the `.js` files of `ai/ui/vendor/three` behind the login (nothing else of that directory, no `..`), `GET /file` sends a `.glb` and an `.stl` as downloads, the page's import map and no script from outside, the vendored files as `NOTICE` names them (checksums, no other `.js`, the MIT license); with node: the parsers of the viewer (a binary STL, a glTF with its own data, a glTF with a web address: no request leaves the page) |
 | `t/157_voice_tools.t` | transcribe (the multipart request: the file, the language, the task; the text; no text; refusals), voices (the names and their words, a filter, none), create_voice (the request; a name the service has, a refusal with its reason; refusals) |
 | `t/146_generate_audio.t` | the generate_audio tool: the WAV written whole and journaled, a name taken goes to the next free one, the request (the seconds, steps and seed, the defaults), the refusals (no request made), a non-WAV answer leaves no file, the file offered |
 | `t/143_speech.t` | the speech tool: the WAV written whole (a temp name renamed when whole), a name taken goes to the next free one and the file there stays, the request, the default name, the refusals (no request made), an answer that is not a WAV leaves no file, the file offered |
@@ -739,6 +745,10 @@ The checks are in `tools/ui-check/`:
 - `revert-scroll.js`: reverting the last answer of a long chat keeps the page at its end, on a desktop and a phone-sized view (needs a fresh fixture: it adds long exchanges to the chat before the page opens). The history is built off the page and put in place in one step, then the page scrolls once to its end.
 - `bashfiles.js`: "copy the picture" makes the fake model ask for a bash call (`cp live.png copy.png`): the copy is shown inline with its download, live and after a reload, and the result on the page has no list of files.
 - `multi.js`: "draw two cubes" makes the fake model answer with two calls at index 0: two tool lines, two pictures, each result's time, the header's totals (the times are live, not kept with the chat). It needs the fake services and a server started with `AICLI_CHECK_LLM` and `AICLI_CHECK_IMAGE` (the first lines of the file say how).
+- `model.js`: the 3D view of a model: a tool call that wrote an `.stl` gets the page's "view in 3D" button, the
+  module `/viewer.js` and its parser run in the browser, and the click draws the model or says why not. Headless
+  Firefox has no WebGL here, so the expected result is "3D view: ... WebGL context"; a browser with WebGL shows a canvas.
+  Start it on a fresh fixture (`start-server.sh`), then `AICLI_URL=... AICLI_STATE=<state dir> node model.js`.
 
 Run them from `tools/ui-check/` with the server's settings:
 

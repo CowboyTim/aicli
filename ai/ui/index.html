@@ -6,6 +6,7 @@
 <title>aicli</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="icon" href="/favicon.ico" sizes="any">
+<script type="importmap">{"imports": {"three": "/vendor/three/build/three.module.js"}}</script>
 <style>
   /*theme.css*/
 
@@ -108,6 +109,10 @@
   .file { font-size: 13px; margin-left: 1.5em; }
   .file img { display: block; max-width: 100%; height: auto; border: 1px solid var(--line); border-radius: 6px; margin: 4px 0 6px; }
   .file audio { display: block; max-width: 100%; margin: 4px 0 6px; }
+  .file .model { display: block; width: 100%; max-width: 640px; height: 320px; margin: 4px 0 6px; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; color: var(--muted); }
+  .file .model:empty { display: none; }
+  .file .model canvas { display: block; width: 100%; height: 100%; }
+  .file button { font-size: 13px; padding: 2px 10px; margin: 4px 0 6px; color: var(--accent); }
   .file a { color: var(--accent); }
   .tool-head { display: block; width: 100%; margin: 0; padding: 0; border: none; background: none; text-align: left;
                font: inherit; font-size: 13px; color: var(--accent); cursor: pointer; white-space: pre-wrap; }
@@ -530,6 +535,19 @@
       audio.controls = true;
       audio.src = view;
       box.appendChild(audio);
+    } else if (/^(glb|stl)$/.test(kind)) {
+      // a 3D model: its view (viewer.js and three.js) is loaded on the first click, not with the page
+      var model = document.createElement("div");
+      model.className = "model";
+      var open3d = document.createElement("button");
+      open3d.type = "button";
+      open3d.textContent = "view in 3D";
+      open3d.addEventListener("click", function () {
+        open3d.remove();
+        viewModel(model, view, kind);
+      });
+      box.appendChild(open3d);
+      box.appendChild(model);
     }
     var dl = document.createElement("a");
     dl.href = view + "&download=1";
@@ -539,6 +557,25 @@
     log.appendChild(box);
     scrollEnd();
     return box;
+  }
+
+  // the 3D view of a model file: the page keeps four open at once (each one is a WebGL context), and the
+  // oldest is closed for a new one; a view that fails says why in its place
+  var views = [];
+  function viewModel(holder, view, kind) {
+    holder.textContent = "loading the 3D view...";
+    import("/viewer.js").then(function (viewer) {
+      return viewer.show(holder, view, kind);
+    }).then(function (h) {
+      views.push({ close: h.dispose, holder: holder });
+      while (views.length > 4) {
+        var old = views.shift();
+        old.close();
+        old.holder.textContent = "3D view closed: four are open at once";
+      }
+    }).catch(function (err) {
+      holder.textContent = "3D view: " + (err && err.message ? err.message : String(err));
+    });
   }
 
   // the mic needs the speech recognizer: without one it is not offered
