@@ -5050,6 +5050,55 @@ EOb
         # with AI_AUDIO_URL, and by the flag AI_AUDIO (1 always, 0 never; unset: when the server lists an audio model)
         available => sub {(length($::ORIG_ENV{AI_AUDIO_URL} // '') and ai::flag_allows('AI_AUDIO', 'audio')) ? 1 : 0},
     },
+    generate_3d => {
+        description => "make a textured 3D model (a binary glTF, .glb) from a picture of one object in the workspace with the local 3D model (TRELLIS.2): the object is cut out (by the picture's transparency, or its background is removed), and the model is written to the output name. It takes minutes: about 4 at resolution 512, about 15 at 1024 (the default); the service makes one model at a time. The same picture, resolution and seed give the same model",
+        syntax => "///GENERATE_3D_4c9a+EO_8b13+EO_d7e0+EO_25fa+EO_93c6+EO_e4b8+EO_6a1d+EO_f05c\n{{input}}\nEO_8b13[LENGTH({{input}})]\n{{output}}\nEO_d7e0[LENGTH({{output}})]\n{{resolution}}\nEO_25fa[LENGTH({{resolution}})]\n{{seed}}\nEO_93c6[LENGTH({{seed}})]\n{{background}}\nEO_e4b8[LENGTH({{background}})]\n{{faces}}\nEO_6a1d[LENGTH({{faces}})]\n{{texture_size}}\nEO_f05c[LENGTH({{texture_size}})]\nGENERATE_3D_4c9a",
+        properties  => {
+            "input"        => {type => "string", description => "The picture of the object in the workspace (PNG, JPEG, GIF or WebP): one object, best on a plain background or with the background transparent"},
+            "output"       => {type => "string", description => "The GLB file to write in the workspace; empty for the picture's name with .glb. A file of that name already there is kept: the model goes to the first free name (name-2.glb, ...), and the result names it"},
+            "resolution"   => {type => "string", description => "512 (faster) or 1024 (finer); empty for 1024"},
+            "seed"         => {type => "string", description => "A whole number; empty for 0"},
+            "background"   => {type => "string", description => "auto (the picture's transparency when it has some, else the background is removed), remove (always remove it) or keep (the whole picture is the object); empty for auto"},
+            "faces"        => {type => "string", description => "The faces of the mesh, 1000 to 10000000; empty for 700000"},
+            "texture_size" => {type => "string", description => "The width and height of the texture: 512, 1024, 2048 or 4096; empty for 4096"},
+        },
+        required => ["input"],
+        # only with the 3D service to ask (AI_3D_URL: its base address), and by the flag AI_3D (1 always, 0 never; unset:
+        # when the server lists a 3D model)
+        available => sub {(length($::ORIG_ENV{AI_3D_URL} // '') and ai::flag_allows('AI_3D', '3d')) ? 1 : 0},
+    },
+    transcribe => {
+        description => "write down the speech in a sound file of the workspace (a WAV file) with the local speech recognizer (Whisper): the text comes back. Give the language of the speech as a code such as en, nl or de; the task translate gives the text in English instead",
+        syntax => "///TRANSCRIBE_6b2d+EO_7f4e+EO_c1a9+EO_3e57\n{{input}}\nEO_7f4e[LENGTH({{input}})]\n{{language}}\nEO_c1a9[LENGTH({{language}})]\n{{task}}\nEO_3e57[LENGTH({{task}})]\nTRANSCRIBE_6b2d",
+        properties  => {
+            "input"    => {type => "string", description => "The sound file in the workspace (WAV)"},
+            "language" => {type => "string", description => "The language of the speech as a code: en, nl, de, fr, ...; empty for en"},
+            "task"     => {type => "string", description => "transcribe (the words as they are said) or translate (into English); empty for transcribe"},
+        },
+        required => ["input"],
+        # only with the speech recognizer to ask (AI_ASR_URL, the one /voice uses)
+        available => sub {length($::ORIG_ENV{AI_ASR_URL} // '') ? 1 : 0},
+    },
+    voices => {
+        description => "list the voices of the speech service, the names the speech tool takes, each with the words of the recording it was made from. Give a filter, a regular expression for the names, to narrow it",
+        syntax => "///VOICES_2f8e+EO_a8d4\n{{filter}}\nEO_a8d4[LENGTH({{filter}})]\nVOICES_2f8e",
+        properties  => {
+            "filter" => {type => "string", description => "A regular expression for the voice names; empty for all"},
+        },
+        required => [],
+        available => sub {length($::ORIG_ENV{AI_SPEECH_URL} // '') ? 1 : 0},
+    },
+    create_voice => {
+        description => "make a new voice for the speech tool from a recording of one person speaking (a WAV file of 0.5 to 60 seconds in the workspace) and the exact words said in it. The voice gets the name given and the speech tool can use it at once",
+        syntax => "///CREATE_VOICE_8a1c+EO_5c3f+EO_e9b2+EO_14d6\n{{input}}\nEO_5c3f[LENGTH({{input}})]\n{{name}}\nEO_e9b2[LENGTH({{name}})]\n{{text}}\nEO_14d6[LENGTH({{text}})]\nCREATE_VOICE_8a1c",
+        properties  => {
+            "input" => {type => "string", description => "The recording in the workspace (WAV, 0.5 to 60 seconds)"},
+            "name"  => {type => "string", description => "The name of the new voice: letters, digits, '-', '_' and '.', starting with a letter, a digit or '_'; not the name of a voice there already"},
+            "text"  => {type => "string", description => "The words said in the recording, exactly (at most 1000 characters)"},
+        },
+        required => ["input", "name", "text"],
+        available => sub {length($::ORIG_ENV{AI_SPEECH_URL} // '') ? 1 : 0},
+    },
     list => {
         description => "list a directory: type (d, f, l), size and name of every entry",
         syntax => "///LIST_a41d+EO_6c08\n{{path}}\nEO_6c08[LENGTH({{path}})]\nLIST_a41d",
@@ -5415,14 +5464,23 @@ sub audio_output {
     return length($out // '') ? $out : 'audio_'.(length($seed // '') ? $seed + 0 : 0).'.wav';
 }
 
+# the name of the model generate_3d writes: the output, or the picture's name with .glb (model.glb when it has none left)
+sub model3d_output {
+    my ($out, $input) = @_;
+    return $out if length($out // '');
+    (my $stem = $input // '') =~ s{\A.*/}{};
+    $stem =~ s/\.[^.]*\z//;
+    return (length($stem) ? $stem : 'model').'.glb';
+}
+
 # the tools that write a file as a whole, and the argument that names it
-our %WRITES = (write => 'path', convert => 'output', generate_image => 'output', speech => 'output', generate_audio => 'output', qr_encode => 'output');
+our %WRITES = (write => 'path', convert => 'output', generate_image => 'output', speech => 'output', generate_audio => 'output', qr_encode => 'output', generate_3d => 'output');
 
 # The workspace file a call of these tools wrote, relative to the workspace $base. undef when the call
 # names no file, or the file is not there (outside the workspace, or gone). What the page offers for
 # download (and shows, for a picture). A generated file's name is the one its result gives ("wrote
 # NAME: ..."), since a name already taken gets another (see free_name); the others are the arguments.
-our %NAMED_BY_RESULT = (generate_image => 1, speech => 1, generate_audio => 1, convert => 1, qr_encode => 1);
+our %NAMED_BY_RESULT = (generate_image => 1, speech => 1, generate_audio => 1, convert => 1, qr_encode => 1, generate_3d => 1);
 
 # the version of a workspace file, for the page's address of it: a changed file gets a new address, so
 # the browser does not keep showing the old picture
@@ -5645,6 +5703,241 @@ sub generate_audio_5e1c {
     }, url => "$base/v1/audio/generations", method => 'post', data => $data, proxy => $proxy,
        timeout => $::ORIG_ENV{AI_AUDIO_TIMEOUT} // 3600, max_size => 268_435_456, follow => 0,
        headers => ["Content-Type: application/json", "Accept: audio/wav", "User-Agent: aicli"]);
+}
+
+# A job (start, finish) as _http makes one: waited for by the main agent, handed back as it is for a sub-agent
+sub _wait_job {
+    my ($job) = @_;
+    return $job if $ASYNC;
+    my ($over, @r);
+    &{$job->{start}}(sub {@r = @_; $over = 1});
+    loop::run(sub {$over});
+    return &{$job->{finish}}(@r);
+}
+
+# the reply of a 3D service request as JSON, or the reason it is not one (an HTTP error with its message)
+sub _model3d_reply {
+    my ($r, $what) = @_;
+    my $reply = eval {JSON::XS->new->utf8->decode($r->{body} // '')};
+    my $msg = ref($reply) eq 'HASH' && ref($reply->{error}) eq 'HASH' ? $reply->{error}{message} : undef;
+    return (undef, "the 3D service is busy with another model: try again when it is done".(length($msg // '') ? " ($msg)" : ''))
+        if ($r->{code} // 0) == 429;
+    return (undef, "$what: ".($msg // $r->{error})) if defined $r->{error} and !$r->{too_big};
+    return (undef, "$what: the 3D service did not answer with JSON") unless ref($reply) eq 'HASH';
+    return ($reply, undef);
+}
+
+# generate_3d: a picture to a textured 3D model through the 3D service (AI_3D_URL, TRELLIS.2). A job of minutes: POST
+# /v1/3d/generations starts it and answers its id at once, GET /v1/3d/generations/ID is asked every AI_3D_POLL seconds
+# (5) until it is done, GET .../content is the binary glTF, written to the workspace as the other generators write theirs.
+# The waits are timers of the event loop (nothing blocks); a stop (ctrl-C) leaves the service's job running.
+sub generate_3d_4c9a {
+    my ($t_args) = @_;
+    my ($input, $out, $res, $seed, $bg, $faces, $tex) = map {utils::trim($t_args->[$_] // '')} 0 .. 6;
+    die "no input: name the picture of the object\n" unless length $input;
+    my $base = $::ORIG_ENV{AI_3D_URL} // '';
+    die "no 3D service is set up (AI_3D_URL)\n" unless length $base;
+    $base =~ s{/+\z}{};
+    die "resolution: 512 or 1024\n" if length $res and $res !~ m/\A(?:512|1024)\z/;
+    die "seed: a whole number\n" if length $seed and $seed !~ m/\A\d+\z/;
+    $bg = lc $bg;
+    die "background: auto, remove or keep\n" if length $bg and $bg !~ m/\A(?:auto|remove|keep)\z/;
+    die "faces: a whole number from 1000 to 10000000\n"
+        if length $faces and ($faces !~ m/\A\d+\z/ or $faces < 1000 or $faces > 10_000_000);
+    die "texture_size: 512, 1024, 2048 or 4096\n" if length $tex and $tex !~ m/\A(?:512|1024|2048|4096)\z/;
+    my $in = _path($input);
+    die "no such file: $input\n" unless -f $in;
+    my $max = $::ORIG_ENV{AI_3D_MAX} // 20_000_000;
+    die "$input is bigger than $max bytes (AI_3D_MAX): make it smaller with convert first\n" if $max and -s $in > $max;
+    my $picture = _read_bytes($in);
+    die "$input is not a picture (PNG, JPEG, GIF or WebP)\n" unless _image_type($picture);
+    my $name = model3d_output($out, $input);
+    die "the output must be a .glb file\n" unless $name =~ m/\.glb\z/i;
+    _path($name); # refused here, before anything is asked, when it is outside the workspace
+    my %body = (model => 'trellis-2', image => MIME::Base64::encode_base64($picture, ''), seed => (length $seed ? $seed : 0) + 0);
+    $body{resolution} = $res + 0 if length $res;
+    $body{remove_background} = {auto => 'auto', remove => 'true', keep => 'false'}->{$bg} if length $bg;
+    $body{faces} = $faces + 0 if length $faces;
+    $body{texture_size} = $tex + 0 if length $tex;
+    my $data = JSON::XS->new->utf8->canonical->encode(\%body);
+    my $proxy = $::ORIG_ENV{AI_3D_PROXY} // '';   # the service is near: no proxy, unless AI_3D_PROXY says so
+    $proxy = '' if $proxy =~ m/^(?:none|off|direct|no)$/i;
+    my $limit = $::ORIG_ENV{AI_3D_TIMEOUT} // 3600;
+    my $every = $::ORIG_ENV{AI_3D_POLL} // 5;
+    my %common = (proxy => $proxy, follow => 0, connect_timeout => 10);
+    my $start = sub {
+        my ($done) = @_;
+        my $t0 = Time::HiRes::time();
+        my ($id, $poll, $end);
+        $end = sub { undef $poll; my $d = $done; undef $done; $d->(@_) if $d };
+        my $wait = sub {
+            loop::timer($every, sub {
+                my ($aborted) = @_;
+                return $end->({error => 'interrupted'}) if $aborted;
+                $poll->();
+            });
+        };
+        $poll = sub {
+            loop::http(%common, url => "$base/v1/3d/generations/$id", method => 'get', timeout => 30, max_size => 1_000_000,
+                headers => ["Accept: application/json", "User-Agent: aicli"], on_done => sub {
+                my ($state, $err) = _model3d_reply($_[0], 'the state of the 3D job');
+                return $end->({error => $err}) if $err;
+                my $status = $state->{status} // '';
+                if ($status eq 'in_progress') {
+                    return $end->({error => "the 3D job $id is not done after $limit seconds (AI_3D_TIMEOUT); it goes on in the service"})
+                        if $limit and Time::HiRes::time() - $t0 > $limit;
+                    return $wait->();
+                }
+                return $end->({error => "the 3D job failed: ".($state->{error} // 'no reason given')}) unless $status eq 'completed';
+                loop::http(%common, url => "$base/v1/3d/generations/$id/content", method => 'get', timeout => 900,
+                    max_size => 1_000_000_000, headers => ["Accept: model/gltf-binary", "User-Agent: aicli"], on_done => sub {
+                    my ($r) = @_;
+                    $end->({%$r, job => $state});
+                });
+            });
+        };
+        loop::http(%common, url => "$base/v1/3d/generations", method => 'post', data => $data, timeout => 600,
+            max_size => 1_000_000, headers => ["Content-Type: application/json", "Accept: application/json", "User-Agent: aicli"],
+            on_done => sub {
+            my ($job, $err) = _model3d_reply($_[0], 'the 3D service refused the picture');
+            return $end->({error => $err}) if $err;
+            $id = $job->{id} // '';
+            return $end->({error => "the 3D service gave no job id"}) unless $id =~ m/\A[\w.-]+\z/;
+            $wait->();
+        });
+    };
+    my $finish = sub {
+        my ($r) = @_;
+        die "$r->{error}\n" if defined $r->{error} and !$r->{job};
+        _http_check($r);
+        die "the model is bigger than the download limit\n" if $r->{too_big};
+        my $glb = $r->{body} // '';
+        die "the 3D service sent no binary glTF\n" unless substr($glb, 0, 4) eq 'glTF';
+        my $to = free_name($name); # as for the picture and the sounds: a file of that name already there stays
+        my $path = _path($to);
+        die "can not write $to: it is a link or a directory\n" if -l $path or -d $path;
+        _write_whole($path, $glb, 'generate_3d', $to);
+        my $job = $r->{job};
+        return ai::to_bytes(sprintf("wrote %s: %d bytes of GLB (resolution %d, seed %d, %.0f seconds in the service)\n",
+            $to, length($glb), $job->{options}{resolution} // $body{resolution} // 1024, $body{seed}, $job->{seconds} // 0));
+    };
+    return _wait_job(bless({start => $start, finish => $finish}, 'tools::job'));
+}
+
+# the MIME type of a sound file by its name, for an upload
+sub _sound_type {
+    my ($name) = @_;
+    return 'audio/wav'  if $name =~ m/\.wav\z/i;
+    return 'audio/mpeg' if $name =~ m/\.mp3\z/i;
+    return 'audio/ogg'  if $name =~ m/\.og[ag]\z/i;
+    return 'audio/flac' if $name =~ m/\.flac\z/i;
+    return 'application/octet-stream';
+}
+
+# transcribe: the text of a sound file in the workspace, from the speech recognizer that /voice uses (AI_ASR_URL, an
+# OpenAI style /v1/audio/transcriptions), with the language and, for translate, the task (the rocm-inference server's field)
+sub transcribe_6b2d {
+    my ($t_args) = @_;
+    my ($input, $lang, $task) = map {utils::trim($t_args->[$_] // '')} 0 .. 2;
+    die "no input: name the sound file\n" unless length $input;
+    my $url = $::ORIG_ENV{AI_ASR_URL} // '';
+    die "no speech recognizer is set up (AI_ASR_URL)\n" unless length $url;
+    $lang = lc $lang;
+    die "language: a code such as en, nl or de\n" if length $lang and $lang !~ m/\A[a-z]{2,3}\z/;
+    $task = lc $task;
+    die "task: transcribe or translate\n" if length $task and $task !~ m/\A(?:transcribe|translate)\z/;
+    my $in = _path($input);
+    die "no such file: $input\n" unless -f $in;
+    my $max = $::ORIG_ENV{AI_ASR_MAX} // 100_000_000;
+    die "$input is bigger than $max bytes (AI_ASR_MAX)\n" if $max and -s $in > $max;
+    my $sound = _read_bytes($in);
+    die "$input is empty\n" unless length $sound;
+    (my $file = $input) =~ s{\A.*/}{};
+    $file =~ s/["\r\n\\]/_/g;
+    my $boundary = 'aicli'.int(rand(1e9)).'x'.int(rand(1e9));
+    my $data = ai::multipart_body($boundary, ai::asr_parts(), ['response_format', 'json'],
+        ['language', length $lang ? $lang : 'en'], (($task // '') eq 'translate' ? (['task', 'translate']) : ()),
+        ['file', $sound, $file, _sound_type($file)]);
+    return _http(sub {
+        my ($r) = @_;
+        _http_check($r);
+        my $reply = eval {JSON::XS->new->utf8->decode($r->{body})};
+        die "the speech recognizer sent no text\n" unless ref($reply) eq 'HASH' and defined $reply->{text} and !ref $reply->{text};
+        my $text = $reply->{text} =~ s/\A\s+|\s+\z//gr;
+        return length($text) ? ai::to_bytes("$text\n") : "no speech was heard in $input\n";
+    }, url => $url, method => 'post', data => $data, proxy => utils::proxy_for('ai') // '',
+       timeout => $::ORIG_ENV{AI_ASR_TIMEOUT} // 600, max_size => 10_000_000, follow => 0,
+       headers => ["Content-Type: multipart/form-data; boundary=$boundary", "Accept: application/json", "User-Agent: aicli"]);
+}
+
+# the speech service's base address and proxy (AI_SPEECH_URL, AI_SPEECH_PROXY), for its voice requests
+sub _speech_service {
+    my $base = $::ORIG_ENV{AI_SPEECH_URL} // '';
+    die "no speech service is set up (AI_SPEECH_URL)\n" unless length $base;
+    $base =~ s{/+\z}{};
+    my $proxy = $::ORIG_ENV{AI_SPEECH_PROXY} // '';
+    $proxy = '' if $proxy =~ m/^(?:none|off|direct|no)$/i;
+    return ($base, $proxy);
+}
+
+# voices: the voices of the speech service (GET /v1/audio/voices): a name and the words of its recording per line
+sub voices_2f8e {
+    my ($t_args) = @_;
+    my $filter = utils::trim($t_args->[0] // '');
+    my $rx = length $filter ? eval {qr/$filter/i} : undef;
+    die "filter: not a regular expression: ".($@ =~ s/ at .* line \d+.*//sr)."\n" if length $filter and !$rx;
+    my ($base, $proxy) = _speech_service();
+    return _http(sub {
+        my ($r) = @_;
+        _http_check($r);
+        my $reply = eval {JSON::XS->new->utf8->decode($r->{body})};
+        die "the speech service did not answer with a list of voices\n" unless ref($reply) eq 'HASH' and ref($reply->{data}) eq 'ARRAY';
+        my @v = grep {ref($_) eq 'HASH' and length($_->{name} // '') and (!$rx or $_->{name} =~ $rx)} @{$reply->{data}};
+        return (length $filter ? "no voice matches $filter\n" : "the speech service has no voices: make one with create_voice\n")
+            unless @v;
+        return join('', map {
+            my $words = ($_->{ref_text} // '') =~ s/\s+/ /gr;
+            $words = substr($words, 0, 200)."..." if length($words) > 200;
+            ai::to_bytes("$_->{name}".(length $words ? ": $words" : '')."\n");
+        } @v);
+    }, url => "$base/v1/audio/voices", method => 'get', proxy => $proxy, timeout => 30, max_size => 5_000_000, follow => 0,
+       headers => ["Accept: application/json", "User-Agent: aicli"]);
+}
+
+# create_voice: a voice of the speech service from a recording of the workspace (POST /v1/audio/voices: the clip, its
+# words and the name); the service checks the clip (0.5 to 60 seconds) and refuses a name it has (409)
+sub create_voice_8a1c {
+    my ($t_args) = @_;
+    my ($input, $name, $text) = map {utils::trim($t_args->[$_] // '')} 0 .. 2;
+    die "no input: name the recording\n" unless length $input;
+    die "the voice name has letters, digits, '-', '_' and '.' only, and starts with a letter, a digit or '_'\n"
+        unless $name =~ m/\A[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}\z/ and $name !~ m/\.\./;
+    die "no text: give the words said in the recording\n" unless length $text;
+    die "the text is longer than 1000 characters\n" if length(ai::to_text($text)) > 1000;
+    my ($base, $proxy) = _speech_service();
+    my $in = _path($input);
+    die "no such file: $input\n" unless -f $in;
+    die "$input is bigger than 20000000 bytes\n" if -s $in > 20_000_000;
+    my $clip = _read_bytes($in);
+    die "$input is not a WAV file\n" unless substr($clip, 0, 4) eq 'RIFF' and substr($clip, 8, 4) eq 'WAVE';
+    my $boundary = 'aicli'.int(rand(1e9)).'x'.int(rand(1e9));
+    my $data = ai::multipart_body($boundary, ['name', $name], ['ref_text', $text], ['file', $clip, 'clip.wav', 'audio/wav']);
+    return _http(sub {
+        my ($r) = @_;
+        die "there is a voice $name already: choose another name\n" if ($r->{code} // 0) == 409;
+        if (defined $r->{error}) {
+            my $reply = eval {JSON::XS->new->utf8->decode($r->{body} // '')};
+            my $msg = ref($reply) eq 'HASH' && ref($reply->{error}) eq 'HASH' ? $reply->{error}{message} : undef;
+            die "the speech service refused the voice: $msg\n" if length($msg // '');
+            _http_check($r);
+        }
+        my $reply = eval {JSON::XS->new->utf8->decode($r->{body})};
+        die "the speech service did not make the voice\n" unless ref($reply) eq 'HASH' and ($reply->{name} // '') eq $name;
+        return ai::to_bytes(sprintf("made the voice %s from %.1f seconds of speech: the speech tool can use it now\n",
+            $name, $reply->{seconds} // 0));
+    }, url => "$base/v1/audio/voices", method => 'post', data => $data, proxy => $proxy,
+       timeout => $::ORIG_ENV{AI_SPEECH_TIMEOUT} // 3600, max_size => 1_000_000, follow => 0,
+       headers => ["Content-Type: multipart/form-data; boundary=$boundary", "Accept: application/json", "User-Agent: aicli"]);
 }
 
 # agent: a sub-agent works on the task, see package agent. (Several calls in

@@ -542,6 +542,36 @@ prompt, size, steps and seed give the same image. The picture is written whole:
 the file it replaces goes to the undo journal first, and a failed request leaves
 nothing behind. Only with B<AI_IMAGE_URL> set.
 
+=item B<generate_3d>
+
+Make a textured 3D model (binary glTF, C<.glb>) from a picture of one object in the workspace
+with the local 3D service (B<AI_3D_URL>, TRELLIS.2). The object is cut out by the picture's
+transparency, or its background is removed (C<background>: C<auto>, C<remove>, C<keep>).
+Arguments: the picture, the output (default: the picture's name with C<.glb>; a file of that
+name already there is kept, and the model goes to the first free name, C<name-2.glb>, ...), the
+resolution (512 or 1024, the default), the seed (0), the faces of the mesh (700000) and the
+texture size (4096). A model takes minutes: the job is started, its state is asked every
+B<AI_3D_POLL> seconds on a timer of the event loop (nothing waits in a blocking way), and the
+model is downloaded when it is done; a stop leaves the service's job running. Only with
+B<AI_3D_URL> set, and by B<AI_3D>.
+
+=item B<transcribe>
+
+Write down the speech in a sound file of the workspace (WAV) with the speech recognizer of
+B<AI_ASR_URL> (the one C</voice> uses): the language as a code (default C<en>), and the task
+C<translate> for the text in English. Only with B<AI_ASR_URL> set.
+
+=item B<voices>
+
+List the voices of the speech service (B<AI_SPEECH_URL>): the names the B<speech> tool takes,
+each with the words of the recording it was made from; an optional filter for the names.
+
+=item B<create_voice>
+
+Make a voice for the B<speech> tool from a recording in the workspace (a WAV file of 0.5 to 60
+seconds) and the exact words said in it, under the name given (the service refuses a name it
+has). Only with B<AI_SPEECH_URL> set.
+
 =item B<agent>
 
 Give a task to a sub-agent, see B<SUB-AGENTS>.
@@ -1023,6 +1053,37 @@ Seconds to wait for a sound (default 3600: the service makes one clip at a time)
 =item B<AI_AUDIO_PROXY>
 
 A proxy for the audio service, as B<AI_IMAGE_PROXY>.
+
+=item B<AI_3D>
+
+Set to 1 to offer the B<generate_3d> tool (with B<AI_3D_URL>), 0 to never offer it. Unset (the
+default), it is offered when the server's model list has a model with the capability C<3d>.
+
+=item B<AI_3D_URL>
+
+The base address of the 3D service for the B<generate_3d> tool, as the agent reaches it (for
+example C<http://host:8000>, the same host as B<AI_IMAGE_URL>). The tool is only offered when it is set.
+
+=item B<AI_3D_TIMEOUT>
+
+Seconds a model may take before the tool stops asking (default 3600; the job goes on in the service).
+
+=item B<AI_3D_POLL>
+
+Seconds between two questions for the state of a model's job (default 5).
+
+=item B<AI_3D_MAX>
+
+The largest picture B<generate_3d> sends, in bytes (default 20000000; 0 for no limit).
+
+=item B<AI_3D_PROXY>
+
+A proxy for the 3D service, as B<AI_IMAGE_PROXY>.
+
+=item B<AI_ASR_TIMEOUT>, B<AI_ASR_MAX>
+
+The seconds the B<transcribe> tool waits for the text (default 600), and the largest sound file
+it sends, in bytes (default 100000000; 0 for no limit).
 
 =item B<AI_IMAGE_MAX>
 

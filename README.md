@@ -322,6 +322,10 @@ or `[WRITE_edf5 ERROR_9a78 ... ERROR_9a78]`. In native mode it is a tool message
 | `generate_image` | a picture from a text prompt with the image service (`AI_IMAGE_URL`): the PNG is written to the output name in the workspace (default `image_<seed>.png`; a file of that name already there is kept, and the picture goes to the first free name, `name-2.png`, ...); the size, the steps (1 to 50) and the seed. The same prompt, size, steps and seed give the same picture. Only offered where `AI_IMAGE_URL` is set | the image service over HTTP, no process |
 | `generate_audio` | a sound from a text prompt with the audio service (`AI_AUDIO_URL`, AudioLDM 2): the WAV is written to the output name (default `audio_<seed>.wav`; a file of that name already there is kept, and the sound goes to the first free name, `name-2.wav`, ...), a clip of 1 to 10 seconds, the steps (1 to 200) and the seed. Only offered where `AI_AUDIO_URL` is set | the audio service over HTTP, no process |
 | `speech` | speech from a text with the speech service (`AI_SPEECH_URL`) in a voice the server has: the WAV is written to the output name (default `speech_<voice>.wav`; a file of that name already there is kept, and the sound goes to the first free name, `name-2.wav`, ...), with the language and the seed. Only offered where `AI_SPEECH_URL` is set | the speech service over HTTP, no process |
+| `voices` | the voices of the speech service, the names `speech` takes, each with the words of its recording; an optional name filter. Only offered where `AI_SPEECH_URL` is set | the speech service over HTTP, no process |
+| `create_voice` | a new voice for `speech` from a recording in the workspace (WAV, 0.5 to 60 seconds) and the words said in it, under a new name. Only offered where `AI_SPEECH_URL` is set | the speech service over HTTP, no process |
+| `transcribe` | the text of the speech in a sound file of the workspace (WAV), with the language (a code, `en` by default) and `translate` for English; the recognizer of `/voice` (`AI_ASR_URL`). Only offered where `AI_ASR_URL` is set | the recognizer over HTTP, no process |
+| `generate_3d` | a textured 3D model (binary glTF, `.glb`) from a picture of one object in the workspace with the 3D service (`AI_3D_URL`, TRELLIS.2): the object cut out by the picture's transparency or its background removed (`background`: `auto`, `remove`, `keep`); the resolution (512 or 1024), the seed, the faces and the texture size. The model goes to the output name (default the picture's name with `.glb`; a name already taken gets the next free one). It takes minutes: the job is started, its state asked every `AI_3D_POLL` seconds, the model downloaded when done. Only offered where `AI_3D_URL` is set | the 3D service over HTTP, timers of the event loop, no process |
 | `agent` | give a task to a sub-agent | a second conversation in the event loop |
 
 File tools never start a process. `replace` and `edit` write through a temp
@@ -749,6 +753,14 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 | `AI_AUDIO_URL` | base address of the audio service for `generate_audio`, as the agent reaches it (e.g. `http://host:8000`); empty: no tool | none |
 | `AI_AUDIO_TIMEOUT` | seconds to wait for a clip (about 50 seconds for 5 seconds of sound) | 3600 |
 | `AI_AUDIO_PROXY` | proxy for the audio service; `none` or empty: none | none |
+| `AI_3D` | offer `generate_3d` (with `AI_3D_URL`): `1` always, `0` never; unset, when the server's model list has a model with the capability `3d` | unset |
+| `AI_3D_URL` | base address of the 3D service for `generate_3d`, as the agent reaches it (e.g. `http://host:8000`); empty: no tool | none |
+| `AI_3D_TIMEOUT` | seconds a model may take before the tool stops asking (the job goes on in the service) | 3600 |
+| `AI_3D_POLL` | seconds between two questions for the state of the job | 5 |
+| `AI_3D_MAX` | largest picture `generate_3d` sends, in bytes (0 for no limit) | 20000000 |
+| `AI_3D_PROXY` | proxy for the 3D service; `none` or empty: none | none |
+| `AI_ASR_TIMEOUT` | seconds `transcribe` waits for the text | 600 |
+| `AI_ASR_MAX` | largest sound file `transcribe` sends, in bytes (0 for no limit) | 100000000 |
 | `AI_RAW` | use `/v1/completions` with a prompt built here (qwen only) | off |
 | `AI_DIR` | base directory | `~/.aicli` |
 | `AI_PS1`, `AI_PS2` | input prompts | |

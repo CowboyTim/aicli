@@ -97,4 +97,12 @@ is(run_setup(%in, AI_ASR_URL => ''), 0, "a second run with AI_ASR_URL cleared");
 ok(!defined value($env_f, 'AI_ASR_URL'), "the URL is gone from .env");
 ok(!defined value($agent_f, 'AI_ASR_URL'), "and from .agent.env");
 
+# AI_3D_URL (the 3D service of generate_3d): kept in .env, where compose reads it; set and empty clears it
+is(run_setup(%in, AI_3D_URL => 'http://[2001:db8:1:2::20]:8000/rocm'), 0, "a run with the 3D service");
+is(value($env_f, 'AI_3D_URL'), 'http://[2001:db8:1:2::20]:8000/rocm', "the 3D service's address is in .env");
+is(run_setup(%in), 0, "a run without it in the environment");
+is(value($env_f, 'AI_3D_URL'), 'http://[2001:db8:1:2::20]:8000/rocm', "the address stays");
+is(run_setup(%in, AI_3D_URL => ''), 0, "a run with AI_3D_URL cleared");
+ok(!defined value($env_f, 'AI_3D_URL'), "the address is gone from .env");
+
 done_testing();

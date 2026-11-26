@@ -142,6 +142,16 @@ else
     v=$(pick "$agent_f" AI_AUDIO_URL)
     [ -n "$v" ] && set_key "$env_f" AI_AUDIO_URL "$v"
 fi
+# the 3D service of the generate_3d tool (AI_3D_URL, its base address). As the audio service above: compose reads it
+# from the shell or .env, so a URL that .agent.env has moves to .env. AI_3D_URL= (set and empty) clears it: no
+# generate_3d tool.
+if [ "${AI_3D_URL+x}" = x ] && [ -z "$AI_3D_URL" ]; then
+    del_key "$env_f" AI_3D_URL
+    del_key "$agent_f" AI_3D_URL
+else
+    v=$(pick "$agent_f" AI_3D_URL)
+    [ -n "$v" ] && set_key "$env_f" AI_3D_URL "$v"
+fi
 set_key "$agent_f" AI_MODEL "$(pick "$agent_f" AI_MODEL "Qwen3.5-4B-ROCMFP4")"
 
 if [ "${AICLI_ENV_ONLY:-0}" = 1 ]; then

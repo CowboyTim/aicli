@@ -1,6 +1,6 @@
 #!/usr/bin/perl
-# the tools that need a capability of the server: the image tool (vision), generate_image (image) and generate_audio
-# (audio). Each is offered by its flag (AI_VISION, AI_IMAGE, AI_AUDIO: 1 always, 0 never); unset, when the server's
+# the tools that need a capability of the server: the image tool (vision), generate_image (image), generate_audio
+# (audio) and generate_3d (3d). Each is offered by its flag (AI_VISION, AI_IMAGE, AI_AUDIO, AI_3D: 1 always, 0 never); unset, when the server's
 # model list has a model with that capability for the chat's provider. No such model: the tool is not offered.
 use strict; use warnings;
 
@@ -31,6 +31,7 @@ my $full = '{"data":['
     .'{"id":"text-1","capabilities":["completion","tools"]},'
     .'{"id":"z-image-turbo","capabilities":["image"]},'
     .'{"id":"audioldm2","capabilities":["audio"]},'
+    .'{"id":"trellis-2","capabilities":["3d"]},'
     .'{"id":"nocaps-1"}'
     .']}';
 my $text = '{"data":[{"id":"text-1","capabilities":["completion","tools"]}]}';
@@ -39,7 +40,8 @@ my $text = '{"data":[{"id":"text-1","capabilities":["completion","tools"]}]}';
 sub scenario {
     my ($list, %env) = @_;
     TestAI::setup(AI_API_KEY => 'sk-test', AI_PROVIDER => 'openai', AI_LOCAL_SERVER => undef, AI_TOOL_CALLS => 'native',
-        AI_IMAGE_URL => 'http://img.test:8000/rocm/', AI_AUDIO_URL => 'http://audio.test:8000/rocm/', %env);
+        AI_IMAGE_URL => 'http://img.test:8000/rocm/', AI_AUDIO_URL => 'http://audio.test:8000/rocm/',
+        AI_3D_URL => 'http://3d.test:8000/rocm/', %env);
     %ai::MODEL_CAPS = ();
     mock_models($list) if defined $list;
     ai::fetch_models() if defined $list;
@@ -53,6 +55,7 @@ sub scenario {
     ok(tools::available('image'), "a list with a vision model: the image tool is offered (unset)");
     ok(tools::available('generate_image'), "a list with an image model: generate_image is offered (unset)");
     ok(tools::available('generate_audio'), "a list with an audio model: generate_audio is offered (unset)");
+    ok(tools::available('generate_3d'), "a list with a 3D model: generate_3d is offered (unset)");
 }
 
 # the default is per provider's list, not per chat model: the tool is offered whatever model the chat is on
@@ -70,20 +73,23 @@ sub scenario {
     ok(!tools::available('image'), "no vision model listed: the image tool is not offered");
     ok(!tools::available('generate_image'), "no image model listed: generate_image is not offered");
     ok(!tools::available('generate_audio'), "no audio model listed: generate_audio is not offered");
+    ok(!tools::available('generate_3d'), "no 3D model listed: generate_3d is not offered");
 }
 {
-    scenario($text, AI_VISION => 1, AI_IMAGE => 1, AI_AUDIO => 1);
+    scenario($text, AI_VISION => 1, AI_IMAGE => 1, AI_AUDIO => 1, AI_3D => 1);
     ok(tools::available('image'), "AI_VISION=1 offers the image tool, the list or not");
     ok(tools::available('generate_image'), "AI_IMAGE=1 offers generate_image, the list or not");
     ok(tools::available('generate_audio'), "AI_AUDIO=1 offers generate_audio, the list or not");
+    ok(tools::available('generate_3d'), "AI_3D=1 offers generate_3d, the list or not");
 }
 
 # 0 never offers the tool, even when the list has its model
 {
-    scenario($full, AI_VISION => 0, AI_IMAGE => 0, AI_AUDIO => 0);
+    scenario($full, AI_VISION => 0, AI_IMAGE => 0, AI_AUDIO => 0, AI_3D => 0);
     ok(!tools::available('image'), "AI_VISION=0: the image tool is never offered");
     ok(!tools::available('generate_image'), "AI_IMAGE=0: generate_image is never offered");
     ok(!tools::available('generate_audio'), "AI_AUDIO=0: generate_audio is never offered");
+    ok(!tools::available('generate_3d'), "AI_3D=0: generate_3d is never offered");
 }
 
 # no list at all (the server did not answer): unset is off; the flag 1 still offers
@@ -96,9 +102,10 @@ sub scenario {
 
 # the generators also need their URL: a flag 1 with no URL offers nothing
 {
-    scenario($full, AI_IMAGE_URL => '', AI_AUDIO_URL => '', AI_IMAGE => 1, AI_AUDIO => 1);
+    scenario($full, AI_IMAGE_URL => '', AI_AUDIO_URL => '', AI_3D_URL => '', AI_IMAGE => 1, AI_AUDIO => 1, AI_3D => 1);
     ok(!tools::available('generate_image'), "no AI_IMAGE_URL: generate_image is not offered, flag or not");
     ok(!tools::available('generate_audio'), "no AI_AUDIO_URL: generate_audio is not offered, flag or not");
+    ok(!tools::available('generate_3d'), "no AI_3D_URL: generate_3d is not offered, flag or not");
 }
 
 done_testing();
