@@ -5093,8 +5093,8 @@ EOb
         available => sub {(length($::ORIG_ENV{AI_AUDIO_URL} // '') and ai::flag_allows('AI_AUDIO', 'audio')) ? 1 : 0},
     },
     generate_3d => {
-        description => "make a 3D model from a picture of one object in the workspace with the local 3D model (TRELLIS.2): the object is cut out (by the picture's transparency, or its background is removed), and the model is written to the output name: a textured binary glTF (.glb, the default), the mesh alone as a .glb (faster), or an STL (.stl) of the mesh for a 3D printer, in millimetres. It takes minutes: about 4 at resolution 512, about 15 at 1024 (the default), less without a texture; the service makes one model at a time. The same picture, resolution and seed give the same model",
-        syntax => "///GENERATE_3D_4c9a+EO_8b13+EO_d7e0+EO_25fa+EO_93c6+EO_e4b8+EO_6a1d+EO_f05c+EO_b3d1+EO_7c2e\n{{input}}\nEO_8b13[LENGTH({{input}})]\n{{output}}\nEO_d7e0[LENGTH({{output}})]\n{{resolution}}\nEO_25fa[LENGTH({{resolution}})]\n{{seed}}\nEO_93c6[LENGTH({{seed}})]\n{{background}}\nEO_e4b8[LENGTH({{background}})]\n{{faces}}\nEO_6a1d[LENGTH({{faces}})]\n{{texture_size}}\nEO_f05c[LENGTH({{texture_size}})]\n{{format}}\nEO_b3d1[LENGTH({{format}})]\n{{size_mm}}\nEO_7c2e[LENGTH({{size_mm}})]\nGENERATE_3D_4c9a",
+        description => "make a 3D model from a picture of one object in the workspace with the local 3D model (TRELLIS.2): the object is cut out (by the picture's transparency, or its background is removed), and the model is written to the output name: a textured binary glTF (.glb, the default), the mesh alone as a .glb (faster), or an STL (.stl) of the mesh for a 3D printer, in millimetres: a closed solid, or hollow with walls of hollow_mm and a drain hole (cheaper to print; resin drains out). It takes minutes: about 4 at resolution 512, about 15 at 1024 (the default), less without a texture; the service makes one model at a time. The same picture, resolution and seed give the same model",
+        syntax => "///GENERATE_3D_4c9a+EO_8b13+EO_d7e0+EO_25fa+EO_93c6+EO_e4b8+EO_6a1d+EO_f05c+EO_b3d1+EO_7c2e+EO_5e91+EO_a24c\n{{input}}\nEO_8b13[LENGTH({{input}})]\n{{output}}\nEO_d7e0[LENGTH({{output}})]\n{{resolution}}\nEO_25fa[LENGTH({{resolution}})]\n{{seed}}\nEO_93c6[LENGTH({{seed}})]\n{{background}}\nEO_e4b8[LENGTH({{background}})]\n{{faces}}\nEO_6a1d[LENGTH({{faces}})]\n{{texture_size}}\nEO_f05c[LENGTH({{texture_size}})]\n{{format}}\nEO_b3d1[LENGTH({{format}})]\n{{size_mm}}\nEO_7c2e[LENGTH({{size_mm}})]\n{{hollow_mm}}\nEO_5e91[LENGTH({{hollow_mm}})]\n{{drain_mm}}\nEO_a24c[LENGTH({{drain_mm}})]\nGENERATE_3D_4c9a",
         properties  => {
             "input"        => {type => "string", description => "The picture of the object in the workspace (PNG, JPEG, GIF or WebP): one object, best on a plain background or with the background transparent"},
             "output"       => {type => "string", description => "The file to write in the workspace, .glb (or .stl for the format stl); empty for the picture's name with that extension. A file of that name already there is kept: the model goes to the first free name (name-2.glb, ...), and the result names it"},
@@ -5105,6 +5105,8 @@ EOb
             "texture_size" => {type => "string", description => "The width and height of the texture: 512, 1024, 2048 or 4096; empty for 4096"},
             "format"       => {type => "string", description => "glb (a textured model, the default), mesh (a .glb of the mesh alone, no texture: faster) or stl (the mesh as an STL for a 3D printer: z up, standing on z = 0)"},
             "size_mm"      => {type => "string", description => "For stl: the model's largest side in millimetres; empty for 100"},
+            "hollow_mm"    => {type => "string", description => "For stl: hollow, with walls this thick in millimetres (less material, cheaper and lighter); empty or 0 for a solid model"},
+            "drain_mm"     => {type => "string", description => "With hollow_mm: each hollow gets a drain hole this wide in millimetres, from its lowest point down through the bottom (resin drains, air gets in); 0 for none; empty for 3"},
         },
         required => ["input"],
         # only with the 3D service to ask (AI_3D_URL: its base address), and by the flag AI_3D (1 always, 0 never; unset:
@@ -5794,7 +5796,7 @@ sub _model3d_too_large {
 # The waits are timers of the event loop (nothing blocks); a stop (ctrl-C) leaves the service's job running.
 sub generate_3d_4c9a {
     my ($t_args) = @_;
-    my ($input, $out, $res, $seed, $bg, $faces, $tex, $fmt, $size) = map {utils::trim($t_args->[$_] // '')} 0 .. 8;
+    my ($input, $out, $res, $seed, $bg, $faces, $tex, $fmt, $size, $hollow, $drain) = map {utils::trim($t_args->[$_] // '')} 0 .. 10;
     die "no input: name the picture of the object\n" unless length $input;
     my $base = $::ORIG_ENV{AI_3D_URL} // '';
     die "no 3D service is set up (AI_3D_URL)\n" unless length $base;
@@ -5811,6 +5813,14 @@ sub generate_3d_4c9a {
     die "size_mm: a number of millimetres from 1 to 10000\n"
         if length $size and ($size !~ m/\A\d+(?:\.\d+)?\z/ or $size < 1 or $size > 10000);
     die "size_mm is for the format stl\n" if length $size and $fmt ne 'stl';
+    # a hollow STL: the walls' thickness (0 or empty: solid) and the drain holes' width (the service's default 3; 0: none)
+    for ([hollow_mm => $hollow], [drain_mm => $drain]) {
+        die "$_->[0]: a number of millimetres from 0 to 1000\n"
+            if length $_->[1] and ($_->[1] !~ m/\A\d+(?:\.\d+)?\z/ or $_->[1] > 1000);
+    }
+    $hollow = 0 unless length $hollow;
+    die "hollow_mm is for the format stl\n" if $hollow > 0 and $fmt ne 'stl';
+    die "drain_mm is for a hollow model (hollow_mm)\n" if length $drain and $hollow == 0;
     my $ext = $fmt eq 'stl' ? 'stl' : 'glb';
     my $in = _path($input);
     die "no such file: $input\n" unless -f $in;
@@ -5829,6 +5839,8 @@ sub generate_3d_4c9a {
     $body{texture} = JSON::XS::false if $fmt eq 'mesh';
     $body{format} = 'stl' if $fmt eq 'stl';
     $body{size_mm} = $size + 0 if length $size;
+    $body{hollow_mm} = $hollow + 0 if $hollow > 0;
+    $body{drain_mm} = $drain + 0 if length $drain;
     my $data = JSON::XS->new->utf8->canonical->encode(\%body);
     my $proxy = $::ORIG_ENV{AI_3D_PROXY} // '';   # the service is near: no proxy, unless AI_3D_PROXY says so
     $proxy = '' if $proxy =~ m/^(?:none|off|direct|no)$/i;
@@ -5889,7 +5901,9 @@ sub generate_3d_4c9a {
             # a binary STL: 80 bytes of header, the count of faces, 50 bytes a face
             my $n = length($model) >= 84 ? unpack('V', substr($model, 80, 4)) : -1;
             die "the 3D service sent no binary STL\n" unless $n > 0 and length($model) == 84 + 50 * $n;
-            $what = sprintf("STL, %d faces, %s mm", $n, $body{size_mm} // 100);
+            $what = sprintf("STL, %d faces, %s mm", $n, $body{size_mm} // 100)
+                .($body{hollow_mm} ? sprintf(", hollow: %s mm walls, %s", $body{hollow_mm},
+                    ($body{drain_mm} // 3) > 0 ? ($body{drain_mm} // 3)." mm drain holes" : "no drain holes") : "");
         } else {
             die "the 3D service sent no binary glTF\n" unless substr($model, 0, 4) eq 'glTF';
             $what = $fmt eq 'mesh' ? 'GLB, the mesh alone' : 'GLB';

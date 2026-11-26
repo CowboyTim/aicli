@@ -135,6 +135,27 @@ ok(tools::available('generate_3d'), "available: the 3D service is set");
     ($res, $err) = ai::execute_tool('generate_3d', 'GENERATE_3D_4c9a', ['vase.png', 'wrong.stl', '', '', '', '', '', 'stl']);
     like($err // '', qr/the 3D service sent no binary STL/, "an STL that is not one (a GLB) is an error");
     ok(!-e "$ws/wrong.stl", "  and leaves no file");
+
+    # hollow: the walls (and the service's default drain, or none)
+    reset_service(); @REQ = ();
+    $SVC{content} = sub { {code => 200, error => undef, body => $STL} };
+    ($res, $err) = ai::execute_tool('generate_3d', 'GENERATE_3D_4c9a', ['vase.png', 'hollow.stl', '512', '', '', '', '', 'stl', '80', '2']);
+    ok(!$err, "a hollow STL is made") or diag($err);
+    like($res, qr/\Awrote hollow\.stl: 184 bytes of STL, 2 faces, 80 mm, hollow: 2 mm walls, 3 mm drain holes \(/,
+        "the result says hollow, its walls and the default drain");
+    $b = $J->decode($REQ[0]{data});
+    is($b->{hollow_mm}, 2, "the start asks for the walls");
+    ok(!exists $b->{drain_mm}, "and leaves the drain to the service's default");
+    reset_service(); @REQ = ();
+    $SVC{content} = sub { {code => 200, error => undef, body => $STL} };
+    ($res, $err) = ai::execute_tool('generate_3d', 'GENERATE_3D_4c9a', ['vase.png', 'sealed.stl', '', '', '', '', '', 'stl', '', '1.5', '0']);
+    like($res // '', qr/hollow: 1\.5 mm walls, no drain holes/, "no drain holes asked: said so");
+    is_deeply([@{$J->decode($REQ[0]{data})}{qw(hollow_mm drain_mm)}], [1.5, 0], "the walls and drain 0 sent");
+    reset_service(); @REQ = ();
+    $SVC{content} = sub { {code => 200, error => undef, body => $STL} };
+    ($res, $err) = ai::execute_tool('generate_3d', 'GENERATE_3D_4c9a', ['vase.png', 'solid.stl', '', '', '', '', '', 'stl', '', '0']);
+    unlike($res // '', qr/hollow/, "hollow_mm 0 is a solid model");
+    ok(!exists $J->decode($REQ[0]{data})->{hollow_mm}, "  and asks for no hollow");
     @tools::CHANGES = ();
 }
 
@@ -170,6 +191,10 @@ ok(tools::available('generate_3d'), "available: the 3D service is set");
         [['vase.png', '', '', '', '', '', '', 'stl', '0'], qr/size_mm: a number of millimetres/, "an STL of 0 mm"],
         [['vase.png', '', '', '', '', '', '', 'stl', 'big'], qr/size_mm: a number of millimetres/, "a size that is not a number"],
         [['vase.png', '', '', '', '', '', '', 'glb', '80'], qr/size_mm is for the format stl/,  "a size for a GLB"],
+        [['vase.png', '', '', '', '', '', '', 'mesh', '', '2'], qr/hollow_mm is for the format stl/, "a hollow mesh GLB"],
+        [['vase.png', '', '', '', '', '', '', 'stl', '', 'thick'], qr/hollow_mm: a number of millimetres/, "walls that are not a number"],
+        [['vase.png', '', '', '', '', '', '', 'stl', '', '2', '2000'], qr/drain_mm: a number of millimetres/, "a drain of 2 m"],
+        [['vase.png', '', '', '', '', '', '', 'stl', '', '', '3'], qr/drain_mm is for a hollow model/, "a drain without a hollow"],
         [['vase.png', 'x.glb', '', '', '', '', '', 'stl'], qr/the output must be a \.stl file/, "an STL named .glb"],
         [['vase.png', 'x.stl', '', '', '', '', '', 'mesh'], qr/the output must be a \.glb file/, "a mesh GLB named .stl"],
     );
