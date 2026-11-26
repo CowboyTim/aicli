@@ -544,13 +544,15 @@ nothing behind. Only with B<AI_IMAGE_URL> set.
 
 =item B<generate_3d>
 
-Make a textured 3D model (binary glTF, C<.glb>) from a picture of one object in the workspace
-with the local 3D service (B<AI_3D_URL>, TRELLIS.2). The object is cut out by the picture's
-transparency, or its background is removed (C<background>: C<auto>, C<remove>, C<keep>).
-Arguments: the picture, the output (default: the picture's name with C<.glb>; a file of that
-name already there is kept, and the model goes to the first free name, C<name-2.glb>, ...), the
-resolution (512 or 1024, the default), the seed (0), the faces of the mesh (700000) and the
-texture size (4096). A model takes minutes: the job is started, its state is asked every
+Make a 3D model from a picture of one object in the workspace with the local 3D service
+(B<AI_3D_URL>, TRELLIS.2). The object is cut out by the picture's transparency, or its
+background is removed (C<background>: C<auto>, C<remove>, C<keep>). The format: C<glb> (a
+textured binary glTF, the default), C<mesh> (a C<.glb> of the mesh alone, no texture: faster) or
+C<stl> (an STL of the mesh for a 3D printer, z up, standing on z = 0, its largest side
+C<size_mm> millimetres, 100 by default). Arguments: the picture, the output (default: the
+picture's name with C<.glb> or C<.stl>; a file of that name already there is kept, and the model
+goes to the first free name, C<name-2.glb>, ...), the resolution (512 or 1024, the default), the
+seed (0), the faces of the mesh (700000), the texture size (4096), the format and the size. A model takes minutes: the job is started, its state is asked every
 B<AI_3D_POLL> seconds on a timer of the event loop (nothing waits in a blocking way), and the
 model is downloaded when it is done; a stop leaves the service's job running. Only with
 B<AI_3D_URL> set, and by B<AI_3D>.

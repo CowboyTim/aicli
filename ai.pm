@@ -5051,16 +5051,18 @@ EOb
         available => sub {(length($::ORIG_ENV{AI_AUDIO_URL} // '') and ai::flag_allows('AI_AUDIO', 'audio')) ? 1 : 0},
     },
     generate_3d => {
-        description => "make a textured 3D model (a binary glTF, .glb) from a picture of one object in the workspace with the local 3D model (TRELLIS.2): the object is cut out (by the picture's transparency, or its background is removed), and the model is written to the output name. It takes minutes: about 4 at resolution 512, about 15 at 1024 (the default); the service makes one model at a time. The same picture, resolution and seed give the same model",
-        syntax => "///GENERATE_3D_4c9a+EO_8b13+EO_d7e0+EO_25fa+EO_93c6+EO_e4b8+EO_6a1d+EO_f05c\n{{input}}\nEO_8b13[LENGTH({{input}})]\n{{output}}\nEO_d7e0[LENGTH({{output}})]\n{{resolution}}\nEO_25fa[LENGTH({{resolution}})]\n{{seed}}\nEO_93c6[LENGTH({{seed}})]\n{{background}}\nEO_e4b8[LENGTH({{background}})]\n{{faces}}\nEO_6a1d[LENGTH({{faces}})]\n{{texture_size}}\nEO_f05c[LENGTH({{texture_size}})]\nGENERATE_3D_4c9a",
+        description => "make a 3D model from a picture of one object in the workspace with the local 3D model (TRELLIS.2): the object is cut out (by the picture's transparency, or its background is removed), and the model is written to the output name: a textured binary glTF (.glb, the default), the mesh alone as a .glb (faster), or an STL (.stl) of the mesh for a 3D printer, in millimetres. It takes minutes: about 4 at resolution 512, about 15 at 1024 (the default), less without a texture; the service makes one model at a time. The same picture, resolution and seed give the same model",
+        syntax => "///GENERATE_3D_4c9a+EO_8b13+EO_d7e0+EO_25fa+EO_93c6+EO_e4b8+EO_6a1d+EO_f05c+EO_b3d1+EO_7c2e\n{{input}}\nEO_8b13[LENGTH({{input}})]\n{{output}}\nEO_d7e0[LENGTH({{output}})]\n{{resolution}}\nEO_25fa[LENGTH({{resolution}})]\n{{seed}}\nEO_93c6[LENGTH({{seed}})]\n{{background}}\nEO_e4b8[LENGTH({{background}})]\n{{faces}}\nEO_6a1d[LENGTH({{faces}})]\n{{texture_size}}\nEO_f05c[LENGTH({{texture_size}})]\n{{format}}\nEO_b3d1[LENGTH({{format}})]\n{{size_mm}}\nEO_7c2e[LENGTH({{size_mm}})]\nGENERATE_3D_4c9a",
         properties  => {
             "input"        => {type => "string", description => "The picture of the object in the workspace (PNG, JPEG, GIF or WebP): one object, best on a plain background or with the background transparent"},
-            "output"       => {type => "string", description => "The GLB file to write in the workspace; empty for the picture's name with .glb. A file of that name already there is kept: the model goes to the first free name (name-2.glb, ...), and the result names it"},
+            "output"       => {type => "string", description => "The file to write in the workspace, .glb (or .stl for the format stl); empty for the picture's name with that extension. A file of that name already there is kept: the model goes to the first free name (name-2.glb, ...), and the result names it"},
             "resolution"   => {type => "string", description => "512 (faster) or 1024 (finer); empty for 1024"},
             "seed"         => {type => "string", description => "A whole number; empty for 0"},
             "background"   => {type => "string", description => "auto (the picture's transparency when it has some, else the background is removed), remove (always remove it) or keep (the whole picture is the object); empty for auto"},
             "faces"        => {type => "string", description => "The faces of the mesh, 1000 to 10000000; empty for 700000"},
             "texture_size" => {type => "string", description => "The width and height of the texture: 512, 1024, 2048 or 4096; empty for 4096"},
+            "format"       => {type => "string", description => "glb (a textured model, the default), mesh (a .glb of the mesh alone, no texture: faster) or stl (the mesh as an STL for a 3D printer: z up, standing on z = 0)"},
+            "size_mm"      => {type => "string", description => "For stl: the model's largest side in millimetres; empty for 100"},
         },
         required => ["input"],
         # only with the 3D service to ask (AI_3D_URL: its base address), and by the flag AI_3D (1 always, 0 never; unset:
@@ -5464,13 +5466,14 @@ sub audio_output {
     return length($out // '') ? $out : 'audio_'.(length($seed // '') ? $seed + 0 : 0).'.wav';
 }
 
-# the name of the model generate_3d writes: the output, or the picture's name with .glb (model.glb when it has none left)
+# the name of the model generate_3d writes: the output, or the picture's name with the extension (glb or stl; model.glb when the
+# picture's name has nothing left)
 sub model3d_output {
-    my ($out, $input) = @_;
+    my ($out, $input, $ext) = @_;
     return $out if length($out // '');
     (my $stem = $input // '') =~ s{\A.*/}{};
     $stem =~ s/\.[^.]*\z//;
-    return (length($stem) ? $stem : 'model').'.glb';
+    return (length($stem) ? $stem : 'model').'.'.($ext // 'glb');
 }
 
 # the tools that write a file as a whole, and the argument that names it
@@ -5727,13 +5730,14 @@ sub _model3d_reply {
     return ($reply, undef);
 }
 
-# generate_3d: a picture to a textured 3D model through the 3D service (AI_3D_URL, TRELLIS.2). A job of minutes: POST
-# /v1/3d/generations starts it and answers its id at once, GET /v1/3d/generations/ID is asked every AI_3D_POLL seconds
-# (5) until it is done, GET .../content is the binary glTF, written to the workspace as the other generators write theirs.
+# generate_3d: a picture to a 3D model through the 3D service (AI_3D_URL, TRELLIS.2): a textured GLB, the mesh alone as a GLB
+# (texture false), or an STL of the mesh for a 3D printer (format stl). A job of minutes: POST /v1/3d/generations starts it and
+# answers its id at once, GET /v1/3d/generations/ID is asked every AI_3D_POLL seconds (5) until it is done, GET .../content is
+# the model, written to the workspace as the other generators write theirs.
 # The waits are timers of the event loop (nothing blocks); a stop (ctrl-C) leaves the service's job running.
 sub generate_3d_4c9a {
     my ($t_args) = @_;
-    my ($input, $out, $res, $seed, $bg, $faces, $tex) = map {utils::trim($t_args->[$_] // '')} 0 .. 6;
+    my ($input, $out, $res, $seed, $bg, $faces, $tex, $fmt, $size) = map {utils::trim($t_args->[$_] // '')} 0 .. 8;
     die "no input: name the picture of the object\n" unless length $input;
     my $base = $::ORIG_ENV{AI_3D_URL} // '';
     die "no 3D service is set up (AI_3D_URL)\n" unless length $base;
@@ -5745,20 +5749,29 @@ sub generate_3d_4c9a {
     die "faces: a whole number from 1000 to 10000000\n"
         if length $faces and ($faces !~ m/\A\d+\z/ or $faces < 1000 or $faces > 10_000_000);
     die "texture_size: 512, 1024, 2048 or 4096\n" if length $tex and $tex !~ m/\A(?:512|1024|2048|4096)\z/;
+    $fmt = length $fmt ? lc $fmt : 'glb';
+    die "format: glb, mesh or stl\n" unless $fmt =~ m/\A(?:glb|mesh|stl)\z/;
+    die "size_mm: a number of millimetres from 1 to 10000\n"
+        if length $size and ($size !~ m/\A\d+(?:\.\d+)?\z/ or $size < 1 or $size > 10000);
+    die "size_mm is for the format stl\n" if length $size and $fmt ne 'stl';
+    my $ext = $fmt eq 'stl' ? 'stl' : 'glb';
     my $in = _path($input);
     die "no such file: $input\n" unless -f $in;
     my $max = $::ORIG_ENV{AI_3D_MAX} // 20_000_000;
     die "$input is bigger than $max bytes (AI_3D_MAX): make it smaller with convert first\n" if $max and -s $in > $max;
     my $picture = _read_bytes($in);
     die "$input is not a picture (PNG, JPEG, GIF or WebP)\n" unless _image_type($picture);
-    my $name = model3d_output($out, $input);
-    die "the output must be a .glb file\n" unless $name =~ m/\.glb\z/i;
+    my $name = model3d_output($out, $input, $ext);
+    die "the output must be a .$ext file\n" unless $name =~ m/\.\Q$ext\E\z/i;
     _path($name); # refused here, before anything is asked, when it is outside the workspace
     my %body = (model => 'trellis-2', image => MIME::Base64::encode_base64($picture, ''), seed => (length $seed ? $seed : 0) + 0);
     $body{resolution} = $res + 0 if length $res;
     $body{remove_background} = {auto => 'auto', remove => 'true', keep => 'false'}->{$bg} if length $bg;
     $body{faces} = $faces + 0 if length $faces;
     $body{texture_size} = $tex + 0 if length $tex;
+    $body{texture} = JSON::XS::false if $fmt eq 'mesh';
+    $body{format} = 'stl' if $fmt eq 'stl';
+    $body{size_mm} = $size + 0 if length $size;
     my $data = JSON::XS->new->utf8->canonical->encode(\%body);
     my $proxy = $::ORIG_ENV{AI_3D_PROXY} // '';   # the service is near: no proxy, unless AI_3D_PROXY says so
     $proxy = '' if $proxy =~ m/^(?:none|off|direct|no)$/i;
@@ -5790,7 +5803,8 @@ sub generate_3d_4c9a {
                 }
                 return $end->({error => "the 3D job failed: ".($state->{error} // 'no reason given')}) unless $status eq 'completed';
                 loop::http(%common, url => "$base/v1/3d/generations/$id/content", method => 'get', timeout => 900,
-                    max_size => 1_000_000_000, headers => ["Accept: model/gltf-binary", "User-Agent: aicli"], on_done => sub {
+                    max_size => 1_000_000_000, headers => ["Accept: ".($ext eq 'stl' ? 'model/stl' : 'model/gltf-binary'), "User-Agent: aicli"],
+                    on_done => sub {
                     my ($r) = @_;
                     $end->({%$r, job => $state});
                 });
@@ -5811,15 +5825,24 @@ sub generate_3d_4c9a {
         die "$r->{error}\n" if defined $r->{error} and !$r->{job};
         _http_check($r);
         die "the model is bigger than the download limit\n" if $r->{too_big};
-        my $glb = $r->{body} // '';
-        die "the 3D service sent no binary glTF\n" unless substr($glb, 0, 4) eq 'glTF';
+        my $model = $r->{body} // '';
+        my $what;
+        if ($ext eq 'stl') {
+            # a binary STL: 80 bytes of header, the count of faces, 50 bytes a face
+            my $n = length($model) >= 84 ? unpack('V', substr($model, 80, 4)) : -1;
+            die "the 3D service sent no binary STL\n" unless $n > 0 and length($model) == 84 + 50 * $n;
+            $what = sprintf("STL, %d faces, %s mm", $n, $body{size_mm} // 100);
+        } else {
+            die "the 3D service sent no binary glTF\n" unless substr($model, 0, 4) eq 'glTF';
+            $what = $fmt eq 'mesh' ? 'GLB, the mesh alone' : 'GLB';
+        }
         my $to = free_name($name); # as for the picture and the sounds: a file of that name already there stays
         my $path = _path($to);
         die "can not write $to: it is a link or a directory\n" if -l $path or -d $path;
-        _write_whole($path, $glb, 'generate_3d', $to);
+        _write_whole($path, $model, 'generate_3d', $to);
         my $job = $r->{job};
-        return ai::to_bytes(sprintf("wrote %s: %d bytes of GLB (resolution %d, seed %d, %.0f seconds in the service)\n",
-            $to, length($glb), $job->{options}{resolution} // $body{resolution} // 1024, $body{seed}, $job->{seconds} // 0));
+        return ai::to_bytes(sprintf("wrote %s: %d bytes of %s (resolution %d, seed %d, %.0f seconds in the service)\n",
+            $to, length($model), $what, $job->{options}{resolution} // $body{resolution} // 1024, $body{seed}, $job->{seconds} // 0));
     };
     return _wait_job(bless({start => $start, finish => $finish}, 'tools::job'));
 }

@@ -1,9 +1,9 @@
 #!/usr/bin/perl
-# generate_3d: a picture of the workspace to a 3D model through the 3D service (TRELLIS.2): the job is started (POST, the
-# picture in base64 and the options), its state asked on a timer until it is done, the binary glTF downloaded and written
-# to the workspace whole (the undo journal first; a failure leaves nothing), its name as the tool works it out; the
-# arguments checked before anything is asked; the service's refusals, a failed job, a job that takes too long, an answer
-# that is not a model; the same for a sub-agent (a job of the loop); the file offered after the call
+# generate_3d: a picture of the workspace to a 3D model through the 3D service (TRELLIS.2): a textured GLB, the mesh alone or an
+# STL. The job is started (POST, the picture in base64 and the options), its state asked on a timer until it is done, the model
+# downloaded and written to the workspace whole (the undo journal first; a failure leaves nothing), its name as the tool works it
+# out; the arguments checked before anything is asked; the service's refusals, a failed job, a job that takes too long, an
+# answer that is not a model; the same for a sub-agent (a job of the loop); the file offered after the call
 use strict; use warnings;
 
 use Test::More;
@@ -21,6 +21,7 @@ use TestAI;
 my $J = JSON::XS->new->canonical(1)->utf8;
 my $PNG = "\x89PNG\r\n\x1a\n" . ("\0\x01" x 50);
 my $GLB = "glTF\x02\0\0\0" . ("\x07" x 200);
+my $STL = ("\0" x 80) . pack('V', 2) . ("\x01" x 100);   # a binary STL of two faces
 
 sub slurp { my ($f) = @_; open(my $h, '<:raw', $f) or return undef; local $/; my $d = <$h>; close $h; return $d }
 sub spew  { my ($f, $d) = @_; open(my $h, '>:raw', $f) or die "$f: $!"; print {$h} $d; close $h; return }
@@ -106,6 +107,34 @@ ok(tools::available('generate_3d'), "available: the 3D service is set");
     ai::execute_tool('generate_3d', 'GENERATE_3D_4c9a', ['vase.png', 'auto.glb', '', '', 'AUTO']);
     is($J->decode($REQ[0]{data})->{remove_background}, 'auto', "auto (any case): the service decides");
     is(tools::model3d_output('', 'uploads/cup.photo.jpg'), 'cup.photo.glb', "the default name: the picture's name, its last extension .glb");
+    is(tools::model3d_output('', 'cup.png', 'stl'), 'cup.stl', "and .stl for an STL");
+    @tools::CHANGES = ();
+}
+
+# the mesh alone (format mesh: texture false), and an STL for a 3D printer (format stl: its size, its own checks)
+{
+    reset_service(); @REQ = ();
+    my ($res, $err) = ai::execute_tool('generate_3d', 'GENERATE_3D_4c9a', ['vase.png', 'plain.glb', '512', '', '', '', '', 'mesh']);
+    ok(!$err, "the mesh alone is made") or diag($err);
+    like($res, qr/\Awrote plain\.glb: \d+ bytes of GLB, the mesh alone \(/, "the result says it is the mesh alone");
+    is($J->decode($REQ[0]{data})->{texture}, JSON::XS::false, "the start asks for no texture");
+    ok(!exists $J->decode($REQ[0]{data})->{format}, "and leaves the format (glb) to the service");
+
+    reset_service(); @REQ = ();
+    $SVC{content} = sub { {code => 200, error => undef, body => $STL} };
+    ($res, $err) = ai::execute_tool('generate_3d', 'GENERATE_3D_4c9a', ['vase.png', '', '512', '', '', '', '', 'STL', '80']);
+    ok(!$err, "an STL is made") or diag($err);
+    like($res, qr/\Awrote vase\.stl: 184 bytes of STL, 2 faces, 80 mm \(resolution 512/, "the default name is .stl; the faces and the size");
+    is(slurp("$ws/vase.stl"), $STL, "the file is the STL the service sent");
+    my $b = $J->decode($REQ[0]{data});
+    is($b->{format}, 'stl', "the start asks for an STL");
+    is($b->{size_mm}, 80, "of the size given");
+    ok(grep({ $_ eq 'Accept: model/stl' } @{$REQ[3]{headers}}), "the download accepts model/stl");
+    reset_service();
+    $SVC{content} = sub { {code => 200, error => undef, body => $GLB} };
+    ($res, $err) = ai::execute_tool('generate_3d', 'GENERATE_3D_4c9a', ['vase.png', 'wrong.stl', '', '', '', '', '', 'stl']);
+    like($err // '', qr/the 3D service sent no binary STL/, "an STL that is not one (a GLB) is an error");
+    ok(!-e "$ws/wrong.stl", "  and leaves no file");
     @tools::CHANGES = ();
 }
 
@@ -137,6 +166,12 @@ ok(tools::available('generate_3d'), "available: the 3D service is set");
         [['vase.png', '', '', '', 'maybe'],             qr/background: auto, remove or keep/,  "a background that is not one of the three"],
         [['vase.png', '', '', '', '', '10'],            qr/faces: a whole number from 1000/,   "too few faces"],
         [['vase.png', '', '', '', '', '', '300'],       qr/texture_size: 512, 1024, 2048 or 4096/, "a texture size the service does not take"],
+        [['vase.png', '', '', '', '', '', '', 'obj'],   qr/format: glb, mesh or stl/,          "a format that is not one of the three"],
+        [['vase.png', '', '', '', '', '', '', 'stl', '0'], qr/size_mm: a number of millimetres/, "an STL of 0 mm"],
+        [['vase.png', '', '', '', '', '', '', 'stl', 'big'], qr/size_mm: a number of millimetres/, "a size that is not a number"],
+        [['vase.png', '', '', '', '', '', '', 'glb', '80'], qr/size_mm is for the format stl/,  "a size for a GLB"],
+        [['vase.png', 'x.glb', '', '', '', '', '', 'stl'], qr/the output must be a \.stl file/, "an STL named .glb"],
+        [['vase.png', 'x.stl', '', '', '', '', '', 'mesh'], qr/the output must be a \.glb file/, "a mesh GLB named .stl"],
     );
     for my $case (@refuse) {
         my ($args, $re, $what) = @$case;
