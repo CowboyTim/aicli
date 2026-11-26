@@ -5431,6 +5431,10 @@ sub _http {
 sub _http_check {
     my ($r) = @_;
     return if !defined $r->{error} or $r->{too_big};
+    # a body the service or its web server (nginx: client_max_body_size) does not take: the size, not nginx's page
+    die sprintf("the service refused the request as too large (HTTP 413): %.1f MB were sent, more than the service or the web"
+        ." server in front of it takes (nginx: client_max_body_size)\n", length($r->{data} // '') / 1e6)
+        if ($r->{code} // 0) == 413;
     my $body = $r->{body} // '';
     $body =~ s/\s+/ /g;
     die "$r->{error}".($r->{code} ? "" : " ($r->{url})").(length($body) ? ": ".substr($body, 0, 300) : "")."\n";
@@ -5772,6 +5776,17 @@ sub _model3d_reply {
     return ($reply, undef);
 }
 
+# the error of a start refused as too large (HTTP 413): the service, or the web server in front of it (nginx's
+# client_max_body_size, 8 MB in the rocm-inference image), takes less than the request; base64 makes it a third bigger
+# than the picture. AI_3D_MAX only stops a picture before it is sent, the server's limit is the one that counts
+sub _model3d_too_large {
+    my ($input, $bytes, $sent) = @_;
+    return sprintf("the 3D service refused the picture as too large (HTTP 413): %s is %.1f MB, %.1f MB in the request"
+        ." (base64 makes it a third bigger), more than the service or the web server in front of it takes"
+        ." (nginx: client_max_body_size). Make the picture smaller with convert first: width and height 2048 is plenty,"
+        ." the model sees the object at 1024 pixels at most", $input, $bytes / 1e6, $sent / 1e6);
+}
+
 # generate_3d: a picture to a 3D model through the 3D service (AI_3D_URL, TRELLIS.2): a textured GLB, the mesh alone as a GLB
 # (texture false), or an STL of the mesh for a 3D printer (format stl). A job of minutes: POST /v1/3d/generations starts it and
 # answers its id at once, GET /v1/3d/generations/ID is asked every AI_3D_POLL seconds (5) until it is done, GET .../content is
@@ -5855,6 +5870,7 @@ sub generate_3d_4c9a {
         loop::http(%common, url => "$base/v1/3d/generations", method => 'post', data => $data, timeout => 600,
             max_size => 1_000_000, headers => ["Content-Type: application/json", "Accept: application/json", "User-Agent: aicli"],
             on_done => sub {
+            return $end->({error => _model3d_too_large($input, length $picture, length $data)}) if ($_[0]{code} // 0) == 413;
             my ($job, $err) = _model3d_reply($_[0], 'the 3D service refused the picture');
             return $end->({error => $err}) if $err;
             $id = $job->{id} // '';

@@ -81,6 +81,13 @@ ok(tools::available($_), "available: $_") for qw(transcribe voices create_voice)
     $REPLY = reply_json({error => {message => 'bad audio'}}, 400);
     ($res, $err) = ai::execute_tool('transcribe', 'TRANSCRIBE_6b2d', ['talk.wav']);
     like($err // '', qr/HTTP status 400.*bad audio/, "the recognizer's refusal, with its reason");
+    # a body over the web server's limit: nginx answers 413 with a page of its own (loop::http's request keeps the data sent)
+    $REPLY = sub { {code => 413, error => 'HTTP status 413', data => $_[0]{data},
+                    body => "<html>\n<head><title>413 Request Entity Too Large</title></head>\n</html>"} };
+    ($res, $err) = ai::execute_tool('transcribe', 'TRANSCRIBE_6b2d', ['talk.wav']);
+    like($err // '', qr/: the service refused the request as too large \(HTTP 413\): 0\.0 MB were sent, more than the service or the web server in front of it takes \(nginx: client_max_body_size\)/,
+        "too large (413): the size sent and the likely limit");
+    unlike($err // '', qr/<html>|Entity/, "  not nginx's page");
 }
 
 # transcribe's refusals: nothing is asked

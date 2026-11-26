@@ -757,7 +757,7 @@ Environment variables, or `AI_...=value` lines in `~/.aicli/config`:
 | `AI_3D_URL` | base address of the 3D service for `generate_3d`, as the agent reaches it (e.g. `http://host:8000`); empty: no tool | none |
 | `AI_3D_TIMEOUT` | seconds a model may take before the tool stops asking (the job goes on in the service) | 3600 |
 | `AI_3D_POLL` | seconds between two questions for the state of the job | 5 |
-| `AI_3D_MAX` | largest picture `generate_3d` sends, in bytes (0 for no limit) | 20000000 |
+| `AI_3D_MAX` | largest picture `generate_3d` sends, in bytes (0 for no limit); the web server in front of the service may take less (nginx's `client_max_body_size`, the picture in base64 is a third bigger): its 413 is an error with the picture's size and the advice to shrink it with `convert` | 20000000 |
 | `AI_3D_PROXY` | proxy for the 3D service; `none` or empty: none | none |
 | `AI_ASR_TIMEOUT` | seconds `transcribe` waits for the text | 600 |
 | `AI_ASR_MAX` | largest sound file `transcribe` sends, in bytes (0 for no limit) | 100000000 |

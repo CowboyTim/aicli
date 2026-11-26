@@ -1076,7 +1076,9 @@ Seconds between two questions for the state of a model's job (default 5).
 
 =item B<AI_3D_MAX>
 
-The largest picture B<generate_3d> sends, in bytes (default 20000000; 0 for no limit).
+The largest picture B<generate_3d> sends, in bytes (default 20000000; 0 for no limit). The web server in front of
+the service may take less (nginx's C<client_max_body_size>; the picture goes in base64, a third bigger): its refusal
+(HTTP 413) is an error that says the picture's size and to make it smaller with B<convert>.
 
 =item B<AI_3D_PROXY>
 
