@@ -169,10 +169,11 @@ sub stop {
 # and run where the HTTP waits are allowed.
 
 # the models event of the list the chat has now (the data of the event)
+# the page's choices for the chat: the models the chat can talk to (not the server's image, speech, 3D, ... models)
 sub _models_data {
     return {
         current => ai::current_label(),
-        list    => [map {ai::model_label($_)} @ai::ALL_MODELS],
+        list    => [grep {!defined ai::chat_model_error($_)} map {ai::model_label($_)} @ai::ALL_MODELS],
     };
 }
 

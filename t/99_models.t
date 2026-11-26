@@ -72,6 +72,51 @@ sub mock_models {
     like($err, qr/not a regular expression/, "models: a broken filter is an error");
 }
 
+# what each model is, as the server's list says it (rocm-inference: kind and capabilities): the models tool and the /models
+# command name it, the generators' models with the tool that uses them; a model that is not a chat model is not switched to
+# (the model tool, set_model) and is not one of the page's choices
+{
+    TestAI::setup(AI_API_KEY => 'sk-test', AI_PROVIDER => 'openai', AI_LOCAL_SERVER => undef, AI_TOOL_CALLS => 'native');
+    local $ai::SESSION_MODEL = 'qwen-4b';
+    %ai::MODEL_CAPS = ();
+    %ai::MODEL_KIND = ();
+    my $list = '{"data":['
+        .'{"id":"qwen-4b","kind":"chat","capabilities":["completion","tools","vision"],"context_length":219136},'
+        .'{"id":"trellis-2","kind":"3d","capabilities":["3d"]},'
+        .'{"id":"z-image-turbo","kind":"image","capabilities":["image"]},'
+        .'{"id":"whisper-tiny","kind":"transcription","capabilities":["transcription"],"context_length":2048},'
+        .'{"id":"embeddinggemma","kind":"embedding","capabilities":["embedding"]},'
+        .'{"id":"caps-only","capabilities":["completion"]},'
+        .'{"id":"plain","context_length":8000}'
+        .']}';
+    mock_models($list);
+    my $out = tools::models_3c9a(['']);
+    like($out, qr{openai/qwen-4b  \(chat, tools, vision; context 219136\)  current}, "models: a chat model, what it can do, its context");
+    like($out, qr{openai/trellis-2  \(image to 3D model, the generate_3d tool\)}, "models: the 3D model and the tool that uses it");
+    like($out, qr{openai/z-image-turbo  \(image generation, the generate_image tool\)}, "models: the image model and its tool");
+    like($out, qr{openai/whisper-tiny  \(speech to text, the transcribe tool; context 2048\)}, "models: the recognizer and its tool");
+    like($out, qr{openai/embeddinggemma  \(embeddings\)}, "models: an embedding model (no tool)");
+    like($out, qr{openai/caps-only  \(chat\)}, "models: no kind, but the capability completion: a chat model");
+    like($out, qr{openai/plain  \(context 8000\)\n}, "models: a model the list says nothing about: its context alone");
+
+    mock_models($list);
+    my $err = eval {tools::model_7e21(['trellis-2']); 1} ? '' : $@;
+    like($err, qr{openai/trellis-2 is not a chat model \(image to 3D model\): the generate_3d tool uses it},
+        "model: the 3D model is refused, and the tool to use named");
+    is($ai::PENDING_MODEL, undef, "model: nothing pending");
+    like(ai::set_model('openai', 'z-image-turbo') // '', qr/is not a chat model \(image generation\)/, "set_model: refused too (the page, /model)");
+    is($ai::SESSION_MODEL, 'qwen-4b', "set_model: the chat keeps its model");
+    is(ai::set_model('openai', 'plain'), undef, "set_model: a model the list says nothing about is taken");
+    $ai::SESSION_MODEL = 'qwen-4b';
+
+    require ui;
+    local @ai::ALL_MODELS = map {['openai', $_]} qw(qwen-4b trellis-2 z-image-turbo whisper-tiny embeddinggemma caps-only plain);
+    is_deeply(ui::_models_data()->{list}, ['openai/qwen-4b', 'openai/caps-only', 'openai/plain'],
+        "the page's choices: the chat models (and those the list says nothing about), not the others");
+    %ai::MODEL_CAPS = ();
+    %ai::MODEL_KIND = ();
+}
+
 # the model tool: the switch is for the next turn, an id no list has is refused
 {
     TestAI::setup(AI_API_KEY => 'sk-test', AI_PROVIDER => 'openai', AI_LOCAL_SERVER => undef, AI_TOOL_CALLS => 'native');

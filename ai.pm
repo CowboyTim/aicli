@@ -479,6 +479,9 @@ sub choice_pair {
 # the model and the provider of the session, kept in its files, used by the next request
 sub set_model {
     my ($name, $id) = @_;
+    if(defined(my $why = chat_model_error("$name/$id"))){
+        return $why;
+    }
     if(!eval {spew("$AI_SESSION_DIR/model", $id); spew("$AI_SESSION_DIR/provider", $name); 1}){
         return $@ || "unknown error\n";
     }
@@ -1909,6 +1912,7 @@ sub over_budget {
 
 our %MODEL_CONTEXT;  # "provider/model id" => context size, from the model list of the API
 our %MODEL_CAPS;     # "provider/model id" => the capabilities the model list gives it, such as "completion", "vision"
+our %MODEL_KIND;     # "provider/model id" => its kind, when the model list gives one: chat, embedding, image, 3d, ...
 our $SERVER_CONTEXT; # context size of a local server (llama.cpp /props)
 
 # context window in tokens, 0 when unknown
@@ -2830,10 +2834,46 @@ sub fetch_models {
         $MODEL_CONTEXT{"$AI_PROVIDER/$m->{id}"} = $ctx + 0 if defined $ctx and $ctx =~ m/^\d+$/ and $ctx > 0;
         $MODEL_CAPS{"$AI_PROVIDER/$m->{id}"} = [grep {defined and !ref} @{$m->{capabilities}}]
             if ref($m->{capabilities}) eq 'ARRAY';
+        # what the model is, when the server says it (rocm-inference: chat, embedding, transcription, speech, image, audio, 3d)
+        $MODEL_KIND{"$AI_PROVIDER/$m->{id}"} = $m->{kind} if defined $m->{kind} and !ref $m->{kind} and length $m->{kind};
     }
     my $ids = [grep {defined and length} map {ref($_) eq 'HASH' ? $_->{id} : $_} @models];
     log::notice("$AI_ENDPOINT_URL has ".scalar(@$ids)." model(s)");
     return $ids;
+}
+
+# What a model of the list is: its kind as the server gives it, else read from its capabilities (completion: chat); undef
+# when the list says nothing about it. %KIND_ABOUT: the kinds in words, and the tool that uses a model of that kind.
+our %KIND_ABOUT = (chat => ['chat'], embedding => ['embeddings'], transcription => ['speech to text', 'transcribe'],
+                   speech => ['text to speech', 'speech'], image => ['image generation', 'generate_image'],
+                   audio => ['sound generation', 'generate_audio'], '3d' => ['image to 3D model', 'generate_3d']);
+sub model_kind {
+    my ($label) = @_;
+    return $MODEL_KIND{$label} if defined $MODEL_KIND{$label};
+    my $caps = $MODEL_CAPS{$label} or return;
+    return 'chat' if grep {$_ eq 'completion'} @$caps;
+    for my $k (qw(embedding transcription speech image audio 3d)) {
+        return $k if grep {$_ eq $k} @$caps;
+    }
+    return;
+}
+
+# a model in words for the model list: "chat, tools, vision", or "image to 3D model, the generate_3d tool"; '' when unknown
+sub model_about {
+    my ($label) = @_;
+    my $kind = model_kind($label) // return '';
+    my ($words, $tool) = @{$KIND_ABOUT{$kind} // [$kind]};
+    return join(', ', $words, grep {$_ eq 'tools' or $_ eq 'vision'} @{$MODEL_CAPS{$label} // []}) if $kind eq 'chat';
+    return $words.(defined $tool ? ", the $tool tool" : '');
+}
+
+# Whether the chat can talk to a model: a chat model, or one the list says nothing about. The reason when it can not.
+sub chat_model_error {
+    my ($label) = @_;
+    my $kind = model_kind($label);
+    return undef if !defined $kind or $kind eq 'chat';
+    my ($words, $tool) = @{$KIND_ABOUT{$kind} // [$kind]};
+    return "$label is not a chat model ($words)".(defined $tool ? ": the $tool tool uses it" : '')."\n";
 }
 
 # Whether the server's model list has a model with this capability, for the chat's provider. A server that
@@ -2885,10 +2925,12 @@ sub list_models {
     my $current = current_label();
     foreach my $pair (@$pairs) {
         my $label = model_label($pair);
+        my $about = model_about($label);
+        $about = length($about) ? "  ($about)" : '';
         if ($label eq $current) {
-            print "${colors::green_color}* $label${colors::reset_color}\n";
+            print "${colors::green_color}* $label${colors::reset_color}$about\n";
         } else {
-            print "  $label\n";
+            print "  $label$about\n";
         }
     }
     $cmds->{'/model'} = {map {(model_label($_), sub {0})} @$pairs} if $cmds;
@@ -6655,7 +6697,11 @@ sub models_3c9a {
     my $head = "models: $total".($rx ? " matching '$filter'" : "")
         .(@$errors ? " (no list from: ".join('; ', @$errors).")" : "");
     return "$head\n" unless $total;
-    my @lines = map {my $ctx = $ai::MODEL_CONTEXT{$_}; $_.(defined $ctx ? "  (context $ctx)" : "").($_ eq $current ? "  current" : "")} @labels;
+    my @lines = map {
+        my $ctx = $ai::MODEL_CONTEXT{$_};
+        my @about = grep {length} ai::model_about($_), (defined $ctx ? "context $ctx" : '');
+        $_.(@about ? "  (".join('; ', @about).")" : "").($_ eq $current ? "  current" : "");
+    } @labels;
     splice(@lines, 200) if $total > 200;
     return join("\n", $head, @lines, ($total > 200 ? ("... ".($total - 200)." more, give a filter") : ()))."\n";
 }
@@ -6668,6 +6714,9 @@ sub model_7e21 {
     my ($pairs) = ai::all_models();
     my $pair = ai::resolve_model($choice, $pairs)
         or die "no model '$choice' at any provider: look for it with models\n";
+    if(defined(my $why = ai::chat_model_error(ai::model_label($pair)))){
+        die $why;
+    }
     # the switch is for the next message: this answer finishes with the current model
     $ai::PENDING_MODEL = [@$pair];
     return "the model changes to ".ai::model_label($pair)." when the next message comes; "
