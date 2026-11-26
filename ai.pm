@@ -5049,14 +5049,15 @@ EOb
         available => sub {length($::ORIG_ENV{AI_SEARXNG_URL} // '') ? 1 : 0},
     },
     generate_image => {
-        description => "generate an image from a text prompt with the local image model (Z-Image-Turbo): the PNG is written to the output name in the workspace; about 30 seconds for 1024 x 1024. The same prompt, size, steps and seed give the same image",
-        syntax => "///GENERATE_IMAGE_3a7c+EO_1d0e+EO_5b2f+EO_8c44+EO_6e91+EO_a2d7\n{{prompt}}\nEO_1d0e[LENGTH({{prompt}})]\n{{output}}\nEO_5b2f[LENGTH({{output}})]\n{{size}}\nEO_8c44[LENGTH({{size}})]\n{{steps}}\nEO_6e91[LENGTH({{steps}})]\n{{seed}}\nEO_a2d7[LENGTH({{seed}})]\nGENERATE_IMAGE_3a7c",
+        description => "generate an image from a text prompt with a local image model: z-image-turbo (the default: fast, about 30 seconds for 1024 x 1024) or qwen-image-2.1 (finer and with a transparent background where the picture has none, up to 2048 x 2048; about 2.5 minutes for 1024 x 1024 at its 40 steps). The PNG is written to the output name in the workspace. The same model, prompt, size, steps and seed give the same image",
+        syntax => "///GENERATE_IMAGE_3a7c+EO_1d0e+EO_5b2f+EO_8c44+EO_6e91+EO_a2d7+EO_b7e4\n{{prompt}}\nEO_1d0e[LENGTH({{prompt}})]\n{{output}}\nEO_5b2f[LENGTH({{output}})]\n{{size}}\nEO_8c44[LENGTH({{size}})]\n{{steps}}\nEO_6e91[LENGTH({{steps}})]\n{{seed}}\nEO_a2d7[LENGTH({{seed}})]\n{{model}}\nEO_b7e4[LENGTH({{model}})]\nGENERATE_IMAGE_3a7c",
         properties  => {
             "prompt" => {type => "string", description => "What the image shows"},
             "output" => {type => "string", description => "The PNG file to write in the workspace; empty for image_<seed>.png. A file of that name already there is kept: the picture goes to the first free name (name-2.png, ...), and the result names it"},
-            "size"   => {type => "string", description => "WIDTHxHEIGHT, multiples of 16 from 64 to 1024; empty for 1024x1024"},
-            "steps"  => {type => "string", description => "Sampler steps, 1 to 50; empty for 9"},
+            "size"   => {type => "string", description => "WIDTHxHEIGHT: for z-image-turbo multiples of 16 from 64 to 1024, for qwen-image-2.1 multiples of 32 from 256 to 2048; empty for 1024x1024"},
+            "steps"  => {type => "string", description => "Sampler steps, 1 to 50 for z-image-turbo, 1 to 100 for qwen-image-2.1; empty for the model's own (9 and 40)"},
             "seed"   => {type => "string", description => "A whole number; empty for 42"},
+            "model"  => {type => "string", description => "The image model: z-image-turbo or qwen-image-2.1 (or another the image service lists); empty for z-image-turbo"},
         },
         required => ["prompt"],
         # only with the image service to ask (AI_IMAGE_URL: its base address)
@@ -5642,15 +5643,18 @@ sub _write_whole {
 # written to the workspace. The server makes one image at a time; a 1024 x 1024 image takes about 30 seconds.
 sub generate_image_3a7c {
     my ($t_args) = @_;
-    my ($prompt, $out, $size, $steps, $seed) = map {utils::trim($t_args->[$_] // '')} 0 .. 4;
+    my ($prompt, $out, $size, $steps, $seed, $model) = map {utils::trim($t_args->[$_] // '')} 0 .. 5;
     die "no prompt\n" unless length $prompt;
     my $base = $::ORIG_ENV{AI_IMAGE_URL} // '';
     die "no image service is set up (AI_IMAGE_URL)\n" unless length $base;
     $base =~ s{/+\z}{};
-    die "steps: a whole number from 1 to 50\n"
-        if length $steps and ($steps !~ m/\A\d+\z/ or $steps < 1 or $steps > 50);
+    # (the steps' and the size's limits are the model's: the service checks them; 100 is the largest any of them takes)
+    die "steps: a whole number from 1 to 100\n"
+        if length $steps and ($steps !~ m/\A\d+\z/ or $steps < 1 or $steps > 100);
     die "seed: a whole number\n" if length $seed and $seed !~ m/\A\d+\z/;
-    my %body = (model => 'z-image-turbo', prompt => $prompt, response_format => 'b64_json');
+    die "model: the name of an image model, such as z-image-turbo or qwen-image-2.1\n"
+        if length $model and $model !~ m/\A[A-Za-z0-9][A-Za-z0-9._-]{0,99}\z/;
+    my %body = (model => length $model ? $model : 'z-image-turbo', prompt => $prompt, response_format => 'b64_json');
     $body{size}  = $size if length $size;    # the server checks the size
     $body{steps} = $steps + 0 if length $steps;
     $body{seed}  = (length $seed ? $seed : 42) + 0;
@@ -5675,7 +5679,7 @@ sub generate_image_3a7c {
         my $path = _path($to);
         die "can not write $to: it is a link or a directory\n" if -l $path or -d $path;
         _write_whole($path, $png, 'generate_image', $to);
-        return ai::to_bytes("wrote $to: $body{size}, seed $body{seed}, ".length($png)." bytes\n");
+        return ai::to_bytes("wrote $to: $body{size}, seed $body{seed}, ".length($png)." bytes".(length $model ? " ($model)" : '')."\n");
     }, url => "$base/v1/images/generations", method => 'post', data => $data, proxy => $proxy,
        timeout => $::ORIG_ENV{AI_IMAGE_TIMEOUT} // 3600, max_size => 64_000_000, follow => 0,
        headers => ["Content-Type: application/json", "Accept: application/json", "User-Agent: aicli"]);

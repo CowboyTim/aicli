@@ -85,6 +85,16 @@ ok(tools::available('generate_image'), "available: the image service is set");
     @tools::CHANGES = ();
 }
 
+# another model: named in the request and in the result
+{
+    my ($res, $err) = ai::execute_tool('generate_image', 'GENERATE_IMAGE_3a7c', ['a red cube', 'q.png', '2048x2048', '60', '7', 'qwen-image-2.1']);
+    ok(!$err, "a picture of another model") or diag($err);
+    like($res, qr/\Awrote q\.png: 2048x2048, seed 7, \d+ bytes \(qwen-image-2\.1\)/, "the result names the model");
+    is_deeply($J->decode($REQ[-1]{data}),
+        {model => 'qwen-image-2.1', prompt => 'a red cube', response_format => 'b64_json', size => '2048x2048', steps => 60, seed => 7},
+        "the request names the model; its size and steps go to the service as they are");
+}
+
 # a file of that name already there is kept as it is: the picture goes to the first free name, and
 # the result names it (the chat shows each picture as it was made)
 {
@@ -123,9 +133,11 @@ ok(tools::available('generate_image'), "available: the image service is set");
     my @refuse = (
         [['', 'x.png'],                    qr/no prompt/,                          "no prompt"],
         [['a', 'x.jpg'],                   qr/the output must be a \.png file/,    "an output that is not a .png"],
-        [['a', 'x.png', '', '0'],          qr/steps: a whole number from 1 to 50/, "steps 0"],
-        [['a', 'x.png', '', '51'],         qr/steps: a whole number from 1 to 50/, "steps 51"],
-        [['a', 'x.png', '', 'many'],       qr/steps: a whole number from 1 to 50/, "steps not a number"],
+        [['a', 'x.png', '', '0'],          qr/steps: a whole number from 1 to 100/, "steps 0"],
+        [['a', 'x.png', '', '101'],        qr/steps: a whole number from 1 to 100/, "steps 101"],
+        [['a', 'x.png', '', 'many'],       qr/steps: a whole number from 1 to 100/, "steps not a number"],
+        [['a', 'x.png', '', '', '', 'qwen image'], qr/model: the name of an image model/, "a model name with a space"],
+        [['a', 'x.png', '', '', '', '../x'], qr/model: the name of an image model/, "a model name that is a path"],
         [['a', 'x.png', '', '', 'x1'],     qr/seed: a whole number/,              "a seed that is not a number"],
         [['a', '../x.png'],                qr/outside of the workspace/,           "an output outside the workspace"],
     );

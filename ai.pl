@@ -533,12 +533,14 @@ PostScript, PDF, SVG and the like, programs and the network are not used.
 
 =item B<generate_image>
 
-Generate an image from a text prompt with the local image service (B<AI_IMAGE_URL>,
-Z-Image-Turbo): the PNG is written to the output name in the workspace; a file of that name already
-there is kept, and the picture goes to the first free name (C<name-2.png>, ...). Arguments:
-the prompt, the output (default C<image_<seed>.png>), the size (WIDTHxHEIGHT,
-default 1024x1024), the steps (default 9) and the seed (default 42). The same
-prompt, size, steps and seed give the same image. The picture is written whole:
+Generate an image from a text prompt with the local image service (B<AI_IMAGE_URL>): the PNG is
+written to the output name in the workspace; a file of that name already there is kept, and the
+picture goes to the first free name (C<name-2.png>, ...). Arguments: the prompt, the output
+(default C<image_<seed>.png>), the size (WIDTHxHEIGHT, default 1024x1024), the steps (1 to 100;
+default the model's own), the seed (default 42) and the model (C<z-image-turbo>, the default:
+fast; C<qwen-image-2.1>: finer, RGBA, up to 2048x2048, 40 steps; or another the service lists;
+the service checks each model's sizes and steps). The same model, prompt, size, steps and seed
+give the same image. The picture is written whole:
 the file it replaces goes to the undo journal first, and a failed request leaves
 nothing behind. Only with B<AI_IMAGE_URL> set.
 
