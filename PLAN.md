@@ -17,9 +17,20 @@ user's view) and AGENTS.md (the code, and "Status" for the history), not here.
   and `search` with a real SearXNG. So far only with a mocked HTTP layer.
 - **Cloud providers live** (NVIDIA, Cerebras, OpenRouter, Anthropic). NVIDIA
   works in real use. The others have only scripted tests so far.
-- **Pictures with a real vision model.** The `image` tool (`AI_VISION=1`) is
-  tested with scripted requests only. No real model that reads pictures has
-  been run yet, nor a picture of text to check the reading.
+- **Pictures with a real vision model** (checked 2026-11-27 with Qwen3.5-0.8B and its
+  mmproj, served by rocm-inference, on a 960 x 300 picture of two printed lines). Through
+  the chat endpoint the model reads both lines exactly, and a 14-line document page (DejaVu
+  Sans, 22 px) is transcribed line for line: 14 of 14 exact. Through aicli (`image` tool,
+  `AI_VISION=1`) the picture is attached and the lines are read (`t/97_live.t`, the vision
+  block; run with `AI_LIVE_SERVER` and `AI_LIVE_MODEL`). Found, not fixed:
+  - In `-p` mode the tool lines and the token line go to stdout, next to the answer
+    (AGENTS.md: `ai.pl -p` in a pipe gives the answer and nothing else).
+  - The 0.8B model called `write` on the picture instead of answering, and claimed the
+    transcription was saved (the document page, one run). A bigger model is the test of
+    that; the 4B has no mmproj here.
+  - The live test's count check (`tool: the answer has the count`) fails with this model
+    ("3 files" for two): the model's variance, not the harness.
+  - Tesseract (the `ocr` tool) is not installed on this host: no comparison run yet.
 - **ImageMagick.** Tested here with ImageMagick 6 (`convert`, Debian's package):
   the formats, the policy (`ai/imagemagick/policy.xml`: PostScript and PDF
   refused), the crop, the turn, the shrinking. The Docker image builds with it

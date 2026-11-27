@@ -1,7 +1,8 @@
 #!/usr/bin/perl
 # A real model, when there is one: set AI_LIVE_SERVER (an OpenAI compatible
 # server, e.g. llama.cpp) and AI_LIVE_MODEL, optionally AI_LIVE_SEARXNG for the
-# search tool. Without AI_LIVE_SERVER the whole file is skipped. Not part of
+# search tool. A vision model (AI_LIVE_MODEL with the vision capability, e.g. Qwen3.5
+# with its mmproj) reads the picture of the vision check. Without AI_LIVE_SERVER the whole file is skipped. Not part of
 # what must always pass: the answers of a model vary, so the checks are loose.
 use strict; use warnings;
 
@@ -17,6 +18,10 @@ $::DEBUG = ($ENV{DEBUG}//"0") == "1"?1:0;
 
 use ai;
 use TestAI;
+use Cwd ();
+
+# the vision check's picture, by its absolute path (TestAI::setup changes the directory)
+my $vision_png = Cwd::abs_path("$FindBin::Bin/resources/vision/vision_text.png");
 
 # a local server, or a cloud provider by its key (AI_PROVIDER from the key prefix,
 # or AI_LIVE_PROVIDER): the provider's own default model when AI_LIVE_MODEL is not set
@@ -63,6 +68,26 @@ my %live = (
     my $out = TestAI::capture {ai::chat_completion("What is 2+2? Answer with the number only.")};
     like($out, qr/4/, "thinking off: the answer");
     unlike($out, qr/thinking process|Let me think|The user/i, "thinking off: no reasoning shown");
+}
+
+# a picture of the workspace through the image tool (AI_VISION): the picture goes with the next message, and the model reads
+# the text of it (t/resources/vision/vision_text.png: two lines of printed text)
+{
+    my $tmp = TestAI::setup(%live, AI_VISION => 1);
+    my $ws = "$tmp/ws";
+    mkdir $ws or die $!;
+    open(my $in, '<:raw', $vision_png) or die "$vision_png: $!";
+    my $png = do {local $/; <$in>};
+    close $in;
+    open(my $out_fh, '>:raw', "$ws/vision_text.png") or die $!;
+    print {$out_fh} $png;
+    close $out_fh;
+    ai::set_workspace($ws);
+    chdir($ws); # a session runs in its workspace: a bare file name is from here
+    my $out = TestAI::capture {ai::chat_completion("Use the image tool on vision_text.png, then tell me exactly what text the picture contains, line by line.")};
+    (my $plain = $out) =~ s/\e\[[0-9;]*m//g;
+    like($plain, qr/ROCm 7\.13 on Strix Halo/, "vision: the first line is read");
+    like($plain, qr/Invoice 4711/, "vision: the second line is read");
 }
 
 # the search tool, when a SearXNG instance is given
