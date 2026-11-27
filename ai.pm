@@ -5049,15 +5049,16 @@ EOb
         available => sub {length($::ORIG_ENV{AI_SEARXNG_URL} // '') ? 1 : 0},
     },
     generate_image => {
-        description => "generate an image from a text prompt with a local image model: z-image-turbo (the default: fast, about 30 seconds for 1024 x 1024) or qwen-image-2.1 (finer and with a transparent background where the picture has none, up to 2048 x 2048; about 2.5 minutes for 1024 x 1024 at its 40 steps). The PNG is written to the output name in the workspace. The same model, prompt, size, steps and seed give the same image",
-        syntax => "///GENERATE_IMAGE_3a7c+EO_1d0e+EO_5b2f+EO_8c44+EO_6e91+EO_a2d7+EO_b7e4\n{{prompt}}\nEO_1d0e[LENGTH({{prompt}})]\n{{output}}\nEO_5b2f[LENGTH({{output}})]\n{{size}}\nEO_8c44[LENGTH({{size}})]\n{{steps}}\nEO_6e91[LENGTH({{steps}})]\n{{seed}}\nEO_a2d7[LENGTH({{seed}})]\n{{model}}\nEO_b7e4[LENGTH({{model}})]\nGENERATE_IMAGE_3a7c",
+        description => "generate an image from a text prompt with a local image model: z-image-turbo (the default: fast, about 30 seconds for 1024 x 1024) or qwen-image-2.1 (finer and with a transparent background where the picture has none, up to 2048 x 2048; about 2.5 minutes for 1024 x 1024 at its 40 steps). With a picture of the workspace (image) it edits that picture by the prompt instead (qwen-image-2.1: 'make the cube blue'; the output keeps the picture's shape). The PNG is written to the output name in the workspace. The same model, prompt, size, steps and seed give the same image",
+        syntax => "///GENERATE_IMAGE_3a7c+EO_1d0e+EO_5b2f+EO_8c44+EO_6e91+EO_a2d7+EO_b7e4+EO_c3d9\n{{prompt}}\nEO_1d0e[LENGTH({{prompt}})]\n{{output}}\nEO_5b2f[LENGTH({{output}})]\n{{size}}\nEO_8c44[LENGTH({{size}})]\n{{steps}}\nEO_6e91[LENGTH({{steps}})]\n{{seed}}\nEO_a2d7[LENGTH({{seed}})]\n{{model}}\nEO_b7e4[LENGTH({{model}})]\n{{image}}\nEO_c3d9[LENGTH({{image}})]\nGENERATE_IMAGE_3a7c",
         properties  => {
             "prompt" => {type => "string", description => "What the image shows"},
             "output" => {type => "string", description => "The PNG file to write in the workspace; empty for image_<seed>.png. A file of that name already there is kept: the picture goes to the first free name (name-2.png, ...), and the result names it"},
             "size"   => {type => "string", description => "WIDTHxHEIGHT: for z-image-turbo multiples of 16 from 64 to 1024, for qwen-image-2.1 multiples of 32 from 256 to 2048; empty for 1024x1024"},
             "steps"  => {type => "string", description => "Sampler steps, 1 to 50 for z-image-turbo, 1 to 100 for qwen-image-2.1; empty for the model's own (9 and 40)"},
             "seed"   => {type => "string", description => "A whole number; empty for 42"},
-            "model"  => {type => "string", description => "The image model: z-image-turbo or qwen-image-2.1 (or another the image service lists); empty for z-image-turbo"},
+            "model"  => {type => "string", description => "The image model: z-image-turbo or qwen-image-2.1 (or another the image service lists); empty for z-image-turbo. An edit (image) takes qwen-image-2.1"},
+            "image"  => {type => "string", description => "A picture of the workspace (PNG, JPEG, GIF or WebP) to edit by the prompt: the prompt says what changes, the rest stays. Empty for a new picture from the prompt. Its size sets the budget of the output (size), the output keeps the picture's shape"},
         },
         required => ["prompt"],
         # only with the image service to ask (AI_IMAGE_URL: its base address)
@@ -5640,10 +5641,12 @@ sub _write_whole {
 }
 
 # generate_image: text to image through the image service (AI_IMAGE_URL): POST /v1/images/generations, the PNG
-# written to the workspace. The server makes one image at a time; a 1024 x 1024 image takes about 30 seconds.
+# written to the workspace. With a picture of the workspace (image) it is an edit of that picture by the prompt (qwen-image-2.1):
+# POST /v1/images/edits with the picture in base64. The server makes one image at a time; a 1024 x 1024 image takes about 30
+# seconds (2.5 minutes with qwen-image-2.1).
 sub generate_image_3a7c {
     my ($t_args) = @_;
-    my ($prompt, $out, $size, $steps, $seed, $model) = map {utils::trim($t_args->[$_] // '')} 0 .. 5;
+    my ($prompt, $out, $size, $steps, $seed, $model, $image) = map {utils::trim($t_args->[$_] // '')} 0 .. 6;
     die "no prompt\n" unless length $prompt;
     my $base = $::ORIG_ENV{AI_IMAGE_URL} // '';
     die "no image service is set up (AI_IMAGE_URL)\n" unless length $base;
@@ -5654,7 +5657,20 @@ sub generate_image_3a7c {
     die "seed: a whole number\n" if length $seed and $seed !~ m/\A\d+\z/;
     die "model: the name of an image model, such as z-image-turbo or qwen-image-2.1\n"
         if length $model and $model !~ m/\A[A-Za-z0-9][A-Za-z0-9._-]{0,99}\z/;
+    # an edit: the picture is read here, so that a bad name or file is refused before anything is asked
+    my $picture;
+    if (length $image) {
+        die "an edit takes qwen-image-2.1 (the model that edits): model is '$model'\n" if length $model and $model ne 'qwen-image-2.1';
+        $model = 'qwen-image-2.1';
+        my $in = _path($image);
+        die "no such file: $image\n" unless -f $in;
+        my $max = $::ORIG_ENV{AI_IMAGE_MAX} // 20_000_000;
+        die "$image is bigger than $max bytes (AI_IMAGE_MAX): make it smaller with convert first\n" if $max and -s $in > $max;
+        $picture = _read_bytes($in);
+        die "$image is not a picture (PNG, JPEG, GIF or WebP)\n" unless _image_type($picture);
+    }
     my %body = (model => length $model ? $model : 'z-image-turbo', prompt => $prompt, response_format => 'b64_json');
+    $body{image} = MIME::Base64::encode_base64($picture, '') if defined $picture;
     $body{size}  = $size if length $size;    # the server checks the size
     $body{steps} = $steps + 0 if length $steps;
     $body{seed}  = (length $seed ? $seed : 42) + 0;
@@ -5665,8 +5681,14 @@ sub generate_image_3a7c {
     my $data = JSON::XS->new->utf8->canonical->encode(\%body);
     my $proxy = $::ORIG_ENV{AI_IMAGE_PROXY} // '';   # the service is near: no proxy, unless AI_IMAGE_PROXY says so
     $proxy = '' if $proxy =~ m/^(?:none|off|direct|no)$/i;
+    my $url = "$base/".(defined $picture ? 'v1/images/edits' : 'v1/images/generations');
     return _http(sub {
         my ($r) = @_;
+        if (defined $picture and ($r->{code} // 0) == 413) {
+            die sprintf("the image service refused the picture as too large (HTTP 413): %s is %.1f MB, more than the service or the web"
+                ." server in front of it takes (nginx: client_max_body_size). Make the picture smaller with convert first\n",
+                $image, length($picture) / 1e6);
+        }
         _http_check($r);
         my $reply = eval {JSON::XS->new->utf8->decode($r->{body})};
         my $b64 = ref($reply) eq 'HASH' && ref($reply->{data}) eq 'ARRAY' && ref($reply->{data}[0]) eq 'HASH'
@@ -5679,8 +5701,9 @@ sub generate_image_3a7c {
         my $path = _path($to);
         die "can not write $to: it is a link or a directory\n" if -l $path or -d $path;
         _write_whole($path, $png, 'generate_image', $to);
-        return ai::to_bytes("wrote $to: $body{size}, seed $body{seed}, ".length($png)." bytes".(length $model ? " ($model)" : '')."\n");
-    }, url => "$base/v1/images/generations", method => 'post', data => $data, proxy => $proxy,
+        my $what = defined $picture ? " (an edit of $image)" : length $model ? " ($model)" : '';
+        return ai::to_bytes("wrote $to: $body{size}, seed $body{seed}, ".length($png)." bytes$what\n");
+    }, url => $url, method => 'post', data => $data, proxy => $proxy,
        timeout => $::ORIG_ENV{AI_IMAGE_TIMEOUT} // 3600, max_size => 64_000_000, follow => 0,
        headers => ["Content-Type: application/json", "Accept: application/json", "User-Agent: aicli"]);
 }
@@ -5797,7 +5820,7 @@ sub _model3d_too_large {
 # (texture false), or an STL of the mesh for a 3D printer (format stl). A job of minutes: POST /v1/3d/generations starts it and
 # answers its id at once, GET /v1/3d/generations/ID is asked every AI_3D_POLL seconds (5) until it is done, GET .../content is
 # the model, written to the workspace as the other generators write theirs.
-# The waits are timers of the event loop (nothing blocks); a stop (ctrl-C) leaves the service's job running.
+# The waits are timers of the event loop (nothing blocks); a stop (ctrl-C) cancels the service's job (DELETE).
 sub generate_3d_4c9a {
     my ($t_args) = @_;
     my ($input, $out, $res, $seed, $bg, $faces, $tex, $fmt, $size, $hollow, $drain) = map {utils::trim($t_args->[$_] // '')} 0 .. 10;
@@ -5854,12 +5877,25 @@ sub generate_3d_4c9a {
     my $start = sub {
         my ($done) = @_;
         my $t0 = Time::HiRes::time();
-        my ($id, $poll, $end);
+        my ($id, $poll, $end, $stops);
         $end = sub { undef $poll; my $d = $done; undef $done; $d->(@_) if $d };
+        # a stop (ctrl-C): the service's job is cancelled as well (DELETE: sent with keep_on_abort, so the stop does not cut it
+        # short), and the turn ends when the service has answered. Without a job id there is nothing to cancel.
+        my $stop = sub {
+            my ($msg) = @_;
+            return $end->({error => $msg}) if $stops++ or !length($id // '');
+            loop::http(%common, url => "$base/v1/3d/generations/$id", method => 'delete', timeout => 30, keep_on_abort => 1,
+                headers => ["Accept: application/json", "User-Agent: aicli"], on_done => sub {
+                my ($r) = @_;
+                my $note = ($r->{code} // 0) == 200 ? "the 3D job $id is cancelled in the service"
+                    : "the 3D job $id is not cancelled (HTTP ".($r->{code} // 0).": ".($r->{error} // 'no answer').")";
+                $end->({error => "$msg ($note)"});
+            });
+        };
         my $wait = sub {
             loop::timer($every, sub {
                 my ($aborted) = @_;
-                return $end->({error => 'interrupted'}) if $aborted;
+                return $stop->('interrupted') if $aborted;
                 $poll->();
             });
         };
@@ -5867,6 +5903,7 @@ sub generate_3d_4c9a {
             loop::http(%common, url => "$base/v1/3d/generations/$id", method => 'get', timeout => 30, max_size => 1_000_000,
                 headers => ["Accept: application/json", "User-Agent: aicli"], on_done => sub {
                 my ($state, $err) = _model3d_reply($_[0], 'the state of the 3D job');
+                return $stop->('interrupted') if utils::aborted() and ($err or ($state->{status} // '') eq 'in_progress');
                 return $end->({error => $err}) if $err;
                 my $status = $state->{status} // '';
                 if ($status eq 'in_progress') {
@@ -5883,7 +5920,7 @@ sub generate_3d_4c9a {
                 });
             });
         };
-        loop::http(%common, url => "$base/v1/3d/generations", method => 'post', data => $data, timeout => 600,
+        loop::http(%common, url => "$base/v1/3d/generations", method => 'post', data => $data, timeout => 600, keep_on_abort => 1,
             max_size => 1_000_000, headers => ["Content-Type: application/json", "Accept: application/json", "User-Agent: aicli"],
             on_done => sub {
             return $end->({error => _model3d_too_large($input, length $picture, length $data)}) if ($_[0]{code} // 0) == 413;
@@ -5891,6 +5928,8 @@ sub generate_3d_4c9a {
             return $end->({error => $err}) if $err;
             $id = $job->{id} // '';
             return $end->({error => "the 3D service gave no job id"}) unless $id =~ m/\A[\w.-]+\z/;
+            # a stop during the start: the job the service just started is cancelled
+            return $stop->('interrupted') if utils::aborted();
             $wait->();
         });
     };

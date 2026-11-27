@@ -521,6 +521,8 @@ sub http {
             $ch->setopt(curl::CURLOPT_POSTFIELDS(), $req->{data});
             $ch->setopt(curl::CURLOPT_POSTFIELDSIZE_LARGE(), length($req->{data}));
         }
+    } elsif(lc($req->{method} // 'get') eq "delete"){
+        $ch->setopt(curl::CURLOPT_CUSTOMREQUEST(), "DELETE");
     } else {
         $ch->setopt(curl::CURLOPT_HTTPGET(), 1);
     }
@@ -621,7 +623,8 @@ sub step {
 
     # abort: everything that waits is told to stop
     if(utils::aborted()){
-        _http_done($_, "interrupted") for values %{{%http}};
+        # (a request with keep_on_abort goes on: the service's job is cancelled by a request sent after the stop)
+        _http_done($_, "interrupted") for grep {!$_->{keep_on_abort}} values %{{%http}};
         foreach my $job (values %child){
             _stop_child($job, "interrupted by user", $now) unless $job->{why};
         }

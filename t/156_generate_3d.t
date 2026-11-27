@@ -32,7 +32,8 @@ sub reset_service {
     %SVC = (start => sub { {code => 200, error => undef, body => $J->encode({id => '3d_00ff', status => 'in_progress'})} },
             polls => [{status => 'in_progress', progress => {stage => 'shape', step => 3, steps => 12}}],
             done  => {status => 'completed', bytes => length($GLB), seconds => 201.3, options => {resolution => 512}},
-            content => sub { {code => 200, error => undef, body => $GLB} });
+            content => sub { {code => 200, error => undef, body => $GLB} },
+            delete  => sub { {code => 200, error => undef, body => ''} });
 }
 {
     no warnings 'redefine';
@@ -42,6 +43,8 @@ sub reset_service {
         my $reply;
         if (($r{method} // '') eq 'post') {
             $reply = $SVC{start}->(\%r);
+        } elsif (($r{method} // '') eq 'delete') {
+            $reply = $SVC{delete}->(\%r);
         } elsif ($r{url} =~ m{/content\z}) {
             $reply = $SVC{content}->(\%r);
         } else {
@@ -284,5 +287,42 @@ is(tools::offered_file('generate_3d', ['vase.png', '', '', '', '', '', ''], $ws,
     'vase-2.glb', "the file the result names is offered");
 ok(!defined tools::offered_file('generate_3d', ['vase.png'], $ws, "wrote nothere.glb: 1 bytes of GLB\n"),
     "a file that is not there is not offered");
+
+# a stop (ctrl-C) while the job runs: the service's job is cancelled too (DELETE, sent through the loop), and the turn ends with
+# the error after the service answered; a stop while the job is started (the start's answer comes in the stop): cancelled as well
+{
+    reset_service(); @REQ = ();
+    $SVC{polls} = [sub { $::ABORT = 1; {code => 200, error => undef, body => $J->encode({status => 'in_progress'})} }];
+    my ($res, $err) = ai::execute_tool('generate_3d', 'GENERATE_3D_4c9a', ['vase.png', 'stopped.glb']);
+    ok($err, "a stop ends the call with an error") or diag($res);
+    like($err // '', qr/interrupted \(the 3D job 3d_00ff is cancelled in the service\)/, "the error says the job was cancelled");
+    my ($del) = grep { ($_->{method} // '') eq 'delete' } @REQ;
+    ok($del, "a DELETE is sent for the job") or diag(join ', ', map {$_->{method} // ''} @REQ);
+    is($del && $del->{url}, 'http://3d.test:8000/rocm/v1/3d/generations/3d_00ff', "the DELETE names the job's id");
+    ok($del && $del->{keep_on_abort}, "the DELETE is not cut short by the stop");
+    ok(!(-e "$ws/stopped.glb"), "no model is written");
+    $::ABORT = 0;
+    @tools::CHANGES = ();
+}
+{
+    reset_service(); @REQ = ();
+    $SVC{start} = sub { $::ABORT = 1; {code => 200, error => undef, body => $J->encode({id => '3d_00ff', status => 'in_progress'})} };
+    my ($res, $err) = ai::execute_tool('generate_3d', 'GENERATE_3D_4c9a', ['vase.png', 'early.glb']);
+    like($err // '', qr/cancelled in the service/, "a stop during the start: the started job is cancelled");
+    is((grep { ($_->{method} // '') eq 'delete' } @REQ), 1, "one DELETE, for the job the start gave");
+    $::ABORT = 0;
+    @tools::CHANGES = ();
+}
+
+# a DELETE the service refuses (the job is not running any more): the error says it is not cancelled, not that it is
+{
+    reset_service(); @REQ = ();
+    $SVC{polls} = [sub { $::ABORT = 1; {code => 200, error => undef, body => $J->encode({status => 'in_progress'})} }];
+    $SVC{delete} = sub { {code => 409, error => undef, body => $J->encode({error => {message => 'no 3D generation is running'}})} };
+    my ($res, $err) = ai::execute_tool('generate_3d', 'GENERATE_3D_4c9a', ['vase.png', 'refused.glb']);
+    like($err // '', qr/interrupted \(the 3D job 3d_00ff is not cancelled \(HTTP 409/, "a refused DELETE is said so");
+    $::ABORT = 0;
+    @tools::CHANGES = ();
+}
 
 done_testing();

@@ -540,7 +540,9 @@ picture goes to the first free name (C<name-2.png>, ...). Arguments: the prompt,
 default the model's own), the seed (default 42) and the model (C<z-image-turbo>, the default:
 fast; C<qwen-image-2.1>: finer, RGBA, up to 2048x2048, 40 steps; or another the service lists;
 the service checks each model's sizes and steps). The same model, prompt, size, steps and seed
-give the same image. The picture is written whole:
+give the same image. An edit: the image argument names a picture of the workspace (PNG, JPEG,
+GIF or WebP) that the prompt changes, by C<qwen-image-2.1> (the model that edits; the output
+keeps the picture's shape, the size is its pixel budget). The picture is written whole:
 the file it replaces goes to the undo journal first, and a failed request leaves
 nothing behind. Only with B<AI_IMAGE_URL> set.
 
@@ -558,7 +560,7 @@ picture's name with C<.glb> or C<.stl>; a file of that name already there is kep
 goes to the first free name, C<name-2.glb>, ...), the resolution (512 or 1024, the default), the
 seed (0), the faces of the mesh (700000), the texture size (4096), the format, the size, the walls and the drain. A model takes minutes: the job is started, its state is asked every
 B<AI_3D_POLL> seconds on a timer of the event loop (nothing waits in a blocking way), and the
-model is downloaded when it is done; a stop leaves the service's job running. Only with
+model is downloaded when it is done; a stop (ctrl-C) cancels the service's job too. Only with
 B<AI_3D_URL> set, and by B<AI_3D>.
 
 =item B<transcribe>
@@ -1083,6 +1085,12 @@ Seconds between two questions for the state of a model's job (default 5).
 The largest picture B<generate_3d> sends, in bytes (default 20000000; 0 for no limit). The web server in front of
 the service may take less (nginx's C<client_max_body_size>; the picture goes in base64, a third bigger): its refusal
 (HTTP 413) is an error that says the picture's size and to make it smaller with B<convert>.
+
+=item B<AI_IMAGE_MAX>
+
+The largest picture B<generate_image> sends for an edit (its C<image>), in bytes (default 20000000; 0 for no
+limit). The web server in front of the service may take less: its refusal (HTTP 413) is an error that says the
+picture's size and to make it smaller with B<convert>.
 
 =item B<AI_3D_PROXY>
 

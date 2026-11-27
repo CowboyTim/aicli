@@ -247,6 +247,50 @@ ok(!defined tools::offered_file('bash', ['ls'], $ws), "a tool that writes no fil
 }
 
 # ---------------------------------------------------------------------------
+# an edit: a picture of the workspace goes to POST /v1/images/edits in base64, with the prompt and the size; the output keeps the
+# picture's shape; the model is qwen-image-2.1 (the one that edits); the arguments are checked before anything is asked
+
+my $edit_ws = workspace();
+{
+    spew("$edit_ws/input.png", $PNG);
+    @REQ = ();
+    my ($res, $err) = ai::execute_tool('generate_image', 'GENERATE_IMAGE_3a7c',
+        ['make the cube blue', 'blue.png', '256x256', '4', '9', 'qwen-image-2.1', 'input.png']);
+    ok(!$err, "an edit is made") or diag($err);
+    like($res, qr/wrote blue\.png: 256x256, seed 9, \d+ bytes \(an edit of input\.png\)/, "the result names the edit and its source");
+    is($REQ[-1]{url}, 'http://img.test:8000/rocm/v1/images/edits', "an edit goes to the edits path");
+    is_deeply($J->decode($REQ[-1]{data}),
+        {model => 'qwen-image-2.1', prompt => 'make the cube blue', response_format => 'b64_json', size => '256x256', steps => 4, seed => 9,
+         image => MIME::Base64::encode_base64($PNG, '')},
+        "the request: the picture in base64, the prompt, the size, the steps and the seed");
+    is(slurp("$edit_ws/blue.png"), $PNG, "the file is the PNG the service sent");
+    @tools::CHANGES = ();
+}
+{
+    @REQ = ();
+    my ($res, $err) = ai::execute_tool('generate_image', 'GENERATE_IMAGE_3a7c', ['make it blue', '', '', '', '', '', 'input.png']);
+    ok(!$err, "an edit without a model is qwen-image-2.1") or diag($err);
+    is($J->decode($REQ[-1]{data})->{model}, 'qwen-image-2.1', "the model of an edit is qwen-image-2.1");
+    like($REQ[-1]{url}, qr{/v1/images/edits\z}, "and it goes to the edits path");
+    @tools::CHANGES = ();
+}
+{
+    my ($res, $err) = ai::execute_tool('generate_image', 'GENERATE_IMAGE_3a7c', ['x', '', '', '', '', 'z-image-turbo', 'input.png']);
+    like($err // '', qr/an edit takes qwen-image-2\.1/, "an edit with another model is refused");
+    ($res, $err) = ai::execute_tool('generate_image', 'GENERATE_IMAGE_3a7c', ['x', '', '', '', '', '', 'missing.png']);
+    like($err // '', qr/no such file: missing\.png/, "an edit of a missing picture is refused");
+    spew("$edit_ws/notes.txt", "not a picture\n");
+    ($res, $err) = ai::execute_tool('generate_image', 'GENERATE_IMAGE_3a7c', ['x', '', '', '', '', '', 'notes.txt']);
+    like($err // '', qr/notes\.txt is not a picture/, "a text file is refused as a picture");
+}
+{
+    my $t = $tools::TOOLS->{generate_image};
+    ok((grep {$_ eq 'image'} tools::arg_names($t)), "the tool takes the picture as its last argument");
+    is((tools::arg_names($t))[-1], 'image', "as the image argument (after the model)");
+    ok(exists $t->{properties}{image}, "with its description");
+}
+
+# ---------------------------------------------------------------------------
 # the same helpers as t/86 use, for the scripted turns
 
 sub sse { join('', map {"data: ".$::JSON->encode($_)."\n\n"} @_) . "data: [DONE]\n\n" }
